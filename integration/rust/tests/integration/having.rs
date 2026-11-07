@@ -114,6 +114,28 @@ async fn prepared_having_parameter_typed_and_untyped() -> Result<(), Box<dyn std
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get::<_, i64>(0), 1);
 
+    // LIMIT and OFFSET apply to the groups that pass, with PostgreSQL's semantics.
+    let statement = client
+        .prepare(
+            "SELECT customer_id FROM having_merge_test \
+             GROUP BY customer_id HAVING COUNT(*) >= $1 \
+             ORDER BY customer_id DESC LIMIT $2 OFFSET $3",
+        )
+        .await?;
+    for (limit, offset, expected) in [(Some(1_i64), 1_i64, vec![1_i64]), (None, 0, vec![2, 1])] {
+        let rows = client.query(&statement, &[&1_i64, &limit, &offset]).await?;
+        let customers = rows.iter().map(|row| row.get(0)).collect::<Vec<i64>>();
+        assert_eq!(customers, expected, "LIMIT {limit:?} OFFSET {offset}");
+    }
+    let error = client
+        .query(&statement, &[&1_i64, &-1_i64, &0_i64])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.as_db_error().map(|error| error.message()),
+        Some("LIMIT must not be negative")
+    );
+
     cleanup(&sharded).await;
     Ok(())
 }

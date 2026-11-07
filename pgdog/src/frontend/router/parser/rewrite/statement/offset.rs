@@ -178,7 +178,10 @@ fn extract_limit_value(node: Node<'_>) -> Option<LimitValueInfo> {
 
 /// `$1 + $2` is ambiguous to Postgres when both sides are untyped parameters,
 /// so spell out the type both operands would have had as LIMIT/OFFSET.
-fn to_bigint<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
+pub(super) fn to_bigint<'a>(
+    node: Node<'_>,
+    mem: make::MemoryToken<'a>,
+) -> make::Unique<'a, Node<'a>> {
     mem.make_type_cast(
         mem.make_unique(node).uncast(),
         mem.make_list(&[
@@ -212,7 +215,8 @@ pub(super) fn rewrite_select<'a>(
 
 impl StatementRewrite<'_> {
     pub(super) fn limit_offset(&self, select: &nodes::SelectStmt, plan: &mut RewritePlan) {
-        if self.schema.shards <= 1 {
+        // Cross-shard HAVING applies LIMIT and OFFSET in its filter query.
+        if self.schema.shards <= 1 || !matches!(select.having_clause(), Node::None) {
             return;
         }
 

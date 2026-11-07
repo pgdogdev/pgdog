@@ -15,7 +15,7 @@ use crate::frontend::router::parser::{
 };
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
-use pg_raw_parse::{Node, StmtList, make, nodes};
+use pg_raw_parse::{ConstValue, Node, StmtList, make, nodes};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -250,13 +250,24 @@ fn unsupported_with_having(select: &nodes::SelectStmt, schema: &Schema) -> Optio
     if wraps_aggregate {
         return Some("expressions over aggregates in the SELECT list are unsupported");
     }
-    // Shards would drop groups before PgDog merges and filters them.
-    if !matches!(select.limit_count(), Node::None) || !matches!(select.limit_offset(), Node::None) {
-        return Some("LIMIT and OFFSET are unsupported");
+    // PgDog pages the filtered groups by position, without the sort keys to find ties.
+    if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
+        return Some("FETCH FIRST WITH TIES is unsupported");
     }
-    // DISTINCT has to run after the merged groups are filtered.
-    if !select.distinct_clause().is_empty() {
-        return Some("DISTINCT is unsupported");
+    // PgDog applies LIMIT and OFFSET itself, so it has to read their values.
+    let decodable = |node: Node<'_>| match node {
+        Node::None | Node::ParamRef(_) => true,
+        Node::A_Const(constant) => {
+            matches!(constant.val(), None | Some(ConstValue::Integer(_)))
+        }
+        _ => false,
+    };
+    if !decodable(select.limit_count()) || !decodable(select.limit_offset()) {
+        return Some("LIMIT and OFFSET must be integers or parameters");
+    }
+    // Only whole-row DISTINCT is applied after the filter.
+    if !matches!(select.distinct_clause().first(), None | Some(Node::None)) {
+        return Some("DISTINCT ON is unsupported");
     }
     None
 }
@@ -341,7 +352,7 @@ fn build(
             plan.aggregate_helpers = aggregate_plan.aggregate_helpers;
         }
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
-        if rewrite_offset {
+        if rewrite_offset && !has_having {
             offset::rewrite_select(&mut select.as_mut(), mem);
         }
         Ok::<_, Error>(select)
@@ -543,13 +554,13 @@ mod tests {
             // An expression over aggregates would keep one shard's value.
             "SELECT customer_id, SUM(price) / COUNT(*) FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
-            // Shards would drop or deduplicate groups before they are filtered.
-            "SELECT customer_id FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*) > 2 LIMIT 1",
-            "SELECT customer_id FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*) > 2 OFFSET 1",
+            // Only whole-row DISTINCT and decodable LIMIT/OFFSET run after the filter.
             "SELECT DISTINCT ON (customer_id) customer_id FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
+            "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > 2 ORDER BY customer_id FETCH FIRST 1 ROWS WITH TIES",
+            "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > 2 LIMIT 1 + 1",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let error = build(&ast, &Schema::default(), false).unwrap_err();

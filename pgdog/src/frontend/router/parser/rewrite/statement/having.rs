@@ -12,7 +12,7 @@ use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{AggregateFunction, HavingRewritePlan};
 
 use super::{
-    Error,
+    Error, offset,
     projection::{column_name, is_star, target_output_name},
 };
 
@@ -49,7 +49,8 @@ const TABLE_ALIAS: &str = "__pgdog_having";
 /// WHERE __pgdog_having_0 > 2 AND __pgdog_having_1 < 100
 /// ```
 ///
-/// which returns the positions of the groups to keep.
+/// which returns the positions of the groups to keep. LIMIT and OFFSET are
+/// removed from the shard query, since they apply to the groups that pass.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
@@ -177,12 +178,40 @@ pub(super) fn rewrite_select<'a>(
         .set_args(mem.make_list(&[original, true_value]));
     select.set_having_clause(neutralized.uncast());
 
+    // Shards return every group; PgDog applies LIMIT and OFFSET after the filter.
+    let limit = without_limit(select.limit_count(), mem);
+    let offset = without_limit(select.limit_offset(), mem);
+    select.set_limit_count(limit);
+    select.set_limit_offset(offset);
+
     Ok(HavingRewritePlan::new(
         filter_sql,
         operand_aliases,
         hidden_aliases,
         operands.params,
     ))
+}
+
+/// Remove LIMIT or OFFSET from the shard query, keeping it as
+/// `CASE WHEN (x)::bigint < 0 THEN (x)::bigint END`. That is NULL (no limit)
+/// unless the value is negative, where Postgres returns its own error. It also
+/// keeps `$n` in the query, so Postgres infers the same parameter types.
+fn without_limit<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
+    if matches!(node, Node::None) {
+        return mem.none();
+    }
+    let negative = mem.make_a_expr(
+        nodes::A_Expr_Kind::AEXPR_OP,
+        mem.make_list(&[mem.make_string(Some("<")).uncast()]),
+        offset::to_bigint(node, mem),
+        mem.make_a_const(ConstValue::Integer(0)).uncast(),
+    );
+    let mut when = mem.make_node::<nodes::CaseWhen>();
+    when.as_mut().set_expr(negative.uncast());
+    when.as_mut().set_result(offset::to_bigint(node, mem));
+    let mut case = mem.make_node::<nodes::CaseExpr>();
+    case.as_mut().set_args(mem.make_list(&[when.uncast()]));
+    case.uncast()
 }
 
 fn groups_by_output_alias(
@@ -340,6 +369,29 @@ mod tests {
         assert_eq!(plan.operand_aliases().len(), 3);
         assert_eq!(plan.hidden_aliases().len(), 4);
         assert_eq!(plan.params(), &[1, 0]);
+    }
+
+    #[test]
+    fn removes_limit_and_offset_from_shard_query() {
+        let (sql, plan) = rewrite(
+            "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > $2 ORDER BY customer_id LIMIT $1 OFFSET 1",
+        )
+        .unwrap();
+
+        assert_eq!(
+            sql,
+            "SELECT customer_id, count(*), count(*) AS __pgdog_having_0, \
+             customer_id AS __pgdog_having_1 FROM purchases GROUP BY customer_id \
+             HAVING count(*) > $2 OR true ORDER BY customer_id \
+             LIMIT CASE WHEN $1::bigint < 0 THEN $1::bigint END \
+             OFFSET CASE WHEN 1::bigint < 0 THEN 1::bigint END"
+        );
+        assert_eq!(
+            plan.filter_sql(),
+            "SELECT __pgdog_row FROM unnest($1) WITH ORDINALITY \
+             __pgdog_having(__pgdog_having_0, __pgdog_row) WHERE __pgdog_having_0 > $2"
+        );
     }
 
     #[test]
