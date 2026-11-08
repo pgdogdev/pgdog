@@ -24,7 +24,7 @@ set_desired_capacity() {
 wait_for_launch() {
     local region=${1%/*} group=${1#*/} started_at=$2 status
     for _ in $(seq 18); do
-        status=$(aws autoscaling describe-scaling-activities --region "$region" --auto-scaling-group-name "$group" --max-items 1 \
+        status=$(aws autoscaling describe-scaling-activities --region "$region" --auto-scaling-group-name "$group" --no-paginate \
             --query "Activities[?StartTime>='$started_at'] | [0].StatusCode" --output text 2> /dev/null || echo None)
         case $status in
             Successful | InProgress | PreInService | MidLifecycleAction) return 0 ;;
