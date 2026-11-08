@@ -12,8 +12,6 @@
 
 name: metal
 on:
-  push:
-    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   pull_request_target:
@@ -35,10 +33,9 @@ env:
 jobs:
   enqueue:
     if: >-
-      github.event_name == 'push'
-      || (github.event_name == 'pull_request'
-          && github.event.action != 'labeled'
-          && github.event.pull_request.head.repo.full_name == github.repository)
+      github.event_name == 'pull_request'
+      && github.event.action != 'labeled'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     outputs:
       enqueued_at: ${{ steps.enqueue.outputs.enqueued_at }}
@@ -71,12 +68,12 @@ jobs:
             --message-deduplication-id "$SHA-${{ github.run_id }}" \
             --message-body "$MESSAGE"
 
+      - uses: actions/checkout@v6
+
       - name: Start the runners if they're down
         run: |
-          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
-          aws autoscaling set-desired-capacity --region us-east-2 --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
-          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
-          aws autoscaling set-desired-capacity --region us-west-2 --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
+          bash integration/ci/metal-scale.sh "$QUEUE_URL" "$AUTOSCALING_GROUP"
+          bash integration/ci/metal-scale.sh "$QUEUE_URL_X86" "$AUTOSCALING_GROUP_X86"
 
       - name: Mark commit as queued
         env:
@@ -161,12 +158,12 @@ jobs:
             --message-deduplication-id "pgo-$SHA-${{ github.run_id }}" \
             --message-body "$MESSAGE"
 
+      - uses: actions/checkout@v6
+
       - name: Start the runners if they're down
         run: |
-          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
-          aws autoscaling set-desired-capacity --region us-east-2 --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
-          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
-          aws autoscaling set-desired-capacity --region us-west-2 --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
+          bash integration/ci/metal-scale.sh "$QUEUE_URL" "$AUTOSCALING_GROUP"
+          bash integration/ci/metal-scale.sh "$QUEUE_URL_X86" "$AUTOSCALING_GROUP_X86"
 
   report-pgo:
     needs: enqueue-pgo
