@@ -393,6 +393,9 @@ impl DataType {
             DataType::Uuid => Some(DataType::Array(2951)),
             DataType::Oid => Some(DataType::Array(1028)),
             DataType::Array(_) | DataType::Vector | DataType::Other(_) => None,
+            DataType::Cidr => todo!(),
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
         }
     }
 
