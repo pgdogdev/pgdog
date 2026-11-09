@@ -113,13 +113,15 @@ fn update_replica_lag(pools: &[Pool]) {
     let primary = pools
         .iter()
         .map(|pool| (pool, pool.lsn_stats()))
-        .find(|(_, stats)| !stats.replica);
+        .find(|(_, stats)| stats.valid() && !stats.replica);
 
     // There is a primary. If not, replica lag cannot be calculated.
     if let Some((primary_pool, primary_stats)) = primary {
         for replica_pool in pools {
             let replica_stats = replica_pool.lsn_stats();
-            if !replica_stats.replica {
+            // Only calculate replica lag if the LSN stats
+            // have been fetched from a database.
+            if !replica_stats.valid() || !replica_stats.replica {
                 continue;
             }
 
@@ -274,6 +276,52 @@ mod test {
         let primary_lag = primary.replica_lag();
         assert_eq!(primary_lag.bytes, 0);
         assert_eq!(primary_lag.duration, Duration::default());
+    }
+
+    #[test]
+    fn test_update_replica_lag_waits_for_initial_samples() {
+        // RECONNECT creates new pools whose LSN checks complete independently.
+        let primary = Pool::new_test();
+        let replicas = [Pool::new_test(), Pool::new_test()];
+        let pools = [replicas[0].clone(), replicas[1].clone(), primary.clone()];
+
+        update_replica_lag(&pools);
+        for pool in &pools {
+            assert_eq!(pool.replica_lag(), ReplicaLag::default());
+        }
+
+        set_pool_lsn_stats(&primary, false, 67_381_657, "2026-11-09 19:06:13.000000+00");
+        update_replica_lag(&pools);
+        for replica in &replicas {
+            assert!(!replica.lsn_stats().valid());
+            assert_eq!(replica.replica_lag(), ReplicaLag::default());
+        }
+
+        // A sampled replica's real lag must still be recorded while another
+        // replica is waiting for its first sample.
+        set_pool_lsn_stats(
+            &replicas[0],
+            true,
+            67_380_657,
+            "2026-11-09 19:04:13.000000+00",
+        );
+        update_replica_lag(&pools);
+        assert_eq!(
+            replicas[0].replica_lag(),
+            ReplicaLag {
+                bytes: 1000,
+                duration: Duration::from_secs(120),
+            }
+        );
+        assert_eq!(replicas[1].replica_lag(), ReplicaLag::default());
+
+        for replica in &replicas {
+            set_pool_lsn_stats(replica, true, 67_381_657, "2026-11-09 19:06:13.000000+00");
+        }
+        update_replica_lag(&pools);
+        for replica in &replicas {
+            assert_eq!(replica.replica_lag(), ReplicaLag::default());
+        }
     }
 
     // The shard monitor reacts to an `lsn_role_change` notification by
