@@ -1771,7 +1771,7 @@ pub(crate) mod test {
 
             assert!(server.done());
             assert_eq!(
-                server.stats().total().idle_in_transaction_time,
+                server.stats().last_checkout().idle_in_transaction_time,
                 Duration::ZERO
             );
         }
@@ -3060,17 +3060,13 @@ pub(crate) mod test {
 
         server.execute("SELECT 1").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
-            Duration::ZERO,
-        );
-        assert_eq!(
             server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
         server.execute("BEGIN").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
@@ -3079,7 +3075,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 2").await.unwrap();
 
-        let idle_time = server.stats().total().idle_in_transaction_time;
+        let idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             idle_time >= Duration::from_millis(50),
             "Expected idle time >= 50ms, got {:?}",
@@ -3095,7 +3091,7 @@ pub(crate) mod test {
 
         server.execute("COMMIT").await.unwrap();
 
-        let final_idle_time = server.stats().total().idle_in_transaction_time;
+        let final_idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             final_idle_time >= Duration::from_millis(150),
             "Expected final idle time >= 150ms, got {:?}",
@@ -3109,7 +3105,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 3").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             final_idle_time,
         );
     }
@@ -3127,7 +3123,6 @@ pub(crate) mod test {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(server.read().await.is_err());
-        assert_eq!(server.stats().total().idle_xact_timeouts, 1);
         assert_eq!(server.stats().last_checkout().idle_xact_timeouts, 1);
     }
 
