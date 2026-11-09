@@ -517,6 +517,10 @@ impl Connection {
         self.cluster.query_cancellation_token()
     }
 
+    pub(crate) fn cluster_reloads(&self) -> usize {
+        self.cluster.reloads()
+    }
+
     /// Get cluster if any.
     pub(crate) fn cluster(&self) -> Result<&Cluster, Error> {
         self.cluster.cluster()
