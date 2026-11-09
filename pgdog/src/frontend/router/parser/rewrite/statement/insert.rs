@@ -14,6 +14,23 @@ pub(crate) struct Subquery {
     /// The inner-SQL of the outer statement (the Subquery's SQL) that we wish to execute
     /// and re-write in our multi-step code.
     pub(crate) inner_stmt: String,
+
+    /// What kind of subquery is it?
+    /// E.g., FROM clause
+    pub(crate) identifier: SubqueryType,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SubqueryType {
+    // Determine if there's a RangeSubselect within a FROM clause of a SELECT / UPDATE statement.
+    FromClause,
+
+    // SELECT / UPDATE / DELETE with a subquery in a WHERE clause.
+    WhereClause,
+
+    // Select subquery within an INSERT statement with a SELECT FROM
+    // e.g., INSERT INTO .. SELECT FROM generate_series(..)
+    InsertSelect,
 }
 
 #[derive(Debug, Clone)]
