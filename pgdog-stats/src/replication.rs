@@ -130,7 +130,9 @@ impl Default for LsnStats {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord,
+)]
 pub struct ReplicaLag {
     pub duration: Duration,
     pub bytes: i64,
@@ -148,6 +150,17 @@ impl ReplicaLag {
         } else {
             self.duration >= other.duration
         }
+    }
+}
+
+impl Display for ReplicaLag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}, {}",
+            pgdog_util::human_duration(self.duration),
+            pgdog_util::format_bytes(self.bytes as u64)
+        )
     }
 }
 
