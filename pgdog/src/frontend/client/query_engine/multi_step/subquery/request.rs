@@ -48,7 +48,7 @@ impl<'a> SubqueryMulti<'a> {
                     )?;
                     rewrite_result.apply_after_route(&mut client_request)?;
 
-                    Ok(Some(self.send_request(engine, &mut client_request).await?))
+                    Ok(Some(multi_step::fetch_rows(engine, &client_request).await?))
                 }
 
                 Some(RewriteResult::Subquery(subqueries)) => {
@@ -176,14 +176,5 @@ impl<'a> SubqueryMulti<'a> {
         client_request.routing_comment = Some(ast.comment);
 
         Ok(client_request)
-    }
-
-    /// Send `client_request` and return the rows and RowDescription (if present) back.
-    pub(crate) async fn send_request(
-        &mut self,
-        engine: &mut QueryEngine,
-        client_request: &mut ClientRequest,
-    ) -> Result<(Vec<DataRow>, Option<RowDescription>), Error> {
-        multi_step::fetch_rows(self.engine, client_request).await
     }
 }
