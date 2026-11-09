@@ -1,11 +1,8 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::{Bytes, BytesMut};
 use pg_raw_parse::{ConstValue, Node, nodes};
 use tokio::io::AsyncWriteExt;
-use tokio::runtime::{Builder, Runtime};
 
 use crate::net::{
     Authentication, BackendKeyData, BindComplete, CloseComplete, CommandComplete, DataRow, Error,
@@ -25,34 +22,11 @@ const TABLE_COLUMNS: &[(&str, &[&str])] = &[
 
 const TERMINATE: char = 'X';
 
-// When we count instructions, we run the fake servers on a separate thread, so that the counts of the benchmark thread only include PgDog's work.
-// When we measure time, we run the fake servers on the benchmark thread, because handing replies between two threads would make the benchmark thread sleep
-// and wake up through the kernel, (thus, the wake-ups would dominate the times)
-static SEPARATE_THREAD: AtomicBool = AtomicBool::new(false);
-
-static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
-    Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_name("fake-server")
-        .enable_all()
-        .build()
-        .expect("fake server runtime")
-});
-
-#[cfg_attr(not(all(feature = "bench", target_os = "linux")), allow(dead_code))]
-pub(crate) fn run_on_separate_thread() {
-    SEPARATE_THREAD.store(true, Ordering::Relaxed);
-}
-
 pub(crate) fn connect() -> Stream {
     let (pgdog, server) = tokio::io::duplex(64 * 1024);
     let server = serve(Stream::memory(server));
 
-    if SEPARATE_THREAD.load(Ordering::Relaxed) {
-        RUNTIME.spawn(server);
-    } else {
-        tokio::spawn(server);
-    }
+    tokio::spawn(server);
 
     Stream::memory(pgdog)
 }
