@@ -95,12 +95,12 @@
 -- [DONE] [A1 A2 A3 A4 A5 A6 O9 Q2 Q3] [update] UPDATE <st1> SET .. FROM (<sq>) s WHERE ..
 
 -- Plain CTEs
---   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
---   [A1 A2 A4 A6] [select] WITH c (a, b) AS (..) SELECT .. FROM c
---   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (SELECT .. FROM <st1>) SELECT <col>, <agg>(..) FROM c GROUP BY <col>
---   [A1 A2 A3 A4 A5 A6] [select, insert] WITH a AS (..), b AS (SELECT .. FROM a) .. FROM a JOIN b ..
---       case: one CTE over another
---       case: same CTE referenced more than once
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
+-- [DONE] [A1 A2 A4 A6] [select] WITH c (a, b) AS (..) SELECT .. FROM c
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] WITH c AS (SELECT .. FROM <st1>) SELECT <col>, <agg>(..) FROM c GROUP BY <col>
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select, insert] WITH a AS (..), b AS (SELECT .. FROM a) .. FROM a JOIN b ..
+--   case: one CTE over another
+--   case: same CTE referenced more than once
 
 -- WHERE follow-ups
 --   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq>) <op> EXISTS (<sq>)
