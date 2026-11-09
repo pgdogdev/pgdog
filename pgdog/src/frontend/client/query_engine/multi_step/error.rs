@@ -7,6 +7,9 @@ pub(crate) enum Error {
     #[error("{0}")]
     Update(#[from] UpdateError),
 
+    #[error("{0}")]
+    Subquery(#[from] SubqueryError),
+
     #[error("parser: {0}")]
     Parser(Box<crate::frontend::router::parser::Error>),
 
@@ -30,6 +33,12 @@ pub(crate) enum Error {
 
     #[error("sql parser: {0}")]
     SqlParser(#[from] pg_raw_parse::error::Error),
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum SubqueryError {
+    #[error("subquery is returning a column with an unsupported data type")]
+    SubqueryReturningUnsupportedColumn,
 }
 
 #[derive(Debug, Error)]

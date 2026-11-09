@@ -46,6 +46,7 @@ impl<'a> SubqueryMulti<'a> {
                         &cluster.schema(),
                         rewrite_result.offset_plan(),
                     )?;
+
                     rewrite_result.apply_after_route(&mut client_request)?;
 
                     Ok(Some(multi_step::fetch_rows(engine, &client_request).await?))
@@ -58,7 +59,7 @@ impl<'a> SubqueryMulti<'a> {
                     //
                     // Then, we send the re-written subquery here, and return the relevant DataRows / RD
 
-                    let rewritten_subquery_ast = {
+                    let (new_ast, new_bind) = {
                         let mut subquery_multi =
                             SubqueryMulti::new_sub_engine(self, query_ast, subqueries);
 
@@ -68,12 +69,13 @@ impl<'a> SubqueryMulti<'a> {
                         .await?
                     };
 
-                    let rewritten_subquery_sql =
-                        deparse(rewritten_subquery_ast.stmt())?.as_str().to_string();
+                    self.current_level_bind = new_bind;
+
+                    let rewritten_subquery_sql = deparse(new_ast.stmt())?.as_str().to_string();
 
                     Box::pin(self.send_query_string(
                         engine,
-                        rewritten_subquery_ast.stmt(),
+                        new_ast.stmt(),
                         rewritten_subquery_sql,
                         context,
                         true,
@@ -103,6 +105,14 @@ impl<'a> SubqueryMulti<'a> {
                 todo!()
             }
 
+            // We send outer queries that we want evaluated in the extended protocol,
+            // even if the original query was sent in the simple protocol, as we need
+            // to send a Bind message with the subquery contents in a byte array vs.
+            // hand-rolling it into the SQL.
+            //
+            // So, this just drops all Parse/Binds that we come across, as we know we're handling subqueries.
+            context.drop_extended_parse_and_bind = true;
+
             // TODO(jkaczman): We rely on INSERT split for insert statements.
             // If a user has that rewrite disabled, but subqueries
             // enabled, then INSERTs will still fail with
@@ -122,35 +132,35 @@ impl<'a> SubqueryMulti<'a> {
         mut query_string: String,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<ClientRequest, Error> {
-        let mut client_request = if self.is_extended_protocol {
+        let mut client_request = {
             let mut bind = Bind::default();
-            if let Some(top_level_bind) = self.top_level_bind {
-                let mut actual_param_index = 1;
-                let mut actual_param_index_str = format!("${actual_param_index}");
+            let mut actual_param_index = 1;
+            let mut actual_param_index_str = format!("${actual_param_index}");
 
-                for index in 1..=top_level_bind.params_raw().len() {
-                    // If we have a Bind parameter within the subquery, then we should
-                    // include it in our Bind message. This also means that we have to rename
-                    // it to a local scheme to the subquery itself (e.g., if the first
-                    // one we encounter in the subquery is $2, needs to be renamed to $1)
-                    //
-                    // TODO(jkaczman): we need to also update the original (top-lvl) ClientRequest's Bind
-                    // to get rid of the evaluated params
-                    let param_str = format!("${}", index);
-                    if query_string.contains(param_str.as_str()) {
-                        query_string = query_string
-                            .replace(param_str.as_str(), actual_param_index_str.as_str());
+            for index in 1..=self.current_level_bind.params_raw().len() {
+                // If we have a Bind parameter within the subquery, then we should
+                // include it in our Bind message. This also means that we have to rename
+                // it to a local scheme to the subquery itself (e.g., if the first
+                // one we encounter in the subquery is $2, needs to be renamed to $1)
+                //
+                // TODO(jkaczman): we need to also update the original (top-lvl) ClientRequest's Bind
+                // to get rid of the evaluated params that are extra (self.top_level_bind)
+                // TODO(jkaczman): This also won't work if we have 10 Bind params ($1 matching on $10)
+                let param_str = format!("${}", index);
+                if query_string.contains(param_str.as_str()) {
+                    query_string =
+                        query_string.replace(param_str.as_str(), actual_param_index_str.as_str());
 
-                        actual_param_index += 1;
-                        actual_param_index_str = format!("${}", actual_param_index);
+                    actual_param_index += 1;
+                    actual_param_index_str = format!("${}", actual_param_index);
 
-                        let old_bind_param = top_level_bind.parameter(index - 1).unwrap().unwrap();
+                    let old_bind_param = self
+                        .current_level_bind
+                        .parameter(index - 1)
+                        .unwrap()
+                        .unwrap();
 
-                        bind.push_param(
-                            old_bind_param.parameter().clone(),
-                            old_bind_param.format(),
-                        );
-                    }
+                    bind.push_param(old_bind_param.parameter().clone(), old_bind_param.format());
                 }
             }
 
@@ -161,8 +171,6 @@ impl<'a> SubqueryMulti<'a> {
                 ProtocolMessage::Execute(Default::default()),
                 ProtocolMessage::Sync(Default::default()),
             ])
-        } else {
-            ClientRequest::from(vec![ProtocolMessage::Query(Query::new(&query_string))])
         };
 
         let cluster = engine.backend.cluster()?;

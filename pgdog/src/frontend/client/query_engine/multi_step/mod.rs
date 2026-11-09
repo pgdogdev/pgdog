@@ -6,7 +6,7 @@ pub(crate) mod state;
 pub(crate) mod subquery;
 pub(crate) mod update;
 
-pub(crate) use error::{Error, UpdateError};
+pub(crate) use error::{Error, SubqueryError, UpdateError};
 pub(crate) use fetch::fetch_rows;
 pub(crate) use forward_check::*;
 pub(crate) use insert::InsertMulti;

@@ -180,6 +180,7 @@ async fn test_subqueries_suite() {
     let (mut regular_cases, mut data_modifying_cases) = (Vec::new(), Vec::new());
     // Run a single case by name, e.g. SUBQUERY_TEST=<case_name>
     let test_target: Option<String> = std::env::var("SUBQUERY_TEST").ok();
+    println!("Using test target: {test_target:?}");
 
     // Load all cases from the 'tests' folder
     let list_of_files: fs::ReadDir = fs::read_dir("tests/integration/subqueries/tests").unwrap();
