@@ -397,6 +397,9 @@ impl DataType {
             DataType::Other(_) => {
                 panic!("This needs to be handled properly with a client-facing error")
             }
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+            DataType::Cidr => todo!(),
         }
     }
 }
