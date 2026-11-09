@@ -38,7 +38,10 @@ pub(crate) fn route_query(context: Context<'_>) -> Result<Route, PluginError> {
                 return Ok(Route::unknown());
             }
 
-            let table_name = stmt.from_clause().first().ok_or(PluginError::EmptyQuery)?;
+            let table_name = stmt
+                .from_clause()
+                .first()
+                .ok_or_else(|| PluginError::EmptyQuery)?;
 
             if let Node::RangeVar(range_var) = table_name {
                 // Got info on last write.

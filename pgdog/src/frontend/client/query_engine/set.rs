@@ -140,7 +140,7 @@ impl QueryEngine {
             );
         }
 
-        let previous = context.params.get(&param.name).cloned();
+        let previous = context.params.get_reported(&param.name).cloned();
         let is_pin = param.name.eq_ignore_ascii_case(PGDOG_PIN);
 
         if let Some(value) = param.value.clone() {
@@ -165,7 +165,7 @@ impl QueryEngine {
             }
         }
 
-        let value = context.params.get(&param.name);
+        let value = context.params.get_reported(&param.name);
         let mut command =
             Self::parameter_command(param, set_config, context.in_transaction(), value);
         if let Some(status) = ParameterValidator::notify_client(param, previous.as_ref(), value) {

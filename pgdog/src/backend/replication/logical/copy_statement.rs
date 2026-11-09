@@ -90,7 +90,7 @@ impl TableColumnSplit {
             .fetch_all(sql)
             .await?
             .pop()
-            .ok_or(Error::MissingData)?;
+            .ok_or_else(|| Error::MissingData)?;
 
         u32::try_from(blocks).map_err(|_| Error::MissingData)
     }

@@ -19,6 +19,7 @@ impl Count {
         }
     }
 
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     pub(super) fn accumulate(&mut self, value: Datum) -> Result<(), TypeError> {
         if value.is_null() {
             return Ok(());
@@ -28,13 +29,13 @@ impl Count {
             Datum::Numeric(numeric) => numeric
                 .as_decimal()
                 .and_then(|decimal| decimal.to_i64())
-                .ok_or(TypeError::NumericOutOfRange(DataType::Bigint))?,
+                .ok_or_else(|| TypeError::NumericOutOfRange(DataType::Bigint))?,
             value => value.as_i64()?,
         };
         self.total = self
             .total
             .checked_add(partial)
-            .ok_or(TypeError::NumericOutOfRange(DataType::Bigint))?;
+            .ok_or_else(|| TypeError::NumericOutOfRange(DataType::Bigint))?;
         self.data_type = value.data_type();
         Ok(())
     }

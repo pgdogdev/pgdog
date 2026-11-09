@@ -2140,9 +2140,8 @@ fn test_ban_check_bans_unhealthy_replica_with_bad_lag() {
     monitor.ban_check(&threshold);
 
     assert!(replicas.targets[0].ban.banned());
-    assert_eq!(
-        replicas.targets[0].ban.error(),
-        Some(Error::ReplicaLag),
+    assert!(
+        matches!(replicas.targets[0].ban.error(), Some(Error::ReplicaLag(_))),
         "Ban reason should be ReplicaLag when unhealthy replica has bad lag"
     );
 }
@@ -2172,9 +2171,8 @@ fn test_ban_check_bans_healthy_replica_with_bad_lag() {
         replicas.targets[0].ban.banned(),
         "Healthy replica with bad lag should be banned"
     );
-    assert_eq!(
-        replicas.targets[0].ban.error(),
-        Some(Error::ReplicaLag),
+    assert!(
+        matches!(replicas.targets[0].ban.error(), Some(Error::ReplicaLag(_))),
         "Ban reason should be ReplicaLag"
     );
 }

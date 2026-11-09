@@ -1139,7 +1139,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             .cols()
             .into_iter()
             .map(|n| match n {
-                Node::ResTarget(r) => r.name().ok_or(Error::ColumnDecode),
+                Node::ResTarget(r) => r.name().ok_or_else(|| Error::ColumnDecode),
                 _ => Err(Error::ColumnDecode),
             })
             .collect::<Result<Vec<_>, _>>()?;

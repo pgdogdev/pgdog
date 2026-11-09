@@ -32,16 +32,27 @@ struct Grouping {
 }
 
 impl Grouping {
-    fn new(row: &DataRow, group_by: &[usize], decoder: &Decoder) -> Result<Self, Error> {
+    fn new(row: &DataRow, group_by: &[usize], decoder: &Decoder) -> Self {
         let mut columns = vec![];
         for idx in group_by {
-            let column = row.get_column(*idx, decoder)?;
-            if let Some(column) = column {
-                columns.push((*idx, column.value));
+            let value = match row.get_column(*idx, decoder) {
+                Ok(column) => column.map(|column| column.value),
+                // Equal keys have identical output text, so a key PgDog can't
+                // decode (e.g. timestamptz with a +05:30 offset) groups by its bytes.
+                Err(_) => row.get_raw(*idx).map(|data| {
+                    if data.is_null {
+                        Datum::Null
+                    } else {
+                        Datum::Unknown(data.data.clone())
+                    }
+                }),
+            };
+            if let Some(value) = value {
+                columns.push((*idx, value));
             }
         }
 
-        Ok(Self { columns })
+        Self { columns }
     }
 }
 
@@ -331,7 +342,7 @@ impl<'a> Aggregates<'a> {
             (0..num_cols).filter(|idx| !covered_indices[*idx]).collect();
 
         for row in self.rows {
-            let grouping = Grouping::new(row, self.aggregate.group_by(), self.decoder)?;
+            let grouping = Grouping::new(row, self.aggregate.group_by(), self.decoder);
             let entry = match self.mappings.entry(grouping) {
                 Entry::Occupied(o) => o.into_mut(),
                 Entry::Vacant(v) => {
@@ -777,6 +788,67 @@ mod test {
 
         assert_eq!(intervals, r#"{"1 year 2 mons 1 day 04:05:06.7"}"#);
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn aggregate_group_by_without_aggregate_merges_shard_groups() {
+        let aggregate = parse("SELECT category, region FROM menu GROUP BY 1, 2");
+        let decoder = Decoder::from(RowDescription::new(&[
+            Field::text("category"),
+            Field::text("region"),
+        ]));
+
+        let rows = [
+            ("drinks", "eu"),
+            ("food", "eu"),
+            ("drinks", "eu"),
+            ("drinks", "us"),
+        ]
+        .into_iter()
+        .map(|(category, region)| DataRow::from_columns(vec![category, region]))
+        .collect::<VecDeque<_>>();
+        let result = Aggregates::new(&rows, &decoder, &aggregate, None)
+            .unwrap()
+            .aggregate()
+            .unwrap();
+
+        let mut groups = result
+            .iter()
+            .map(|row| (row.get_text(0).unwrap(), row.get_text(1).unwrap()))
+            .collect::<Vec<_>>();
+        groups.sort();
+        assert_eq!(
+            groups,
+            [("drinks", "eu"), ("drinks", "us"), ("food", "eu")]
+                .map(|(category, region)| (category.to_owned(), region.to_owned()))
+        );
+    }
+
+    #[test]
+    fn aggregate_group_by_undecodable_key_groups_by_bytes() {
+        let aggregate = parse("SELECT created_at FROM events GROUP BY 1");
+        let mut field = integer_field("created_at");
+        field.type_oid = 1184; // timestamptz
+        let decoder = Decoder::from(RowDescription::new(&[field]));
+
+        // timestamptz text with a +05:30 offset doesn't decode yet.
+        let key = "2025-01-15 10:00:15+05:30";
+        assert!(
+            DataRow::from_columns(vec![key])
+                .get_column(0, &decoder)
+                .is_err()
+        );
+
+        let rows = (0..2)
+            .map(|_| DataRow::from_columns(vec![key]))
+            .collect::<VecDeque<_>>();
+        let result = Aggregates::new(&rows, &decoder, &aggregate, None)
+            .unwrap()
+            .aggregate()
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].column(0), Some(Bytes::from(key)));
     }
 
     #[test]

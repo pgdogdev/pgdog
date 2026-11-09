@@ -50,7 +50,10 @@ pub(crate) async fn data(
                 if format == CopyFormat::Binary {
                     if std::mem::take(&mut first) {
                         // Skip header.
-                        let row = data.data().get(HEADER_SIZE..).ok_or(Error::MissingData)?;
+                        let row = data
+                            .data()
+                            .get(HEADER_SIZE..)
+                            .ok_or_else(|| Error::MissingData)?;
                         data = CopyData::new(row);
                     }
 

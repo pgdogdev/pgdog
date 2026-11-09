@@ -48,7 +48,7 @@ async fn two_pc_subset_commit_counts() {
         panic!("expected multi-shard binding");
     };
     for server in servers.iter() {
-        assert_eq!(server.stats().total().transactions_2pc, 1);
+        assert_eq!(server.stats().last_checkout().transactions_2pc, 1);
     }
 }
 
@@ -71,7 +71,7 @@ async fn two_pc_missing_participants_not_counted() {
     };
     let commits: usize = servers
         .iter()
-        .map(|server| server.stats().total().transactions_2pc)
+        .map(|server| server.stats().last_checkout().transactions_2pc)
         .sum();
     assert_eq!(commits, 0, "missing prepared transactions are not commits");
 }

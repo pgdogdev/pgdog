@@ -4,13 +4,17 @@ use crate::net::{Parameters, Password};
 use super::User;
 
 pub(crate) fn user_from_params(params: &Parameters, password: &Password) -> Result<User, Error> {
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let user = params
         .get("user")
-        .ok_or(Error::IncompleteStartup)?
+        .ok_or_else(|| Error::IncompleteStartup)?
         .as_str()
-        .ok_or(Error::IncompleteStartup)?;
+        .ok_or_else(|| Error::IncompleteStartup)?;
     let database = params.get_default("database", user);
-    let password = password.password().ok_or(Error::IncompleteStartup)?;
+    #[allow(clippy::unnecessary_lazy_evaluations)]
+    let password = password
+        .password()
+        .ok_or_else(|| Error::IncompleteStartup)?;
 
     Ok(User {
         name: user.to_owned(),
