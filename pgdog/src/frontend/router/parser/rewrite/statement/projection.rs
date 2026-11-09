@@ -17,7 +17,7 @@ use crate::frontend::router::parser::{
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
 use pg_raw_parse::{Node, StmtList, make, nodes};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -392,6 +392,40 @@ pub(super) fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
     match target.val() {
         Node::ColumnRef(column) if !is_star(column) => column_name(column),
         _ => None,
+    }
+}
+
+/// Names for hidden columns, `{prefix}0`, `{prefix}1`, ..., skipping any
+/// name the client's SELECT list already uses.
+pub(super) struct HiddenAliases {
+    prefix: &'static str,
+    taken: HashSet<String>,
+    next: usize,
+}
+
+impl HiddenAliases {
+    pub(super) fn new<'t>(
+        prefix: &'static str,
+        targets: impl IntoIterator<Item = &'t nodes::ResTarget>,
+    ) -> Self {
+        Self {
+            prefix,
+            taken: targets
+                .into_iter()
+                .filter_map(|target| target_output_name(target).map(str::to_owned))
+                .collect(),
+            next: 0,
+        }
+    }
+
+    pub(super) fn next_alias(&mut self) -> String {
+        loop {
+            let alias = format!("{}{}", self.prefix, self.next);
+            self.next += 1;
+            if self.taken.insert(alias.clone()) {
+                return alias;
+            }
+        }
     }
 }
 

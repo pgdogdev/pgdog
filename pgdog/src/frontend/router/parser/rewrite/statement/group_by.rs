@@ -1,12 +1,10 @@
 //! Route-dependent rewrite for cross-shard `GROUP BY`.
 
-use std::collections::HashSet;
-
 use pg_raw_parse::{Node, make, nodes};
 
 use super::{
     Error,
-    projection::{column_name, expands_star, target_output_name},
+    projection::{HiddenAliases, column_name, expands_star},
 };
 use crate::frontend::router::parser::Aggregate;
 
@@ -63,12 +61,7 @@ pub(super) fn rewrite_select<'a>(
         ));
     }
 
-    let mut taken: HashSet<String> = select
-        .target_list()
-        .iter()
-        .filter_map(|target| target_output_name(target).map(str::to_owned))
-        .collect();
-    let mut next_alias = 0;
+    let mut hidden_aliases = HiddenAliases::new(ALIAS_PREFIX, select.target_list());
     let mut aliases = vec![];
     let mut hidden = vec![];
     let mut group_by = vec![];
@@ -93,13 +86,7 @@ pub(super) fn rewrite_select<'a>(
             }
             _ => {}
         }
-        let alias = loop {
-            let alias = format!("{ALIAS_PREFIX}{next_alias}");
-            next_alias += 1;
-            if taken.insert(alias.clone()) {
-                break alias;
-            }
-        };
+        let alias = hidden_aliases.next_alias();
         group_by.push(select.target_list().len() + hidden.len());
         hidden.push(mem.make_res_target(Some(&alias), mem.empty(), mem.make_unique(node)));
         aliases.push(alias);
