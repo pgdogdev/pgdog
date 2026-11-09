@@ -210,6 +210,50 @@ pub(super) fn rewrite_select<'a>(
     select.set_limit_offset(mem.none());
 }
 
+/// Remove LIMIT and OFFSET from the shard query, so shards return every row
+/// and PgDog applies both after the merge.
+pub(super) fn remove_select<'a>(
+    select: &mut nodes::SelectStmtMut<'a, '_>,
+    mem: make::MemoryToken<'a>,
+) {
+    let limit = without_limit(select.limit_count(), mem);
+    let offset = without_limit(select.limit_offset(), mem);
+    select.set_limit_count(limit);
+    select.set_limit_offset(offset);
+}
+
+/// `CASE WHEN (x)::bigint < 0 THEN (x)::bigint END` is NULL (no limit) unless
+/// the value is negative, where Postgres returns its own error. It also keeps
+/// `$n` in the query, so Postgres infers the same parameter types.
+fn without_limit<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
+    if matches!(node, Node::None) {
+        return mem.none();
+    }
+    let negative = mem.make_a_expr(
+        nodes::A_Expr_Kind::AEXPR_OP,
+        mem.make_list(&[mem.make_string(Some("<")).uncast()]),
+        to_bigint(node, mem),
+        mem.make_a_const(ConstValue::Integer(0)).uncast(),
+    );
+    let mut when = mem.make_node::<nodes::CaseWhen>();
+    when.as_mut().set_expr(negative.uncast());
+    when.as_mut().set_result(to_bigint(node, mem));
+    let mut case = mem.make_node::<nodes::CaseExpr>();
+    case.as_mut().set_args(mem.make_list(&[when.uncast()]));
+    case.uncast()
+}
+
+/// Whether the route can read this LIMIT or OFFSET value, see [`LimitClause`].
+///
+/// [`LimitClause`]: crate::frontend::router::parser::LimitClause
+pub(super) fn is_decodable(node: Node<'_>) -> bool {
+    match node {
+        Node::None | Node::ParamRef(_) => true,
+        Node::A_Const(constant) => matches!(constant.val(), None | Some(ConstValue::Integer(_))),
+        _ => false,
+    }
+}
+
 impl StatementRewrite<'_> {
     pub(super) fn limit_offset(&self, select: &nodes::SelectStmt, plan: &mut RewritePlan) {
         if self.schema.shards <= 1 {

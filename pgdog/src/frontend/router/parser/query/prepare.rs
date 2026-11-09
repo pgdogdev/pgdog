@@ -3,7 +3,7 @@ use pg_raw_parse::nodes::{ExecuteStmt, PrepareStmt};
 use crate::{
     frontend::{
         BufferedQuery, PreparedStatements,
-        router::parser::rewrite::statement::Error as RewriteError,
+        router::parser::rewrite::statement::{Error as RewriteError, projection},
     },
     net::{PREPARE_TEMPLATE_NAME, Query},
 };
@@ -78,6 +78,16 @@ impl QueryParser {
                 if !matches!(stmt.having_clause(), Node::None) && command.route().is_cross_shard() {
                     return Err(RewriteError::UnsupportedHaving(
                         "aggregates would be filtered on each shard before merging",
+                    )
+                    .into());
+                }
+                // The shard statement keeps its LIMIT, so each shard would page
+                // its own partial groups before the merge.
+                if command.route().is_cross_shard()
+                    && projection::pages_merged_groups(stmt, command.route().aggregate())
+                {
+                    return Err(RewriteError::UnsupportedGroupBy(
+                        "LIMIT and OFFSET with aggregates are unsupported in EXECUTE",
                     )
                     .into());
                 }
