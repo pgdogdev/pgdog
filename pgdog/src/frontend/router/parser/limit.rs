@@ -44,7 +44,7 @@ impl<'a> LimitClause<'a> {
                 };
                 let param = bind
                     .parameter(*number as usize - 1)?
-                    .ok_or(Error::MissingParameter(*number as usize))?;
+                    .ok_or_else(|| Error::MissingParameter(*number as usize))?;
 
                 if param.is_null() {
                     Ok(None)

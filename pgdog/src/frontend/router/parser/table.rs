@@ -83,11 +83,11 @@ impl<'a> TryFrom<&'a CastNodeList<nodes::String>> for Table<'a> {
         let name = list
             .next()
             .and_then(nodes::String::sval)
-            .ok_or(Error::TableDecode)?;
+            .ok_or_else(|| Error::TableDecode)?;
         match (list.next(), list.next()) {
             (schema, None) => {
                 let schema = schema
-                    .map(|s| s.sval().ok_or(Error::TableDecode))
+                    .map(|s| s.sval().ok_or_else(|| Error::TableDecode))
                     .transpose()?;
                 Ok(Self {
                     schema,
@@ -111,12 +111,12 @@ impl<'a> TryFrom<&'a NodeList> for Table<'a> {
             Some(Node::RangeVar(rv)) if value.len() == 1 => return Ok(Self::from(rv)),
             _ => None,
         }
-        .ok_or(Error::TableDecode)?;
+        .ok_or_else(|| Error::TableDecode)?;
 
         match (list.next(), list.next()) {
             (schema, None) => {
                 let schema = schema
-                    .map(|s| s.as_str().ok_or(Error::TableDecode))
+                    .map(|s| s.as_str().ok_or_else(|| Error::TableDecode))
                     .transpose()?;
                 Ok(Self {
                     schema,

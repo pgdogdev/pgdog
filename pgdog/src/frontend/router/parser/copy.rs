@@ -256,7 +256,7 @@ impl CopyParser {
                         } else if let Some(table) = &self.sharded_table {
                             let key = record
                                 .get(self.sharded_column)
-                                .ok_or(Error::NoShardingColumn)?;
+                                .ok_or_else(|| Error::NoShardingColumn)?;
 
                             if key == self.null_string {
                                 Shard::All
@@ -264,7 +264,7 @@ impl CopyParser {
                                 let translated = Self::translate_key(
                                     self.lookup_cluster
                                         .as_ref()
-                                        .ok_or(Error::NoShardingColumn)?,
+                                        .ok_or_else(|| Error::NoShardingColumn)?,
                                     &self.sharding_schema,
                                     table,
                                     key,
@@ -312,17 +312,18 @@ impl CopyParser {
                         let shard = if let Some(table) = &self.sharded_table {
                             let key = tuple
                                 .get(self.sharded_column)
-                                .ok_or(Error::NoShardingColumn)?;
+                                .ok_or_else(|| Error::NoShardingColumn)?;
                             if let Data::Column(key) = key {
                                 if table.lookup_query.is_some() {
                                     // Binary values are decoded to their text
                                     // form to translate through the lookup.
                                     let value = ShardingValue::new(&key[..], table.data_type);
-                                    let text = value.to_text()?.ok_or(Error::LookupBinaryCopy)?;
+                                    let text =
+                                        value.to_text()?.ok_or_else(|| Error::LookupBinaryCopy)?;
                                     let translated = Self::translate_key(
                                         self.lookup_cluster
                                             .as_ref()
-                                            .ok_or(Error::NoShardingColumn)?,
+                                            .ok_or_else(|| Error::NoShardingColumn)?,
                                         &self.sharding_schema,
                                         table,
                                         &text,

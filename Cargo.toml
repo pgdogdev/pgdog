@@ -9,7 +9,7 @@ members = [
   "pgdog-macros",
   "pgdog-plugin",
   "pgdog-postgres-types",
-  "pgdog-stats",
+  "pgdog-stats", "pgdog-util",
   "pgdog-vector",
   "plugins/pgdog-example-plugin", "plugins/pgdog-primary-only-tables",
   "scripts/*",
@@ -23,6 +23,7 @@ pgdog-plugin = { path = "./pgdog-plugin", version = "0.5.0", default-features = 
 pgdog-config = { path = "./pgdog-config", version = "0.1.0" }
 pgdog-postgres-types = { path = "./pgdog-postgres-types"}
 pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "89937b1" }
+pgdog-util = { path = "./pgdog-util", version = "0.1.0" }
 bon = "3.9"
 derive_more = { version = "2", features = ["display", "from"] }
 schemars = { version = "1.2.1", features = ["uuid1", "chrono04", "indexmap2"] }

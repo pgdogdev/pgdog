@@ -6,7 +6,7 @@ use crate::{
 };
 
 use super::*;
-use std::{mem::take, ops::Deref};
+use std::{mem::take, ops::Deref, sync::Arc};
 
 /// Handle the complexity of managing parameters
 /// on the client and server.
@@ -27,6 +27,8 @@ pub(crate) struct ParameterStore {
     // inside a transaction. They are stored to support rolling back
     // this action inside a transaction.
     reset_params: Parameters,
+    // Parameters the server reported at login. Used when the client has no value.
+    server_reported: Arc<Parameters>,
     // Current transaction state.
     in_transaction: bool,
 }
@@ -39,6 +41,17 @@ impl ParameterStore {
             startup,
             ..Default::default()
         }
+    }
+
+    /// Attach the parameters the server reported at login.
+    pub(crate) fn with_server_reported(mut self, server_reported: Arc<Parameters>) -> Self {
+        self.server_reported = server_reported;
+        self
+    }
+
+    /// Value the client sees, with a fallback to the server value.
+    pub(crate) fn get_reported(&self, name: &str) -> Option<&ParameterValue> {
+        self.get(name).or_else(|| self.server_reported.get(name))
     }
 
     /// Restore the startup state, discarding all session and transaction changes.
@@ -99,8 +112,13 @@ impl ParameterStore {
                     self.reset_params.get(name).or(self.params.get(name))
                 } else {
                     self.transaction_params.get(name).or(self.params.get(name))
-                };
-                ParameterValidator::notify_client(name.as_str(), self.get(name.as_str()), restored)
+                }
+                .or_else(|| self.server_reported.get(name));
+                ParameterValidator::notify_client(
+                    name.as_str(),
+                    self.get_reported(name.as_str()),
+                    restored,
+                )
             })
     }
 

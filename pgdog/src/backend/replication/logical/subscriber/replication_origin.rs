@@ -173,7 +173,7 @@ impl ReplicationOrigin {
             .await
             .map_err(|error| self.map_error(error))?;
 
-        let progress = progress.first().ok_or(Error::MissingData)?;
+        let progress = progress.first().ok_or_else(|| Error::MissingData)?;
         Ok(progress.parse::<Lsn>()?)
     }
 

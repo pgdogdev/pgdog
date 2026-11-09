@@ -78,7 +78,7 @@ async fn resharding_connection_rejects_unprivileged_user() -> Result<(), Box<dyn
             .execute_checked(format!("GRANT CONNECT ON DATABASE pgdog TO {user}"))
             .await?;
         let cluster = resharding_test_cluster(&user);
-        let result = connect_primary(cluster.shards().first().ok_or(Error::MissingData)?)
+        let result = connect_primary(cluster.shards().first().ok_or_else(|| Error::MissingData)?)
             .await
             .map(drop);
         Ok::<_, Box<dyn std::error::Error>>(result)
@@ -117,7 +117,7 @@ async fn resharding_connection_accepts_privileged_user() -> Result<(), Box<dyn s
             .await?;
         let cluster = resharding_test_cluster(&user);
         let mut server =
-            connect_primary(cluster.shards().first().ok_or(Error::MissingData)?).await?;
+            connect_primary(cluster.shards().first().ok_or_else(|| Error::MissingData)?).await?;
         let users: Vec<String> = server.fetch_all("SELECT current_user").await?;
         let roles: Vec<String> = server.fetch_all("SHOW session_replication_role").await?;
         Ok::<_, Box<dyn std::error::Error>>((users, roles))

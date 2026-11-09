@@ -254,7 +254,7 @@ impl TimeFunctionType {
     ///
     /// TODO: Offsets like `+00:00` or `<-08>+08` are future work.
     fn session_time_zone(timezone: Option<&ParameterValue>) -> Result<Tz, Error> {
-        let timezone = timezone.ok_or(Error::UnknownTimeZone)?;
+        let timezone = timezone.ok_or_else(|| Error::UnknownTimeZone)?;
         timezone
             .as_str()
             .and_then(|value| value.parse::<Tz>().ok())

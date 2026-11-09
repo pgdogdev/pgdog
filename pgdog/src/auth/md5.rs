@@ -62,7 +62,11 @@ impl<'a> Client<'a> {
     /// attempted once per connection, so we expect
     /// this code to accept only one password.
     fn encrypted(&self) -> Result<String, Error> {
-        Ok(self.encrypt(self.passwords.first().ok_or(Error::ServerSideOnePassword)?))
+        Ok(self.encrypt(
+            self.passwords
+                .first()
+                .ok_or_else(|| Error::ServerSideOnePassword)?,
+        ))
     }
 
     pub(crate) fn response(&self) -> Result<Password, Error> {

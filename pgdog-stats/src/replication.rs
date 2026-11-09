@@ -62,10 +62,12 @@ impl FromStr for Lsn {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut parts = s.split("/");
-        let high = parts.next().ok_or(Error::LsnDecode)?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let high = parts.next().ok_or_else(|| Error::LsnDecode)?;
         let high = u32::from_str_radix(high, 16)?;
 
-        let low = parts.next().ok_or(Error::LsnDecode)?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let low = parts.next().ok_or_else(|| Error::LsnDecode)?;
         let low = u32::from_str_radix(low, 16)?;
 
         let lsn = (u64::from(high) << 32) | u64::from(low);
@@ -128,7 +130,9 @@ impl Default for LsnStats {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord,
+)]
 pub struct ReplicaLag {
     pub duration: Duration,
     pub bytes: i64,
@@ -146,6 +150,17 @@ impl ReplicaLag {
         } else {
             self.duration >= other.duration
         }
+    }
+}
+
+impl Display for ReplicaLag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}, {}",
+            pgdog_util::human_duration(self.duration),
+            pgdog_util::format_bytes(self.bytes as u64)
+        )
     }
 }
 
