@@ -1,3 +1,4 @@
+use pg_raw_parse::{Node, nodes};
 use pgdog_config::{DataType, Hasher, LookupResult};
 use pgdog_vector::Vector;
 
@@ -27,6 +28,14 @@ pub(crate) struct ShardedTable {
 }
 
 impl ShardedTable {
+    // Returns true if the INSERT sends the sharding key column (as opposed to relying on DEFAULT)
+    pub(crate) fn insert_sends_key_column(&self, insert: &nodes::InsertStmt) -> bool {
+        insert.cols().is_empty()
+            || insert.cols().into_iter().any(|column| {
+                matches!(column, Node::ResTarget(target) if target.name() == Some(self.column.as_str()))
+            })
+    }
+
     /// Whether `table` matches this table's configured name (or prefix).
     pub(crate) fn name_matches(&self, table: &str) -> bool {
         self.name.as_deref().is_some_and(|name| {
