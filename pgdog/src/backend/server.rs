@@ -132,7 +132,7 @@ pub(crate) struct Server {
     stream: Option<Stream>,
     key: BackendKeyData,
     id: BackendPid,
-    params: Parameters,
+    params: Arc<Parameters>,
     changed_params: Parameters,
     client_params: ParameterStore,
     stats: Stats,
@@ -200,9 +200,6 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
-                    if options.session_replication_role {
-                        server.set_session_replication_role().await?;
-                    }
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {
@@ -419,7 +416,7 @@ impl Server {
         // Generating a random one is fine, it just won't work when we try to
         // cancel a query with this secret.
         let key = key_data.unwrap_or_else(BackendKeyData::random_legacy);
-        let params: Parameters = params.into();
+        let params = Arc::new(Parameters::from(params));
 
         info!(
             "new server connection: auth={}, source={}, reason={} [{}] {}",
@@ -882,18 +879,8 @@ impl Server {
     }
 
     /// Server parameters.
-    pub(crate) fn params(&self) -> &Parameters {
+    pub(crate) fn params(&self) -> &Arc<Parameters> {
         &self.params
-    }
-
-    /// Manually set the session_replication_role setting via SET
-    /// since apparently we can't do this via startup parameters.
-    async fn set_session_replication_role(&mut self) -> Result<(), Error> {
-        self.execute_checked("SET session_replication_role TO replica")
-            .await?;
-        self.params.insert("session_replication_role", "replica");
-
-        Ok(())
     }
 
     /// Execute a batch of queries and return all results.
@@ -1424,7 +1411,7 @@ pub(crate) mod test {
                 stream: None,
                 key,
                 id,
-                params: Parameters::default(),
+                params: Arc::default(),
                 changed_params: Parameters::default(),
                 client_params: ParameterStore::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),

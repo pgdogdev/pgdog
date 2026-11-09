@@ -6,9 +6,11 @@ use tokio::io::AsyncWriteExt;
 
 use crate::net::{
     Authentication, BackendKeyData, BindComplete, CloseComplete, CommandComplete, DataRow, Error,
-    ErrorResponse, Field, FromBytes, NoData, ParameterDescription, ParameterStatus, ParseComplete,
-    Protocol, ProtocolMessage, ReadyForQuery, RowDescription, Startup, Stream, ToBytes,
+    ErrorResponse, Field, FromBytes, Message, NoData, ParameterDescription, ParameterStatus,
+    ParseComplete, Protocol, ProtocolMessage, ReadyForQuery, RowDescription, Startup, Stream,
+    ToBytes,
 };
+use crate::parameters::ADMIN_PARAMETERS;
 
 pub(crate) const HOST: &str = "fake-server";
 
@@ -149,8 +151,13 @@ async fn handshake(stream: &mut Stream) -> Result<(), Error> {
     }
 
     stream.send(&Authentication::Ok).await?;
-    for parameter in ParameterStatus::fake() {
-        stream.send(&parameter).await?;
+    for (name, value) in ADMIN_PARAMETERS.iter() {
+        stream
+            .send(&Message::new(ParameterStatus::encode_payload(
+                name.as_str(),
+                value,
+            )))
+            .await?;
     }
     stream.send(&BackendKeyData::random_legacy()).await?;
     stream.send_flush(&ReadyForQuery::idle()).await?;
