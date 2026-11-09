@@ -133,3 +133,19 @@ INSERT INTO subpackages (id, user_id) SELECT id, id FROM subusers ORDER BY id DE
 -- route insert: 0
 -- verify: SELECT * FROM subpackages ORDER BY id
 INSERT INTO subpackages (id, user_id, order_id) SELECT suborders.id, suborders.user_id, suborders.id FROM suborders JOIN subusers ON suborders.user_id = subusers.id
+
+-- case
+-- what: WITH a AS (..), b AS (SELECT .. FROM a) INSERT .. FROM a JOIN b .., one CTE over another
+-- route select: 0,1
+-- route select: any
+-- route insert: 0
+-- verify: SELECT * FROM subpackages ORDER BY id
+WITH a AS (SELECT id, user_id FROM suborders), b AS (SELECT id FROM a WHERE user_id = 1) INSERT INTO subpackages (id, user_id, order_id) SELECT a.id, a.user_id, a.id FROM a JOIN b ON a.id = b.id
+
+-- case
+-- what: WITH a AS (..), b AS (SELECT .. FROM a) INSERT .. FROM a JOIN b .., same CTE referenced more than once
+-- route select: 0,1
+-- route select: any
+-- route insert: 0
+-- verify: SELECT * FROM subpackages ORDER BY id
+WITH a AS (SELECT id, user_id FROM suborders) INSERT INTO subpackages (id, user_id, order_id) SELECT x.id, x.user_id, x.id FROM a x JOIN a y ON x.id = y.id
