@@ -132,7 +132,7 @@ pub(crate) struct Server {
     stream: Option<Stream>,
     key: BackendKeyData,
     id: BackendPid,
-    params: Parameters,
+    params: Arc<Parameters>,
     changed_params: Parameters,
     client_params: ParameterStore,
     stats: Stats,
@@ -200,9 +200,6 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
-                    if options.session_replication_role {
-                        server.set_session_replication_role().await?;
-                    }
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {
@@ -419,7 +416,7 @@ impl Server {
         // Generating a random one is fine, it just won't work when we try to
         // cancel a query with this secret.
         let key = key_data.unwrap_or_else(BackendKeyData::random_legacy);
-        let params: Parameters = params.into();
+        let params = Arc::new(Parameters::from(params));
 
         info!(
             "new server connection: auth={}, source={}, reason={} [{}] {}",
@@ -882,18 +879,8 @@ impl Server {
     }
 
     /// Server parameters.
-    pub(crate) fn params(&self) -> &Parameters {
+    pub(crate) fn params(&self) -> &Arc<Parameters> {
         &self.params
-    }
-
-    /// Manually set the session_replication_role setting via SET
-    /// since apparently we can't do this via startup parameters.
-    async fn set_session_replication_role(&mut self) -> Result<(), Error> {
-        self.execute_checked("SET session_replication_role TO replica")
-            .await?;
-        self.params.insert("session_replication_role", "replica");
-
-        Ok(())
     }
 
     /// Execute a batch of queries and return all results.
@@ -1424,7 +1411,7 @@ pub(crate) mod test {
                 stream: None,
                 key,
                 id,
-                params: Parameters::default(),
+                params: Arc::default(),
                 changed_params: Parameters::default(),
                 client_params: ParameterStore::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
@@ -1784,7 +1771,7 @@ pub(crate) mod test {
 
             assert!(server.done());
             assert_eq!(
-                server.stats().total().idle_in_transaction_time,
+                server.stats().last_checkout().idle_in_transaction_time,
                 Duration::ZERO
             );
         }
@@ -3073,17 +3060,13 @@ pub(crate) mod test {
 
         server.execute("SELECT 1").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
-            Duration::ZERO,
-        );
-        assert_eq!(
             server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
         server.execute("BEGIN").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
@@ -3092,7 +3075,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 2").await.unwrap();
 
-        let idle_time = server.stats().total().idle_in_transaction_time;
+        let idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             idle_time >= Duration::from_millis(50),
             "Expected idle time >= 50ms, got {:?}",
@@ -3108,7 +3091,7 @@ pub(crate) mod test {
 
         server.execute("COMMIT").await.unwrap();
 
-        let final_idle_time = server.stats().total().idle_in_transaction_time;
+        let final_idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             final_idle_time >= Duration::from_millis(150),
             "Expected final idle time >= 150ms, got {:?}",
@@ -3122,7 +3105,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 3").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             final_idle_time,
         );
     }
@@ -3140,7 +3123,6 @@ pub(crate) mod test {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(server.read().await.is_err());
-        assert_eq!(server.stats().total().idle_xact_timeouts, 1);
         assert_eq!(server.stats().last_checkout().idle_xact_timeouts, 1);
     }
 

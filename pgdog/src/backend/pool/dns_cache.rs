@@ -120,7 +120,7 @@ impl DnsCache {
         let ip = response
             .iter()
             .next()
-            .ok_or(Error::DnsResolutionFailed(hostname.to_string()))?;
+            .ok_or_else(|| Error::DnsResolutionFailed(hostname.to_string()))?;
 
         self.cache_ip(hostname, ip);
 

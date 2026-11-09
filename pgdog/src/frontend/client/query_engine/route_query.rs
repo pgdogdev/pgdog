@@ -167,6 +167,7 @@ impl QueryEngine {
                     Ok(()) => {}
                     Err(
                         err @ (RewriteError::UnsupportedHaving(_)
+                        | RewriteError::UnsupportedGroupBy(_)
                         | RewriteError::OrderByExpressionUnsupported),
                     ) => {
                         if let Some(transaction) = context.transaction.as_mut() {

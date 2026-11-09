@@ -410,7 +410,7 @@ impl Inner {
             // Prevents deadlocks.
             if moved.id() != self.id {
                 server.stats_mut().set_pool_id(moved.id());
-                server.stats().update();
+                server.stats_mut().update();
                 server.replace_oids(&moved.inner().oids);
                 moved.lock().maybe_check_in(server, now, stats, true)?;
                 return Ok(result);

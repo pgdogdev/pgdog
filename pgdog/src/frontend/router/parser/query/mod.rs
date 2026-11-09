@@ -561,7 +561,11 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !context.router_context.cached {
                 Cache::get().record_normalized(
-                    statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
+                    statement
+                        .ast
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| Error::EmptyQuery)?,
                     command.route(),
                 )?;
             }

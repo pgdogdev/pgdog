@@ -413,8 +413,11 @@ impl StreamSubscriber {
                 schema: r.namespace.clone(),
                 name: r.name.clone(),
             })
-            .ok_or(Error::MissingKey)?;
-        self.tables.get(&key).cloned().ok_or(Error::MissingKey)
+            .ok_or_else(|| Error::MissingKey)?;
+        self.tables
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| Error::MissingKey)
     }
 
     /// Fast-path UPDATE (DEFAULT/INDEX): no unchanged-TOAST columns — bind every
@@ -553,7 +556,7 @@ impl StreamSubscriber {
 
         self.statements
             .get_mut(&oid)
-            .ok_or(Error::MissingKey)?
+            .ok_or_else(|| Error::MissingKey)?
             .update_shapes
             .insert(present.clone(), stmt.clone());
         Ok(stmt)
@@ -576,7 +579,7 @@ impl StreamSubscriber {
         };
 
         let (update_parse, delete_parse, insert_parse) = {
-            let stmts = self.statements.get(&oid).ok_or(Error::MissingKey)?;
+            let stmts = self.statements.get(&oid).ok_or_else(|| Error::MissingKey)?;
             (
                 stmts.update.parse().clone(),
                 stmts.delete.parse().clone(),
@@ -722,7 +725,7 @@ impl StreamSubscriber {
             // Partition child tables target the parent on the destination shard,
             // we don't need to prepare the same statement per child.
             if let Some(oid) = self.keys.get(&dest_key) {
-                let statements = self.statements.get(oid).ok_or(Error::MissingKey)?;
+                let statements = self.statements.get(oid).ok_or_else(|| Error::MissingKey)?;
                 self.statements.insert(relation.oid, statements.clone());
 
                 debug!("queries for table {} already prepared", dest_key);

@@ -41,9 +41,9 @@ impl OffsetPlan {
                     let idx = self.limit_param - 1;
                     limit_val = Some(
                         bind.parameter(idx)?
-                            .ok_or(Error::MissingParameter(self.limit_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.limit_param as u16))?
                             .bigint()
-                            .ok_or(Error::MissingParameter(self.limit_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.limit_param as u16))?
                             as usize,
                     );
                 }
@@ -51,9 +51,9 @@ impl OffsetPlan {
                     let idx = self.offset_param - 1;
                     offset_val = Some(
                         bind.parameter(idx)?
-                            .ok_or(Error::MissingParameter(self.offset_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.offset_param as u16))?
                             .bigint()
-                            .ok_or(Error::MissingParameter(self.offset_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.offset_param as u16))?
                             as usize,
                     );
                 }
@@ -91,8 +91,8 @@ impl OffsetPlan {
         );
 
         let node = &mut request.ast;
-        let node = node.as_mut().ok_or(Error::MissingAst)?;
-        let node = node.ast.first().ok_or(Error::MissingAst)?;
+        let node = node.as_mut().ok_or_else(|| Error::MissingAst)?;
+        let node = node.ast.first().ok_or_else(|| Error::MissingAst)?;
 
         let pg_raw_parse::Node::ExecuteStmt(execute) = node.stmt() else {
             unreachable!("The query must be ExecuteStmt to have reached here.");

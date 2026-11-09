@@ -27,6 +27,7 @@ pub(crate) struct ClusterConnection {
     cluster: Option<Cluster>,
     // Cancelled when an admin terminates the cluster (`FORCE_RELOAD`).
     query_cancellation: CancellationToken,
+    reloads: usize,
     // Traffic mirrors.
     mirrors: Vec<MirrorHandler>,
 }
@@ -58,6 +59,10 @@ impl ClusterConnection {
         self.query_cancellation.clone()
     }
 
+    pub(super) fn reloads(&self) -> usize {
+        self.reloads
+    }
+
     /// Perform an atomic and safe reload of the cluster config. This is needed
     /// because the global which holds the clusters is not atomically updated.
     pub(super) async fn safe_reload(&mut self) -> Result<(), Error> {
@@ -75,6 +80,7 @@ impl ClusterConnection {
         let cluster = databases::databases().cluster(self.identity())?;
         self.cluster = Some(cluster);
         self.query_cancellation = self.cluster()?.get_cancellation_token().child_token();
+        self.reloads += 1;
 
         self.init_mirrors()?;
 

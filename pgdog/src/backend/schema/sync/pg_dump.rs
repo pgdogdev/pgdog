@@ -44,8 +44,11 @@ fn validate_constraint(
     // TODO: multiple times we create schema.table identifier,
     // make it reusable
     let schema = crate::util::escape_identifier(schema_name(relation));
-    let table =
-        crate::util::escape_identifier(relation.relname().ok_or(SchemaSyncError::MissingEntity)?);
+    let table = crate::util::escape_identifier(
+        relation
+            .relname()
+            .ok_or_else(|| SchemaSyncError::MissingEntity)?,
+    );
     let constraint = crate::util::escape_identifier(constraint);
     let only = if relation.inh { "" } else { "ONLY " };
 
@@ -169,10 +172,10 @@ impl PgDump {
             .source
             .shards()
             .first()
-            .ok_or(SchemaSyncError::NoDatabases)?
+            .ok_or_else(|| SchemaSyncError::NoDatabases)?
             .pools()
             .first()
-            .ok_or(SchemaSyncError::NoDatabases)?
+            .ok_or_else(|| SchemaSyncError::NoDatabases)?
             .addr()
             .clone();
 
@@ -218,9 +221,9 @@ impl PgDump {
         let mut command = build_pg_dump_command(
             pg_dump_path,
             &addr,
-            auth_secret.first().ok_or(SchemaSyncError::PgDump(
-                "server has no configured passwords".into(),
-            ))?,
+            auth_secret.first().ok_or_else(|| {
+                SchemaSyncError::PgDump("server has no configured passwords".into())
+            })?,
         );
         let output = command.output().await?;
 
@@ -611,7 +614,7 @@ impl PgDumpOutput {
             let original = self
                 .original
                 .get(stmt.stmt_location as usize..(stmt.stmt_location + stmt.stmt_len) as usize)
-                .ok_or(SchemaSyncError::StmtOutOfBounds)?;
+                .ok_or_else(|| SchemaSyncError::StmtOutOfBounds)?;
 
             match stmt.stmt() {
                 Node::CreateStmt(create_stmt) => {
@@ -743,12 +746,14 @@ impl PgDumpOutput {
                                                     }
                                                 }
                                                 (SyncState::PostDataValidation, true) => {
-                                                    let relation = stmt
-                                                        .relation()
-                                                        .ok_or(SchemaSyncError::MissingEntity)?;
-                                                    let constraint = cons
-                                                        .conname()
-                                                        .ok_or(SchemaSyncError::MissingEntity)?;
+                                                    let relation =
+                                                        stmt.relation().ok_or_else(|| {
+                                                            SchemaSyncError::MissingEntity
+                                                        })?;
+                                                    let constraint =
+                                                        cons.conname().ok_or_else(|| {
+                                                            SchemaSyncError::MissingEntity
+                                                        })?;
                                                     validate_constraint(relation, constraint)?
                                                 }
                                                 _ => continue,
@@ -864,12 +869,12 @@ impl PgDumpOutput {
                         let sequence = stmt
                             .sequence()
                             .map(Table::from)
-                            .ok_or(SchemaSyncError::MissingEntity)?;
+                            .ok_or_else(|| SchemaSyncError::MissingEntity)?;
                         let sequence = Sequence::from(sequence);
                         let column = stmt
                             .options()
                             .first()
-                            .ok_or(SchemaSyncError::MissingEntity)?;
+                            .ok_or_else(|| SchemaSyncError::MissingEntity)?;
                         let column =
                             Column::try_from(column).map_err(|_| SchemaSyncError::MissingEntity)?;
 

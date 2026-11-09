@@ -118,6 +118,10 @@ impl QueryEngine {
         self.backend.cancellation_token()
     }
 
+    pub(crate) fn cluster_reloads(&self) -> usize {
+        self.backend.cluster_reloads()
+    }
+
     /// Wait for an async message from the backend.
     pub(crate) async fn read_backend(&mut self) -> Result<Message, Error> {
         Ok(self.backend.read().await?)

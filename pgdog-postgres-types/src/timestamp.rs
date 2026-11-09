@@ -130,16 +130,18 @@ impl Timestamp {
             Some(false) => Ok(i64::MIN),
             None => {
                 // Create NaiveDateTime from components
+                #[allow(clippy::unnecessary_lazy_evaluations)]
                 let date =
                     NaiveDate::from_ymd_opt(self.year as i32, self.month as u32, self.day as u32)
-                        .ok_or(Error::InvalidTimestamp)?;
+                        .ok_or_else(|| Error::InvalidTimestamp)?;
+                #[allow(clippy::unnecessary_lazy_evaluations)]
                 let time = NaiveTime::from_hms_micro_opt(
                     self.hour as u32,
                     self.minute as u32,
                     self.second as u32,
                     self.micros as u32,
                 )
-                .ok_or(Error::InvalidTimestamp)?;
+                .ok_or_else(|| Error::InvalidTimestamp)?;
                 let dt = NaiveDateTime::new(date, time);
 
                 // Get Unix epoch microseconds and subtract PostgreSQL epoch offset
@@ -161,8 +163,9 @@ impl Timestamp {
         let unix_micros = micros + POSTGRES_EPOCH_MICROS;
 
         // Create DateTime from Unix microseconds
+        #[allow(clippy::unnecessary_lazy_evaluations)]
         let dt = chrono::DateTime::from_timestamp_micros(unix_micros)
-            .ok_or(Error::InvalidTimestamp)?
+            .ok_or_else(|| Error::InvalidTimestamp)?
             .naive_utc();
 
         // Extract components
@@ -220,7 +223,8 @@ impl FromDataType for Timestamp {
                         if let Some(micros) = micros {
                             let neg = micros.find('-').is_some();
                             let mut parts = micros.split(&['-', '+']);
-                            let fraction = parts.next().ok_or(Error::InvalidTimestamp)?;
+                            #[allow(clippy::unnecessary_lazy_evaluations)]
+                            let fraction = parts.next().ok_or_else(|| Error::InvalidTimestamp)?;
                             if fraction.is_empty() || fraction.len() > 6 {
                                 return Err(Error::InvalidTimestamp);
                             }

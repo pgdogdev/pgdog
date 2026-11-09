@@ -3276,6 +3276,7 @@ dependencies = [
  "pgdog-plugin",
  "pgdog-postgres-types",
  "pgdog-stats",
+ "pgdog-util",
  "pgdog-vector",
  "pin-project",
  "rand 0.9.4",
@@ -3428,11 +3429,16 @@ dependencies = [
  "indexmap 2.14.0",
  "pgdog-config",
  "pgdog-postgres-types",
+ "pgdog-util",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "serde_with",
 ]
+
+[[package]]
+name = "pgdog-util"
+version = "0.1.0"
 
 [[package]]
 name = "pgdog-vector"

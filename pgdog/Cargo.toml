@@ -38,6 +38,7 @@ aws-lc-rs = "1"
 arc-swap = "1"
 toml = "0.8"
 pgdog-plugin.workspace = true
+pgdog-util.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
 itoa = "1"

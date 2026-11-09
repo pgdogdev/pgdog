@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "core::option::Option::ok_or", reason = "Use ok_or_else instead of ok_or to ensure that we only build the error when the Option is None." },
+]
