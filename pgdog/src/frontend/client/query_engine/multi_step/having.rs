@@ -180,9 +180,9 @@ async fn filter(
     let mut data_types = Vec::with_capacity(inputs.columns().len());
     let mut bind = Bind::default();
     for column in inputs.columns() {
-        let array_oid = column.array_oid().ok_or(RewriteError::UnsupportedHaving(
-            "operands must have common built-in types",
-        ))?;
+        let array_oid = column.array_oid().ok_or_else(|| {
+            RewriteError::UnsupportedHaving("operands must have common built-in types")
+        })?;
         data_types.push(array_oid);
         let (array, format) = column.array();
         bind.push_param(array, format);
@@ -190,7 +190,7 @@ async fn filter(
 
     let shard = backend
         .any_connected_shard()
-        .ok_or(BackendError::NotConnected)?;
+        .ok_or_else(|| BackendError::NotConnected)?;
     let mut request = ClientRequest::from(vec![
         ProtocolMessage::Parse(
             Parse::new_anonymous(having.filter_sql()).with_data_types(&data_types),
