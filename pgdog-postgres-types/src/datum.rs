@@ -370,6 +370,9 @@ impl DataType {
             DataType::Array(oid) => Some(*oid),
             DataType::Other(oid) => Some(*oid),
             DataType::Vector => None,
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+            DataType::Cidr => todo!(),
         }
     }
 
