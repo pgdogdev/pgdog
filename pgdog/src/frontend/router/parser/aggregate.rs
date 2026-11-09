@@ -123,24 +123,11 @@ impl AggregateFunction {
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
     pub(crate) fn parse(stmt: &nodes::SelectStmt, schema: &Schema) -> Self {
+        // Cross-shard queries add the skipped keys as hidden columns.
         let group_by = stmt
             .group_clause()
             .iter()
-            .filter_map(|node| match node {
-                // We use 0-indexed arrays, Postgres uses 1-indexed.
-                Node::A_Const(c) => c
-                    .val()
-                    .and_then(|v| v.numeric_value::<i32>())
-                    .and_then(|x| usize::try_from(x).ok()?.checked_sub(1)),
-                Node::ColumnRef(c) => index_of_column(
-                    stmt,
-                    &c.fields()
-                        .iter()
-                        .filter_map(Node::as_str)
-                        .collect::<Vec<_>>(),
-                ),
-                _ => None, // FIXME: We should error instead of silently skipping
-            })
+            .filter_map(|node| Self::group_by_column(stmt, node))
             .collect();
 
         let targets = stmt
@@ -167,6 +154,31 @@ impl Aggregate {
             })
             .collect();
         Self { group_by, targets }
+    }
+
+    /// Position of a GROUP BY item in the SELECT list, if it's an ordinal
+    /// or a selected column.
+    pub(crate) fn group_by_column(stmt: &nodes::SelectStmt, node: Node<'_>) -> Option<usize> {
+        match node {
+            // We use 0-indexed arrays, Postgres uses 1-indexed.
+            Node::A_Const(c) => c
+                .val()
+                .and_then(|v| v.numeric_value::<i32>())
+                .and_then(|x| usize::try_from(x).ok()?.checked_sub(1)),
+            Node::ColumnRef(c) => index_of_column(
+                stmt,
+                &c.fields()
+                    .iter()
+                    .filter_map(Node::as_str)
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_group_by(mut self, group_by: Vec<usize>) -> Self {
+        self.group_by = group_by;
+        self
     }
 
     pub(crate) fn targets(&self) -> &[AggregateTarget] {

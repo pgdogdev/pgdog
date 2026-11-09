@@ -4,8 +4,11 @@ use crate::{
     backend::pool::connection::aggregate::Error as AggregateError,
     frontend::router::parser::{
         Aggregate, DistinctBy, HavingRewritePlan, OrderBy, Shard, ShardWithPriority,
-        rewrite::statement::projection::{
-            HavingRewriteResult, OrderByHelper, OrderBySource, ProjectionRewritePlan,
+        rewrite::statement::{
+            group_by::GroupByRewrite,
+            projection::{
+                HavingRewriteResult, OrderByHelper, OrderBySource, ProjectionRewritePlan,
+            },
         },
     },
     net::{BindComplete, DataRow, Field, Format, NoData},
@@ -252,6 +255,63 @@ fn test_having_evaluation_error_clears_buffer() {
         "{error}"
     );
     assert!(!multi_shard.buffer.can_take());
+}
+
+#[test]
+fn test_hidden_group_by_key_is_merged_then_dropped() {
+    // SELECT category FROM items GROUP BY category, region
+    let plan = ProjectionRewritePlan {
+        group_by: Some(Box::new(GroupByRewrite::new(
+            vec!["__pgdog_group_0".into()],
+            Aggregate::default().with_group_by(vec![0, 1]),
+        ))),
+        ..Default::default()
+    };
+    let mut route = Route::select(
+        ShardWithPriority::new_default_unset(Shard::All),
+        vec![],
+        Default::default(),
+        Default::default(),
+        None,
+    );
+    route.projection_rewrite_plan = Some(std::sync::Arc::new(plan));
+    let mut multi_shard = MultiShard::new(2, &route);
+
+    let row_description =
+        RowDescription::new(&[Field::text("category"), Field::text("__pgdog_group_0")]);
+    multi_shard
+        .handle_server_message(row_description.message())
+        .unwrap();
+    let client_description = multi_shard
+        .handle_server_message(row_description.message())
+        .unwrap()
+        .unwrap();
+    let client_description = RowDescription::from_bytes(client_description.to_bytes()).unwrap();
+    assert_eq!(client_description.fields.len(), 1);
+
+    for (category, region) in [("drinks", "eu"), ("drinks", "us"), ("drinks", "eu")] {
+        let mut row = DataRow::new();
+        row.add(category).add(region);
+        multi_shard.handle_server_message(row.message()).unwrap();
+    }
+    for _ in 0..2 {
+        multi_shard
+            .handle_server_message(CommandComplete::from_str("SELECT 2").message())
+            .unwrap();
+    }
+
+    // One row per (category, region), like Postgres.
+    for _ in 0..2 {
+        let message = multi_shard.get_server_message().unwrap();
+        let row = DataRow::from_bytes(message.to_bytes()).unwrap();
+        assert_eq!(row.len(), 1);
+        assert_eq!(row.get::<String>(0, Format::Text).unwrap(), "drinks");
+    }
+    let message = multi_shard.get_server_message().unwrap();
+    assert_eq!(
+        message.to_bytes(),
+        CommandComplete::from_str("SELECT 2").message().to_bytes()
+    );
 }
 
 #[test]

@@ -181,9 +181,9 @@ async fn filter(
     let mut data_types = Vec::with_capacity(inputs.columns().len() + having.params().len());
     let mut bind = Bind::default();
     for column in inputs.columns() {
-        let array_oid = column.array_oid().ok_or(RewriteError::UnsupportedHaving(
-            "operands must have common built-in types",
-        ))?;
+        let array_oid = column.array_oid().ok_or_else(|| {
+            RewriteError::UnsupportedHaving("operands must have common built-in types")
+        })?;
         data_types.push(array_oid);
         let (array, format) = column.array();
         bind.push_param(array, format);
@@ -197,12 +197,12 @@ async fn filter(
                 ProtocolMessage::Bind(bind) => Some(bind),
                 _ => None,
             })
-            .ok_or(RewriteError::MissingParameter(1))?;
+            .ok_or_else(|| RewriteError::MissingParameter(1))?;
         let client_types = client_param_types(client_request, client_bind);
         for &param in having.params() {
             let value = client_bind
                 .parameter(param)?
-                .ok_or(RewriteError::MissingParameter(param as u16 + 1))?;
+                .ok_or_else(|| RewriteError::MissingParameter(param as u16 + 1))?;
             data_types.push(client_types.get(param).copied().unwrap_or_default());
             bind.push_param(value.parameter().clone(), value.format());
         }
@@ -210,7 +210,7 @@ async fn filter(
 
     let shard = backend
         .any_connected_shard()
-        .ok_or(BackendError::NotConnected)?;
+        .ok_or_else(|| BackendError::NotConnected)?;
     let mut request = ClientRequest::from(vec![
         ProtocolMessage::Parse(
             Parse::new_anonymous(having.filter_sql()).with_data_types(&data_types),

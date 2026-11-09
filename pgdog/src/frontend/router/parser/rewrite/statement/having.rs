@@ -1,7 +1,5 @@
 //! Route-dependent rewrite for cross-shard `HAVING`.
 
-use std::collections::HashSet;
-
 use itertools::Itertools;
 use pg_raw_parse::{
     ConstValue, Node, NodeMut, make, nodes,
@@ -13,7 +11,7 @@ use crate::frontend::router::parser::{AggregateFunction, HavingRewritePlan};
 
 use super::{
     Error,
-    projection::{column_name, is_star, target_output_name},
+    projection::{HiddenAliases, column_name, is_star},
 };
 
 const ALIAS_PREFIX: &str = "__pgdog_having_";
@@ -64,14 +62,9 @@ pub(super) fn rewrite_select<'a>(
 
     let mut operands = Operands {
         schema,
-        aliases: select
-            .target_list()
-            .iter()
-            .filter_map(|target| target_output_name(target).map(str::to_owned))
-            .collect(),
+        aliases: HiddenAliases::new(ALIAS_PREFIX, select.target_list()),
         projected: Vec::new(),
         params: Vec::new(),
-        next_alias: 0,
         error: None,
     };
 
@@ -138,7 +131,7 @@ pub(super) fn rewrite_select<'a>(
                 ));
             }
             Node::ColumnRef(_) => {
-                let alias = operands.next_alias();
+                let alias = operands.aliases.next_alias();
                 operands.projected.push((alias, group_source));
             }
             Node::A_Const(_) => {}
@@ -199,12 +192,11 @@ fn groups_by_output_alias(
 
 struct Operands<'a, 's> {
     schema: &'s Schema,
-    aliases: HashSet<String>,
+    aliases: HiddenAliases,
     /// Hidden columns added to the shard query.
     projected: Vec<(String, make::Unique<'a, Node<'a>>)>,
     /// 0-based client parameters in the filter, in first-use order.
     params: Vec<usize>,
-    next_alias: usize,
     error: Option<Error>,
 }
 
@@ -252,7 +244,7 @@ impl<'a> Operands<'a, '_> {
             _ => return Some(node),
         }
 
-        let alias = self.next_alias();
+        let alias = self.aliases.next_alias();
         self.projected
             .push((alias.clone(), mem.make_unique(node.as_ref())));
         node.replace(
@@ -263,16 +255,6 @@ impl<'a> Operands<'a, '_> {
                 .uncast(),
         );
         None
-    }
-
-    fn next_alias(&mut self) -> String {
-        loop {
-            let alias = format!("{ALIAS_PREFIX}{}", self.next_alias);
-            self.next_alias += 1;
-            if self.aliases.insert(alias.clone()) {
-                return alias;
-            }
-        }
     }
 }
 
