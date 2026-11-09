@@ -84,16 +84,17 @@ impl Array {
         let mut result = String::new();
         if self.dim.lower_bound != 1 {
             use std::fmt::Write;
+            #[allow(clippy::unnecessary_lazy_evaluations)]
             let ub = if self.dim.size == 0 {
                 self.dim
                     .lower_bound
                     .checked_sub(1)
-                    .ok_or(Error::UnexpectedPayload)?
+                    .ok_or_else(|| Error::UnexpectedPayload)?
             } else {
                 self.dim
                     .lower_bound
                     .checked_add(self.dim.size - 1)
-                    .ok_or(Error::UnexpectedPayload)?
+                    .ok_or_else(|| Error::UnexpectedPayload)?
             };
             write!(result, "[{}:{}]=", self.dim.lower_bound, ub).unwrap();
         }
@@ -195,10 +196,11 @@ fn decode_text(input: &str, element_oid: i32) -> Result<Array, Error> {
         let ub = ub_str
             .parse::<i32>()
             .map_err(|_| Error::UnexpectedPayload)?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
         let expected = ub
             .checked_sub(lb)
             .and_then(|d| d.checked_add(1))
-            .ok_or(Error::UnexpectedPayload)?;
+            .ok_or_else(|| Error::UnexpectedPayload)?;
         (lb, Some(expected))
     } else {
         (1, None)
@@ -377,9 +379,10 @@ fn decode_binary(bytes: &[u8], expected_element_oid: i32) -> Result<Array, Error
         }
         let lower_bound = bytes.get_i32();
         if size > 0 {
+            #[allow(clippy::unnecessary_lazy_evaluations)]
             lower_bound
                 .checked_add(size - 1)
-                .ok_or(Error::UnexpectedPayload)?;
+                .ok_or_else(|| Error::UnexpectedPayload)?;
         }
         Dimension { size, lower_bound }
     };

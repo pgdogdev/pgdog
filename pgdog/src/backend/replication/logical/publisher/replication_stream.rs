@@ -378,7 +378,10 @@ mod tests {
                 ))
                 .await?;
             let mut tables = Table::load(&self.publication, &mut self.server).await?;
-            let table = tables.first_mut().ok_or("publication has no table")?;
+            #[allow(clippy::unnecessary_lazy_evaluations)]
+            let table = tables
+                .first_mut()
+                .ok_or_else(|| "publication has no table")?;
             table.table.parent_name = self.destination_table.clone();
             table.table.parent_schema = table.table.schema.clone();
             let slot = ReplicationSlot::new_permanent(

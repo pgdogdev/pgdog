@@ -46,7 +46,7 @@ pub(crate) struct InnerSync {
     pub(super) id: u64,
     pub(super) config: Config,
     pub(super) health: TargetHealth,
-    pub(super) params: OnceCell<Parameters>,
+    pub(super) params: OnceCell<Arc<Parameters>>,
     pub(super) lsn_stats: RwLock<LsnStats>,
     pub(super) lsn_role_change: Notify,
     pub(super) oids: Arc<Oids>,
@@ -199,25 +199,21 @@ impl Pool {
 
     /// Server parameters
     pub(crate) fn cached_params(&self) -> Option<&Parameters> {
-        self.inner.params.get()
+        self.inner.params.get().map(Arc::as_ref)
     }
 
     /// Record the server parameters of a newly created connection
-    pub(super) fn cache_params(&self, params: &Parameters) {
-        if self.inner.params.get().is_none() {
-            let _ = self.inner.params.set(params.clone());
-        }
+    pub(super) fn cache_params(&self, params: &Arc<Parameters>) {
+        self.inner.params.get_or_init(|| params.clone());
     }
 
     /// Get server parameters, fetch them if necessary.
-    pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+    pub(crate) async fn params(&self, request: &Request) -> Result<&Arc<Parameters>, Error> {
         if let Some(params) = self.inner.params.get() {
-            Ok(params)
-        } else {
-            let conn = self.get(request).await?;
-            let params = conn.params().clone();
-            Ok(self.inner.params.get_or_init(|| params))
+            return Ok(params);
         }
+        let conn = self.get(request).await?;
+        Ok(self.inner.params.get_or_init(|| conn.params().clone()))
     }
 
     /// Perform a health check on the connection if one is needed.

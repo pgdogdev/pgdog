@@ -140,7 +140,7 @@ impl FromBytes for BackendKeyData {
         let secret_len = usize::try_from(len)
             .ok()
             .and_then(|len| len.checked_sub(8))
-            .ok_or(Error::UnexpectedPayload)?;
+            .ok_or_else(|| Error::UnexpectedPayload)?;
         if secret_len == 0 || secret_len > MAX_SECRET_LEN || bytes.remaining() != 4 + secret_len {
             return Err(Error::UnexpectedPayload);
         }

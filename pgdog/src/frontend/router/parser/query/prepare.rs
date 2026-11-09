@@ -57,7 +57,7 @@ impl QueryParser {
         let prepare = PreparedStatements::global()
             .read()
             .prepare(stmt.name().expect("execute to have a name"))
-            .ok_or(Error::ExecuteRequiresFull)?;
+            .ok_or_else(|| Error::ExecuteRequiresFull)?;
 
         // Make sure we never store unique statement names
         // in the cache!

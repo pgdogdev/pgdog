@@ -150,7 +150,7 @@ impl ReshardingState {
             .lock()
             .tables
             .remove(&shard)
-            .ok_or(Error::NoReplicationTables(shard))
+            .ok_or_else(|| Error::NoReplicationTables(shard))
     }
 
     pub(crate) fn set_tables(&self, tables: HashMap<usize, Vec<Table>>) {
@@ -191,7 +191,7 @@ impl ReshardingState {
             .slots
             .get(&shard)
             .cloned()
-            .ok_or(Error::NoReplicationSlot(shard))
+            .ok_or_else(|| Error::NoReplicationSlot(shard))
     }
 
     pub(crate) fn origins(&self, shard: usize) -> Result<Vec<ReplicationOrigin>, Error> {
@@ -200,7 +200,7 @@ impl ReshardingState {
             .origins
             .get(&shard)
             .cloned()
-            .ok_or(Error::NoReplicationOrigins(shard))
+            .ok_or_else(|| Error::NoReplicationOrigins(shard))
     }
 
     /// Create permanent slots for each shard of the source.

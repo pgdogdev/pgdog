@@ -288,6 +288,15 @@ fn build(
         None
     } else {
         let aggregate = Aggregate::parse(select, schema);
+        // Without aggregate functions, groups are merged on the resolved keys
+        // alone, so a skipped key would fold distinct groups into one row.
+        if aggregate.targets().is_empty()
+            && aggregate.group_by().len() != select.group_clause().len()
+        {
+            return Err(Error::UnsupportedGroupBy(
+                "every GROUP BY expression must be a selected column or ordinal",
+            ));
+        }
         if aggregate.is_empty() && select.sort_clause().is_empty() && !rewrite_offset {
             return Ok(None);
         }
@@ -314,7 +323,7 @@ fn build(
         if has_having {
             let having = having::rewrite_select(&mut select.as_mut(), mem, schema)?;
             let rewritten_aggregate = Aggregate::parse(&select, schema);
-            if rewritten_aggregate.is_empty() {
+            if rewritten_aggregate.targets().is_empty() {
                 return Err(Error::UnsupportedHaving(
                     "at least one aggregate function is required",
                 ));
@@ -397,6 +406,28 @@ mod tests {
             rewrite_result,
             Err(Error::OrderByExpressionUnsupported)
         ));
+    }
+
+    #[test]
+    fn group_by_without_aggregate_requires_resolved_keys() {
+        for sql in [
+            "SELECT 1 FROM items GROUP BY category",
+            "SELECT category FROM items GROUP BY category, region",
+            "SELECT lower(category) FROM items GROUP BY lower(category)",
+            "SELECT category AS c FROM items GROUP BY c",
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let error = build(&ast, &Schema::default(), false).unwrap_err();
+            assert!(matches!(error, Error::UnsupportedGroupBy(_)), "{sql}");
+        }
+
+        for sql in [
+            "SELECT category FROM items GROUP BY category",
+            "SELECT category, region FROM items GROUP BY 1, 2",
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            assert!(build(&ast, &Schema::default(), false).is_ok(), "{sql}");
+        }
     }
 
     #[test]

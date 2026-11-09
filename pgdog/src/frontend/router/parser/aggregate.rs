@@ -201,12 +201,10 @@ impl Aggregate {
         }
     }
 
+    /// Nothing to merge across shards. GROUP BY without aggregate
+    /// functions still has to merge the groups each shard returns.
     pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.targets.len()
+        self.targets.is_empty() && self.group_by.is_empty()
     }
 }
 
@@ -343,6 +341,16 @@ mod test {
         let target = &aggr.targets()[0];
         assert!(matches!(target.function(), AggregateFunction::Sum));
         assert_eq!(target.column(), 2);
+    }
+
+    #[test]
+    fn test_group_by_without_aggregate_is_not_empty() {
+        let aggr = parse("SELECT category FROM menu GROUP BY category");
+        assert!(aggr.targets().is_empty());
+        assert_eq!(aggr.group_by(), &[0]);
+        assert!(!aggr.is_empty());
+
+        assert!(parse("SELECT category FROM menu").is_empty());
     }
 
     #[test]
