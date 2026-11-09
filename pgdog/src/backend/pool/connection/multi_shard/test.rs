@@ -144,10 +144,10 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
 fn test_hidden_group_by_key_is_merged_then_dropped() {
     // SELECT category FROM items GROUP BY category, region
     let plan = ProjectionRewritePlan {
-        group_by: Some(GroupByRewrite::new(
+        group_by: Some(Box::new(GroupByRewrite::new(
             vec!["__pgdog_group_0".into()],
             Aggregate::default().with_group_by(vec![0, 1]),
-        )),
+        ))),
         ..Default::default()
     };
     let mut route = Route::select(

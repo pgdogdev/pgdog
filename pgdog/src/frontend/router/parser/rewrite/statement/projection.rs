@@ -62,7 +62,7 @@ pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
     pub(crate) having: Option<Box<HavingRewriteResult>>,
-    pub(crate) group_by: Option<GroupByRewrite>,
+    pub(crate) group_by: Option<Box<GroupByRewrite>>,
 }
 
 /// The filter and aggregate metadata produced by rewriting a HAVING query.
@@ -104,7 +104,7 @@ impl ProjectionRewritePlan {
         self.having
             .as_deref()
             .map(HavingRewriteResult::aggregate)
-            .or_else(|| self.group_by.as_ref().map(GroupByRewrite::aggregate))
+            .or_else(|| self.group_by.as_deref().map(GroupByRewrite::aggregate))
     }
 
     pub(crate) fn drop_columns(&self, row_description: &RowDescription) -> BTreeSet<usize> {
@@ -330,7 +330,7 @@ fn build(
                 rewritten_aggregate,
             )));
         } else if let Some(aggregate) = &aggregate {
-            plan.group_by = group_by::rewrite_select(&mut select, mem, aggregate)?;
+            plan.group_by = group_by::rewrite_select(&mut select, mem, aggregate)?.map(Box::new);
         }
         let aggregate = plan
             .aggregate()
