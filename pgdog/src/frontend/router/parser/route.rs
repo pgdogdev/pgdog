@@ -1,10 +1,8 @@
 use std::{fmt::Display, ops::Deref, sync::Arc};
 
 use super::{
-    Aggregate, DistinctBy, Limit, OrderBy, StatementType,
-    advisory_lock::AdvisoryLocks,
-    explain_trace::ExplainTrace,
-    rewrite::statement::projection::{HavingRewriteResult, ProjectionRewritePlan},
+    Aggregate, DistinctBy, Limit, OrderBy, StatementType, advisory_lock::AdvisoryLocks,
+    explain_trace::ExplainTrace, rewrite::statement::projection::ProjectionRewritePlan,
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
@@ -276,8 +274,7 @@ impl Route {
     pub(crate) fn aggregate(&self) -> &Aggregate {
         self.projection_rewrite_plan
             .as_deref()
-            .and_then(|plan| plan.having.as_deref())
-            .map(HavingRewriteResult::aggregate)
+            .and_then(ProjectionRewritePlan::aggregate)
             .unwrap_or(&self.aggregate)
     }
 
