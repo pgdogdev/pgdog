@@ -111,7 +111,7 @@ impl<'a> SubqueryMulti<'a> {
             // hand-rolling it into the SQL.
             //
             // So, this just drops all Parse/Binds that we come across, as we know we're handling subqueries.
-            context.drop_extended_parse_and_bind = true;
+            context.drop_extended_parse_and_bind = !self.is_extended_protocol;
 
             // TODO(jkaczman): We rely on INSERT split for insert statements.
             // If a user has that rewrite disabled, but subqueries
