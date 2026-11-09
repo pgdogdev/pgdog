@@ -64,7 +64,7 @@ pub(super) async fn connect_primary(shard: &Shard) -> Result<Server, Error> {
     }
 }
 
-async fn connect_address(address: &Address) -> Result<Server, Error> {
+pub(crate) async fn connect_address(address: &Address) -> Result<Server, Error> {
     Ok(Box::pin(Server::connect(
         address,
         ServerOptions::default(),

@@ -10,6 +10,30 @@ use crate::{
     net::ErrorResponse,
 };
 
+use super::run::snapshot::ConfigMismatch;
+use pgdog_stats::CommandKind;
+
+fn abort_hint(command: CommandKind) -> &'static str {
+    match command {
+        CommandKind::Reshard => "abort it with WITH (abort) or data-sync --abort",
+        CommandKind::Replicate => "abort it with REPLICATE ... WITH (abort)",
+        CommandKind::Unknown => "abort it with the command that started it, WITH (abort)",
+    }
+}
+
+#[derive(Debug, Display, Error)]
+pub(crate) enum RecordMismatch {
+    #[display("resharding command is \"{stored}\", not \"{given}\"")]
+    Command { stored: String, given: String },
+    #[display("resharding slot is \"{stored}\", not \"{given}\"")]
+    Slot { stored: String, given: String },
+    #[display(
+        "sharding config changed since the resharding started: {}",
+        _0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    Config(#[error(ignore)] Vec<ConfigMismatch>),
+}
+
 /// The kind of validation failure, decoupled from which table it occurred on.
 #[derive(Debug, Display)]
 pub(crate) enum TableValidationErrorKind {
@@ -144,6 +168,9 @@ pub(crate) enum Error {
     #[error("replication slot \"{0}\" doesn't exist, but it should")]
     MissingReplicationSlot(String),
 
+    #[error("replication origin {0} doesn't exist, but it should")]
+    MissingReplicationOrigin(String),
+
     #[error("parse int")]
     ParseInt(#[from] ParseIntError),
 
@@ -273,6 +300,33 @@ pub(crate) enum Error {
         #[source]
         source: Box<Error>,
     },
+
+    #[error("resharding {key} is owned by another session ({owner}); stop it with STOP_TASK first")]
+    ReshardingLocked { key: String, owner: String },
+
+    #[error("unsupported resharding state: {0}")]
+    ReshardingFormat(String),
+
+    #[error("resharding {key} is unfinished at stage {stage}; {}", abort_hint(*command))]
+    ReshardingExists {
+        key: String,
+        stage: String,
+        command: CommandKind,
+    },
+
+    #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
+    ReshardingSlotsPartial(String),
+
+    #[error(
+        "resharding {key} stopped at stage {stage} and cannot resume; abort it with WITH (abort) and start again"
+    )]
+    ReshardingNotResumable { key: String, stage: String },
+
+    #[error("no unfinished resharding {0}")]
+    NoResharding(String),
+
+    #[error(transparent)]
+    RecordMismatch(#[from] RecordMismatch),
 }
 
 impl From<ErrorResponse> for Error {

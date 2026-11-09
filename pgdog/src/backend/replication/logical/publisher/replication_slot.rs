@@ -119,6 +119,10 @@ impl<K> Deref for ReplicationSlot<K> {
     }
 }
 
+pub(crate) fn permanent_slot_name(base: &str, shard: usize) -> String {
+    format!("{base}_{shard}")
+}
+
 impl ReplicationSlot<Permanent> {
     /// Create new [`Permanent`] slot that should be managed explicitly.
     pub(crate) fn new_permanent(
@@ -128,7 +132,7 @@ impl ReplicationSlot<Permanent> {
         shard: usize,
     ) -> Self {
         let name = name.unwrap_or(format!("__pgdog_repl_{}", random_string(18).to_lowercase()));
-        let name = format!("{}_{}", name, shard);
+        let name = permanent_slot_name(&name, shard);
 
         Self::wrap(ReplicationSlotInner {
             address: address.clone(),
@@ -170,7 +174,10 @@ impl ReplicationSlot<Permanent> {
 
     pub(crate) async fn reuse_or_create(&self) -> Result<(), Error> {
         match self.verify_exists().await {
-            Err(Error::MissingReplicationSlot(_)) => self.create().await,
+            Err(Error::MissingReplicationSlot(_)) => {
+                self.mark_owned();
+                self.create().await
+            }
             result => result,
         }
     }
@@ -419,14 +426,19 @@ impl ReplicationSlotInner {
         self.remove_on_drop.store(false, Ordering::Release);
     }
 
-    /// Whether the slot was already on the backend, so this process reused
-    /// it instead of creating it.
+    /// Whether cleanup must keep the slot: it was on the backend before the
+    /// run, so the run does not own it.
     pub(crate) fn existing(&self) -> bool {
         self.existing.load(Ordering::Acquire)
     }
 
-    fn mark_existing(&self) {
+    pub(crate) fn mark_existing(&self) {
         self.existing.store(true, Ordering::Release);
+    }
+
+    /// This run creates the slot, so cleanup may drop it.
+    pub(crate) fn mark_owned(&self) {
+        self.existing.store(false, Ordering::Release);
     }
 
     fn status_key(&self) -> String {

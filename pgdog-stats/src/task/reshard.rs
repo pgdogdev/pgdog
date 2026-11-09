@@ -16,6 +16,12 @@ pub struct ReshardDefinition {
     pub replicate_only: bool,
     pub sync_only: bool,
     pub auto_cutover: bool,
+    #[serde(default = "default_cleanup_on_cancel")]
+    pub cleanup_on_cancel: bool,
+}
+
+pub(crate) fn default_cleanup_on_cancel() -> bool {
+    true
 }
 
 /// Stages of the migration, reported as the task's status. The fine-grained

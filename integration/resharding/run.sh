@@ -13,3 +13,5 @@ trap cleanup EXIT INT TERM
 timeout --signal=TERM --kill-after=90s 16m bash "${SCRIPT_DIR}/reshard.sh"
 timeout --signal=TERM --kill-after=90s 16m bash "${SCRIPT_DIR}/admin.sh"
 timeout --signal=TERM --kill-after=90s 16m bash "${SCRIPT_DIR}/cli.sh"
+timeout --signal=TERM --kill-after=90s 16m bash "${SCRIPT_DIR}/resumable.sh"
+timeout --signal=TERM --kill-after=90s 16m bash "${SCRIPT_DIR}/cutover.sh"

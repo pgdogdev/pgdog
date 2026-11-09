@@ -2,6 +2,26 @@
 
 use super::error::Error;
 
+/// What a resharding admin command does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunMode {
+    /// Start a run. With `cleanup_on_cancel` false, a stop pauses it.
+    Run { cleanup_on_cancel: bool },
+    /// Abort the unfinished run with the same key.
+    Abort,
+}
+
+impl RunMode {
+    pub(crate) fn cleanup_on_cancel(self) -> bool {
+        !matches!(
+            self,
+            Self::Run {
+                cleanup_on_cancel: false
+            }
+        )
+    }
+}
+
 /// Options after a command's positional arguments. Each command takes the
 /// options it knows, then calls [`Options::finish`] to reject the rest.
 #[derive(Debug, Default)]
@@ -62,6 +82,26 @@ impl<'a> Options<'a> {
         }
     }
 
+    pub(crate) fn run_mode(&mut self) -> Result<RunMode, Error> {
+        let abort = self.flag("abort")?;
+        let cleanup_on_cancel = self.take("cleanup_on_cancel");
+        if abort && cleanup_on_cancel.is_some() {
+            return Err(Error::InvalidOption("abort with cleanup_on_cancel".into()));
+        }
+        if abort {
+            return Ok(RunMode::Abort);
+        }
+        match cleanup_on_cancel {
+            None | Some(None) | Some(Some("true" | "on")) => Ok(RunMode::Run {
+                cleanup_on_cancel: true,
+            }),
+            Some(Some("false" | "off")) => Ok(RunMode::Run {
+                cleanup_on_cancel: false,
+            }),
+            Some(Some(_)) => Err(Error::InvalidOption("cleanup_on_cancel".into())),
+        }
+    }
+
     /// Reject options the command didn't take.
     pub(crate) fn finish(self) -> Result<(), Error> {
         match self.options.first() {
@@ -106,6 +146,62 @@ mod test {
         let (words, options) = Options::parse("copy_data a b").unwrap();
         assert_eq!(words, ["copy_data", "a", "b"]);
         options.finish().unwrap();
+    }
+
+    const CLEANUP: RunMode = RunMode::Run {
+        cleanup_on_cancel: true,
+    };
+    const PAUSE: RunMode = RunMode::Run {
+        cleanup_on_cancel: false,
+    };
+
+    #[test]
+    fn parses_run_mode() {
+        for (sql, mode) in [
+            ("reshard a b", CLEANUP),
+            ("reshard a b ()", CLEANUP),
+            ("reshard a b (cleanup_on_cancel)", CLEANUP),
+            ("reshard a b (cleanup_on_cancel true)", CLEANUP),
+            ("reshard a b (cleanup_on_cancel 'true')", CLEANUP),
+            ("reshard a b (cleanup_on_cancel on)", CLEANUP),
+            ("reshard a b (cleanup_on_cancel false)", PAUSE),
+            ("reshard a b with (cleanup_on_cancel off)", PAUSE),
+            ("reshard a b (cleanup_on_cancel 'false')", PAUSE),
+            ("reshard a b (abort)", RunMode::Abort),
+        ] {
+            let (_, mut options) = Options::parse(sql).unwrap();
+            assert_eq!(options.run_mode().unwrap(), mode, "{sql}");
+            options.finish().unwrap();
+        }
+
+        for (sql, name) in [
+            ("reshard a b (cleanup_on_cancel maybe)", "cleanup_on_cancel"),
+            ("reshard a b (cleanup_on_cancel 1)", "cleanup_on_cancel"),
+            ("reshard a b (abort true)", "abort"),
+            (
+                "reshard a b (abort, cleanup_on_cancel)",
+                "abort with cleanup_on_cancel",
+            ),
+            (
+                "reshard a b (cleanup_on_cancel false, abort)",
+                "abort with cleanup_on_cancel",
+            ),
+            (
+                "reshard a b (abort, cleanup_on_cancel true)",
+                "abort with cleanup_on_cancel",
+            ),
+        ] {
+            let (_, mut options) = Options::parse(sql).unwrap();
+            assert!(
+                matches!(options.run_mode(), Err(Error::InvalidOption(n)) if n == name),
+                "{sql}"
+            );
+        }
+
+        let (_, mut options) =
+            Options::parse("reshard a b (cleanup_on_cancel false, other)").unwrap();
+        assert_eq!(options.run_mode().unwrap(), PAUSE);
+        assert!(matches!(options.finish(), Err(Error::InvalidOption(n)) if n == "other"));
     }
 
     #[test]
