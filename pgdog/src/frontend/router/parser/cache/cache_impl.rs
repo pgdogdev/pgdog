@@ -48,7 +48,7 @@ impl Stats {
 #[derive(Debug)]
 pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<Arc<str>, Arc<Ast>>,
+    queries: LruCache<Arc<str>, Arc<Ast>, crate::util::LruHasher>,
     /// Cache global stats.
     pub(super) stats: Stats,
     /// Cache hits.
@@ -96,7 +96,7 @@ impl Cache {
     fn new() -> Self {
         Self {
             inner: RwLock::new(Inner {
-                queries: LruCache::unbounded(),
+                queries: LruCache::unbounded_with_hasher(Default::default()),
                 stats: Stats::default(),
                 hits: AtomicUsize::default(),
             }),
@@ -344,7 +344,7 @@ mod test {
     #[test]
     fn test_used_statement_survives_eviction() {
         let mut inner = Inner {
-            queries: LruCache::new(2.try_into().unwrap()),
+            queries: LruCache::with_hasher(2.try_into().unwrap(), Default::default()),
             stats: Stats::default(),
             hits: AtomicUsize::default(),
         };

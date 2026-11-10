@@ -340,3 +340,8 @@ mod test {
         assert_eq!(sanitize_log_sample("a\nb\nc", 3), "a b");
     }
 }
+
+#[cfg(not(feature = "bench"))]
+pub(crate) type LruHasher = lru::DefaultHasher;
+#[cfg(feature = "bench")]
+pub(crate) type LruHasher = foldhash::fast::FixedState;
