@@ -26,8 +26,25 @@ pub fn parse_from_clause<'a>(outer_stmt: Node<'a>) -> Option<Node<'a>> {
             let subquery = range_subselect.subquery();
             if range_subselect.alias().is_some()
                 && let Node::SelectStmt(inner_subselect) = subquery
-                && inner_subselect.values_lists().is_empty()
             {
+                // TODO(jkaczman): Redundant with INSERT SELECT
+
+                // We don't want to recurse back through for a re-written inner query.
+                if let Some(Node::RangeFunction(range_func)) = inner_subselect.from_clause().first()
+                    && let Some(Node::NodeList(node_list)) = range_func.functions().first()
+                    && let Some(Node::FuncCall(func_call)) = node_list.first()
+                    && let Some(func_name) = func_call.funcname().first()
+                    && let Some(func_name) = func_name.as_str()
+                    && func_name.eq("unnest")
+                {
+                    return None;
+                }
+
+                // If VALUES is specified, no need for us to re-write.
+                if !inner_subselect.values_lists().is_empty() {
+                    return None;
+                }
+
                 // There's no `is_sharded` check here, because we could have
                 // a case where we need to execute a subquery that's NOT sharded,
                 // such as generate_series, which would resolve into a

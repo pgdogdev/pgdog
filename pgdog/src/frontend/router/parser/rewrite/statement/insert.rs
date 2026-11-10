@@ -331,6 +331,7 @@ pub(crate) fn group_split_requests_by_shard(
             statement_name,
         }
         .build_request(request)?;
+
         new_request.route = requests[tuples[0]].route.clone();
         grouped.push(new_request);
     }
@@ -557,7 +558,7 @@ impl<'a> UnnestOutputNames<'a> {
 }
 
 // Returns true for constants with or without a type cast, e.g., NULL, 'VIP' and 'VIP'::text.
-fn is_constant(node: Node<'_>) -> bool {
+pub(crate) fn is_constant(node: Node<'_>) -> bool {
     match node {
         Node::A_Const(_) => true,
         Node::TypeCast(type_cast) => matches!(type_cast.arg(), Node::A_Const(_)),

@@ -79,7 +79,7 @@ UPDATE subusers SET status = 'changed' WHERE id = 3 AND status IN (SELECT status
 
 -- case
 -- what: .. WHERE <key> = <k1> AND <col> IN (<sq>), key in both, same shard
--- route select: 1
+-- route update: 1
 -- verify: SELECT * FROM subusers ORDER BY id
 UPDATE subusers SET status = 'changed' WHERE id = 3 AND status IN (SELECT status FROM subusers WHERE id = 3)
 

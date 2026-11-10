@@ -3,14 +3,15 @@ use std::ops::Deref;
 use pg_raw_parse::{
     Node, NodeMut,
     make::{MemoryToken, Unique},
-    nodes::{self, Alias, SelectStmt},
+    nodes::{self, Alias, RangeFunction, SelectStmt},
     transform,
 };
-use pgdog_postgres_types::{DataType, Datum};
+use pgdog_postgres_types::{Array, Datum};
 
 use crate::{
     frontend::client::query_engine::multi_step::SubqueryMulti,
-    net::{DataRow, Decoder, RowDescription},
+    frontend::router::parser::rewrite::statement::insert::is_constant,
+    net::{Bind, DataRow, Decoder, RowDescription, bind::Parameter},
 };
 
 impl<'a> SubqueryMulti<'a> {
@@ -20,6 +21,7 @@ impl<'a> SubqueryMulti<'a> {
         mut statement: Unique<'mem, Node<'mem>>,
         row_description: Option<&RowDescription>,
         data_rows: &[DataRow],
+        new_bind: &mut Bind,
     ) -> Unique<'mem, Node<'mem>> {
         let Some(row_description) = row_description else {
             return statement;
@@ -37,15 +39,17 @@ impl<'a> SubqueryMulti<'a> {
                 let mut range_subselect = mem.make_unique(range_subselect.deref());
                 // Replace the subquery in the statement with the DataRows (via VALUES)
                 {
-                    let explicit_values_list = Self::new_select_with_explicit_values(
+                    let new_subselect = Self::new_select_with_unnest(
+                        new_bind,
                         mem,
-                        row_description.clone(),
+                        range_subselect.subquery(),
                         data_rows,
+                        row_description,
                     );
 
                     range_subselect
                         .as_mut()
-                        .set_subquery(explicit_values_list.uncast());
+                        .set_subquery(new_subselect.uncast());
                 }
 
                 {
@@ -99,110 +103,152 @@ impl<'a> SubqueryMulti<'a> {
         statement
     }
 
-    /// Construct a new `SelectStmt` to be set as the `subselect` of our new `RangeSubselect` node,
-    /// whose inner-statement now is an *explicit* VALUES list of the returning results
-    /// of the executed inner-query (as in, the returned `DataRow` list articulated explicitly
-    /// within the outer statement)
-    ///
-    /// TODO(jkaczman): we need to account for too much data being present, and split
-    /// apart the query into multiple when that occurs. This TODO also exists elsewhere for subqueries.
-    pub(crate) fn new_select_with_explicit_values<'mem>(
+    pub(crate) fn new_select_with_unnest<'mem>(
+        old_bind: &mut Bind,
         mem: MemoryToken<'mem>,
-        row_description: RowDescription,
+        original_ast: Node<'_>,
         data_rows: &[DataRow],
+        row_description: &RowDescription,
     ) -> Unique<'mem, &'mem SelectStmt> {
-        let mut values_select = mem.make_node::<SelectStmt>();
-
         let mut decoder = Decoder::default();
-        decoder.set_row_description(row_description);
+        decoder.set_row_description(row_description.clone());
 
-        let mut elems = Vec::new();
+        let base_param_len = old_bind.params_raw().len() as i32;
 
-        if data_rows.is_empty() {
-            // We need to create a fake, all-NULL row, representing all columns
-            // within our subquery, so that we can tell Postgres what the
-            // RowDescription types to be to the client
-            //
-            // TODO(jkaczman): See the matching TODO for this in the area
-            // below where we do the explicit type casts for the first row
-            // when we don't have `DataRows::is_empty()`
-            let mut singular_empty_top_level_list = Vec::new();
-            for index in 0..decoder.row_description().fields.len() {
-                if let Some(field) = decoder.row_description().field(index) {
-                    let data_type: DataType = field.data_type();
-                    let pg_catalog_type: &str = data_type.as_pg_catalog_type();
+        let original_targets = match original_ast {
+            Node::SelectStmt(original_select)
+                if original_select.target_list().len() == row_description.fields.len() =>
+            {
+                original_select
+                    .target_list()
+                    .into_iter()
+                    .map(|target| Some(target.val()))
+                    .collect()
+            }
+            _ => vec![None; row_description.fields.len()],
+        };
 
-                    let mut node = mem.make_node::<nodes::A_Const>();
-                    node.as_mut().set_isnull(true);
-
-                    let node = mem
-                        .make_type_cast(
-                            node.uncast(),
-                            mem.make_list(&[
-                                mem.make_string(Some("pg_catalog")),
-                                mem.make_string(Some(pg_catalog_type)),
-                            ]),
-                        )
-                        .uncast();
-
-                    singular_empty_top_level_list.push(node);
-                }
+        // Form the bind params
+        let mut param_refs = Vec::new();
+        let mut select_targets = Vec::new();
+        let mut unnest_column_names = Vec::new();
+        for (idx, field) in row_description.fields.iter().enumerate() {
+            if let Some(constant) = original_targets[idx].filter(|target| is_constant(*target)) {
+                select_targets.push(mem.make_res_target(
+                    None,
+                    mem.empty(),
+                    mem.make_unique(constant),
+                ));
+                continue;
             }
 
-            // Now form a singular VALUES list containing NULL entries for all applicable
-            // columns
-            let new_list = mem.make_list(singular_empty_top_level_list.as_slice());
-            elems.push(new_list);
-        } else {
-            for (row_idx, row) in data_rows.iter().enumerate() {
-                let mut second = Vec::new();
+            let unnest_column_name = format!("c{}", param_refs.len() + 1);
+            select_targets.push(
+                mem.make_res_target(
+                    None,
+                    mem.empty(),
+                    mem.make_column_ref(mem.make_list(&[
+                        mem.make_string(Some("u")).uncast(),
+                        mem.make_string(Some(unnest_column_name.as_str())).uncast(),
+                    ]))
+                    .uncast(),
+                ),
+            );
 
-                for col in 0..row.len() {
-                    let datum: Datum = row
-                        .get_column(col, &decoder)
-                        .expect("get_column never returns an Error")
-                        .unwrap()
-                        .value;
+            unnest_column_names.push(mem.make_string(Some(unnest_column_name.as_str())).uncast());
 
-                    let mut node = Self::convert_datum_to_a_const(datum.clone(), mem);
+            let pg_catalog_type: &str = field
+                .data_type()
+                .into_array_type()
+                .expect("rewrite_outer_statement_with_subquery_response checked the column types")
+                .as_pg_catalog_type();
 
-                    // TODO(jkaczman): Right now, this does explicit casts for each type on the
-                    // first row as a workaround to properly set the RowDescription
-                    // type OIDs in the response to the client. This is more query
-                    // verbosity, which saves us backend logic to intercept the
-                    // RowDescription response and modify it, however, at the expense
-                    // of (well, making the query more verbose). Aka, this works fine,
-                    // but could be represented better, perhaps by in the future intercepting
-                    // when this is more mature.
-                    if row_idx == 0 {
-                        let data_type_str: &str = datum.data_type().as_pg_catalog_type();
+            let node = {
+                let mut node = mem.make_node::<nodes::ParamRef>();
 
-                        // TODO(jkaczman): this is a frequently used construct;
-                        // I think that we can create a method to share this throughout
-                        // all the kinds... they all use pg_catalog casts
-                        node = mem
-                            .make_type_cast(
-                                node.uncast(),
-                                mem.make_list(&[
-                                    mem.make_string(Some("pg_catalog")),
-                                    mem.make_string(Some(data_type_str)),
-                                ]),
-                            )
-                            .uncast();
-                    }
+                node.as_mut()
+                    .set_number(base_param_len + param_refs.len() as i32 + 1);
 
-                    second.push(node.uncast());
-                }
+                node
+            };
 
-                let new_list = mem.make_list(second.as_slice());
-                elems.push(new_list);
+            let mut list_of_rows_for_col: Vec<Datum> = Vec::new();
+            for row in data_rows {
+                // TODO(jkaczman): replace all unwraps()
+                let col = row.get_column(idx, &decoder).unwrap().unwrap();
+                list_of_rows_for_col.push(col.value);
             }
+
+            let array = Array::new(list_of_rows_for_col, field.type_oid);
+
+            // TODO(jkaczman): wonder what the performance tradeoffs are btwn. Binary and Text
+            let default_fmt = old_bind.default_param_format();
+            old_bind.push_param(
+                Parameter::new(array.encode(default_fmt).unwrap().as_ref()),
+                default_fmt,
+            );
+
+            let node = mem
+                .make_type_cast(
+                    node.uncast(),
+                    mem.make_list(&[
+                        mem.make_string(Some("pg_catalog")),
+                        mem.make_string(Some(pg_catalog_type)),
+                    ]),
+                )
+                .uncast();
+
+            param_refs.push(node);
         }
 
-        let new_list = mem.make_list(elems.as_slice());
-        values_select.as_mut().set_values_lists(new_list);
+        let list_of_param_refs = mem.make_list(param_refs.as_slice());
+        let unnest_func_call = mem.make_func_call(
+            mem.make_list(&[mem.make_string(Some("unnest")).uncast()]),
+            list_of_param_refs,
+            0,
+        );
 
-        values_select
+        let unnest_alias = {
+            let mut unnest_alias = mem.make_node::<Alias>();
+
+            unnest_alias
+                .as_mut()
+                .set_aliasname(Some(mem.copy_string("u")));
+
+            unnest_alias
+                .as_mut()
+                .set_colnames(mem.make_list(unnest_column_names.as_slice()));
+
+            unnest_alias
+        };
+
+        let unnest_func_wrapper = {
+            let mut unnest_func_wrapper = mem.make_node::<RangeFunction>();
+
+            unnest_func_wrapper
+                .as_mut()
+                .set_functions(mem.make_list(&[mem.make_list(&[unnest_func_call.uncast()])]));
+
+            unnest_func_wrapper
+                .as_mut()
+                .set_alias(unnest_alias.as_option());
+
+            unnest_func_wrapper
+        };
+
+        {
+            let mut new_select = mem.make_node::<SelectStmt>();
+
+            new_select
+                .as_mut()
+                .set_from_clause(mem.make_list(&[unnest_func_wrapper.uncast()]));
+
+            new_select
+                .as_mut()
+                .set_target_list(mem.make_list(select_targets.as_slice()));
+
+            new_select
+        }
     }
 
     /// Assemble a new alias to be used within the `RangeSubselect` node we're re-writing,
