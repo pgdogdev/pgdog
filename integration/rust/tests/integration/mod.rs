@@ -15,6 +15,7 @@ pub mod cross_shard_disabled;
 mod cross_shard_oid_drift;
 mod cross_shard_omni_check;
 pub mod distinct;
+mod empty_query;
 pub mod explain;
 pub mod fake_transactions;
 pub mod having;
