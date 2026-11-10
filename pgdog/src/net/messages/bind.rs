@@ -264,6 +264,12 @@ impl Bind {
         me
     }
 
+    pub(crate) fn set_param(&mut self, index: usize, param: Parameter) -> Option<()> {
+        *self.params.get_mut(index)? = param;
+        self.original = None;
+        Some(())
+    }
+
     pub(crate) fn params_raw(&self) -> &[Parameter] {
         &self.params
     }

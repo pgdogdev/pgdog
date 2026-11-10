@@ -180,6 +180,7 @@ async fn test_subqueries_suite() {
     let (mut regular_cases, mut data_modifying_cases) = (Vec::new(), Vec::new());
     // Run a single case by name, e.g. SUBQUERY_TEST=<case_name>
     let test_target: Option<String> = std::env::var("SUBQUERY_TEST").ok();
+    println!("Using test target: {test_target:?}");
 
     // Load all cases from the 'tests' folder
     let list_of_files: fs::ReadDir = fs::read_dir("tests/integration/subqueries/tests").unwrap();
@@ -207,7 +208,12 @@ async fn test_subqueries_suite() {
 
             let test_case_stripped = test_case.replace(sql.as_str(), "");
 
-            let test_case: TestCase = TestCase::new(sql, test_case_stripped.as_str(), identifier);
+            let test_case: Option<TestCase> =
+                TestCase::new(sql, test_case_stripped.as_str(), identifier);
+
+            // If there was no test case here (e.g., marked TODO, go ahead and skip)
+            let Some(test_case) = test_case else { continue };
+
             if let Some(name) = test_case.name.as_ref()
                 && let Some(test_target) = test_target.as_ref()
                 && name.eq(test_target)
@@ -282,7 +288,7 @@ async fn test_subqueries_suite() {
 
     println!("Total success: {total_success}");
     if !total_failure.is_empty() {
-        println!("Failures: ");
+        println!("Failures (tot amt: {})", total_failure.len());
 
         for fail_case in total_failure {
             println!("   FAIL: {fail_case}");

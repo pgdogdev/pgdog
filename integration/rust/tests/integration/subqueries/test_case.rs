@@ -43,17 +43,16 @@ pub async fn run_tests_for_case(
                     break;
                 };
 
-                if execute_test_case(
+                let result = execute_test_case(
                     &job,
                     worker_name.as_str(),
                     &mut direct_conn,
                     &mut sharded_conn,
                 )
-                .await
-                .is_ok()
-                {
-                    success += 1;
-                } else {
+                .await;
+
+                if let Err(err) = result {
+                    println!("FAILED HERE: {} {}\n{err:?}", worker_name.as_str(), job.sql);
                     // TRUNCATE in case leftover state from error
                     setup_subqueries_suite(worker_name.as_str(), false).await;
 
@@ -62,6 +61,8 @@ pub async fn run_tests_for_case(
                     sharded_conn = wire::connect(6432, "pgdog_sharded_subqueries").await;
 
                     fail.push(job);
+                } else {
+                    success += 1;
                 }
             }
 
@@ -113,7 +114,9 @@ pub(crate) async fn execute_test_case(
         .await?;
 
         if expected != actual {
-            return Err(anyhow!("{protocol:?} protocol {sql}"));
+            return Err(anyhow!(
+                "{protocol:?} protocol {sql},\n expected = {expected:#?}, \nactual = {actual:#?}"
+            ));
         }
 
         // Run `command_to_verify` (e.g., SELECT * ALL ...) to ensure the rows are equal on each.
@@ -173,7 +176,7 @@ pub struct TestCase {
     pub identifier: usize,
 
     /// SQL to execute as the test
-    sql: String,
+    pub sql: String,
 
     /// If we want to target a specific test, instead of running the
     /// entire suite in parallel, then we should be able to specify
@@ -221,22 +224,24 @@ pub enum StatementType {
 impl StatementType {
     pub fn parse(query: &str) -> Self {
         let query = query.to_lowercase();
-        if query.contains("select") {
-            StatementType::Select
-        } else if query.contains("insert") {
+        if query.starts_with("insert") {
             StatementType::Insert
-        } else if query.contains("update") {
+        } else if query.starts_with("update") {
             StatementType::Update
-        } else if query.contains("delete") {
+        } else if query.starts_with("delete") {
             StatementType::Delete
+        } else if query.contains("select") {
+            // This deliberately uses `contains` instead of `starts_with` to match on CTEs.
+            // Also deliberately matched last to match INSERT / UPDATE / DELETE beforehand.
+            StatementType::Select
         } else {
-            panic!("Unknown query type!");
+            panic!("Unknown query type! {query:?}");
         }
     }
 }
 
 impl TestCase {
-    pub(crate) fn new(sql: String, stripped_case: &str, identifier: usize) -> Self {
+    pub(crate) fn new(sql: String, stripped_case: &str, identifier: usize) -> Option<Self> {
         let lines = stripped_case.split("--");
 
         // TODO(jkaczman): might be worthwhile in the future
@@ -254,8 +259,17 @@ impl TestCase {
 
         // Assume an order of $1, $2, $3... (continuous increasing)
         let mut bind_params: Vec<String> = Vec::new();
-        for line in lines {
+
+        for line in lines.clone() {
             let line = line.trim();
+
+            // Can have cases where we don't want them executed yet (e.g.,
+            // if we have TODO cases for later and we want to expand on our
+            // current functionality, but they'd fail right now)
+            if line.eq("marked TODO") {
+                return None;
+            }
+
             if line.starts_with("verify: ") {
                 command_to_verify = Some(line.trim().replace("verify: ", ""));
             } else if line.starts_with("name") {
@@ -288,10 +302,15 @@ impl TestCase {
             }
         }
 
+        // Guard against these cases.
+        if sql.trim().is_empty() {
+            panic!("Found empty SQL case lines: {lines:?}");
+        }
+
         let data_modifying =
             sql.contains("INSERT") || sql.contains("DELETE") || sql.contains("UPDATE");
 
-        Self {
+        Some(Self {
             identifier,
             sql,
             name,
@@ -300,6 +319,6 @@ impl TestCase {
             bind_params,
             routing_expectations,
             routing_any,
-        }
+        })
     }
 }

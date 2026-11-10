@@ -81,7 +81,7 @@ impl<'a> InsertMulti<'a> {
 
         // All tuples map to the same shard: send the original multi-row INSERT
         // as a single statement, skipping the multi-step path entirely.
-        if self.requests.same_shard().is_some() {
+        if self.requests.len() >= 2 && self.requests.same_shard().is_some() {
             self.engine
                 .backend
                 .handle_client_request(
