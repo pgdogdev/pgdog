@@ -3,9 +3,7 @@
 -- route select: 0,1
 -- route insert: 0
 -- verify: SELECT * FROM subpackages ORDER BY id
--- name: test
 INSERT INTO subpackages (id, user_id, order_id) SELECT id, user_id, id FROM suborders
-
 -- case
 -- what: INSERT INTO <st1> SELECT .. FROM <st2>, source rows are on other shards than their destination
 -- route select: 0,1
@@ -18,7 +16,6 @@ INSERT INTO subpackages (id, user_id, order_id) SELECT id, user_id + 2, NULL FRO
 -- route select: 0,1 
 -- route insert: 0,1
 -- verify: SELECT * FROM subpackages ORDER BY id
--- name: test2
 INSERT INTO subpackages (id, user_id, order_id) SELECT id, id + 1, NULL FROM suborders RETURNING *
 
 -- case
@@ -103,7 +100,7 @@ INSERT INTO subpackages (id, user_id) SELECT max(id), max(user_id) FROM suborder
 -- route select: 0,1
 -- route insert: 0
 -- verify: SELECT * FROM subpackages ORDER BY id
-INSERT INTO subpackages (id, user_id) SELECT avg(id), avg(id) FROM suborders
+INSERT INTO subpackages (id, user_id) SELECT avg(id), max(user_id) FROM suborders
 
 -- case
 -- what: INSERT INTO <st1> SELECT .. FROM generate_series(..)
@@ -115,7 +112,6 @@ INSERT INTO subusers(id) SELECT id FROM generate_series(10, 1000) as id
 -- case
 -- what: INSERT INTO <st1> SELECT .. FROM unnest($1, ..)
 -- $1 = {10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36}
--- route select: any
 -- route insert: 0,1
 -- verify: SELECT * FROM subusers ORDER BY id
 INSERT INTO subusers(id) SELECT id FROM UNNEST($1::int[]) as id
@@ -126,3 +122,26 @@ INSERT INTO subusers(id) SELECT id FROM UNNEST($1::int[]) as id
 -- route insert: 0,1
 -- verify: SELECT * FROM subpackages ORDER BY id
 INSERT INTO subpackages (id, user_id) SELECT id, id FROM subusers ORDER BY id DESC LIMIT 3
+
+-- case
+-- what: INSERT INTO <st1> SELECT .. FROM <st2> JOIN .. ON ..
+-- route select: 0,1
+-- route insert: 0
+-- verify: SELECT * FROM subpackages ORDER BY id
+INSERT INTO subpackages (id, user_id, order_id) SELECT suborders.id, suborders.user_id, suborders.id FROM suborders JOIN subusers ON suborders.user_id = subusers.id
+
+-- case
+-- what: WITH a AS (..), b AS (SELECT .. FROM a) INSERT .. FROM a JOIN b .., one CTE over another
+-- route select: 0,1
+-- route select: any
+-- route insert: 0
+-- verify: SELECT * FROM subpackages ORDER BY id
+WITH a AS (SELECT id, user_id FROM suborders), b AS (SELECT id FROM a WHERE user_id = 1) INSERT INTO subpackages (id, user_id, order_id) SELECT a.id, a.user_id, a.id FROM a JOIN b ON a.id = b.id
+
+-- case
+-- what: WITH a AS (..), b AS (SELECT .. FROM a) INSERT .. FROM a JOIN b .., same CTE referenced more than once
+-- route select: 0,1
+-- route select: any
+-- route insert: 0
+-- verify: SELECT * FROM subpackages ORDER BY id
+WITH a AS (SELECT id, user_id FROM suborders) INSERT INTO subpackages (id, user_id, order_id) SELECT x.id, x.user_id, x.id FROM a x JOIN a y ON x.id = y.id

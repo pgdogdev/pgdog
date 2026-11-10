@@ -297,7 +297,6 @@ pub enum DataType {
     DoublePrecision,
     Bool,
     SmallInt,
-    TinyInt,
     Numeric,
     Other(i32),
     Uuid,
@@ -352,6 +351,137 @@ impl DataType {
             _ => DataType::Other(oid),
         }
     }
+
+    pub fn to_oid(&self) -> Option<i32> {
+        match self {
+            DataType::Bool => Some(16),
+            DataType::Bigint => Some(20),
+            DataType::SmallInt => Some(21),
+            DataType::Integer => Some(23),
+            DataType::Text => Some(25), //or 1043 (varchar)
+            DataType::Oid => Some(26),
+            DataType::Real => Some(700),
+            DataType::DoublePrecision => Some(701),
+            DataType::Timestamp => Some(1114),
+            DataType::TimestampTz => Some(1184),
+            DataType::Interval => Some(1186),
+            DataType::Numeric => Some(1700),
+            DataType::Uuid => Some(2950),
+            DataType::Array(oid) => Some(*oid),
+            DataType::Other(oid) => Some(*oid),
+            DataType::Vector => None,
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+            DataType::Cidr => todo!(),
+        }
+    }
+
+    // Returns None for arrays, Vector and Other, since we can't send those types as one-dimensional arrays (unnest would flatten arrays of arrays)
+    pub fn into_array_type(&self) -> Option<DataType> {
+        match self {
+            DataType::Bigint => Some(DataType::Array(1016)),
+            DataType::Integer => Some(DataType::Array(1007)),
+            DataType::Text => Some(DataType::Array(1009)),
+            DataType::Interval => Some(DataType::Array(1187)),
+            DataType::Timestamp => Some(DataType::Array(1115)),
+            DataType::TimestampTz => Some(DataType::Array(1185)),
+            DataType::Real => Some(DataType::Array(1021)),
+            DataType::DoublePrecision => Some(DataType::Array(1022)),
+            DataType::Bool => Some(DataType::Array(1000)),
+            DataType::SmallInt => Some(DataType::Array(1005)),
+            DataType::Numeric => Some(DataType::Array(1231)),
+            DataType::Uuid => Some(DataType::Array(2951)),
+            DataType::Oid => Some(DataType::Array(1028)),
+            DataType::Array(_) | DataType::Vector | DataType::Other(_) => None,
+            DataType::Cidr => todo!(),
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+        }
+    }
+
+    /// Format the `DataType` into a type that can be
+    /// expressed as pg_catalog.<TYPE>
+    ///
+    /// Manually checked via `SELECT oid, typname, typnamespace::regnamespace AS schema_name
+    /// FROM pg_catalog.pg_type ORDER BY oid;` against `DataType::from_oid`
+    ///
+    /// <https://www.postgresql.org/docs/current/datatype.html>
+    pub fn as_pg_catalog_type(&self) -> &'static str {
+        match self {
+            DataType::Bigint => "int8",
+            DataType::Integer => "int4",
+            DataType::Text => "text",
+            DataType::Interval => "interval",
+            DataType::Timestamp => "timestamp",
+            DataType::TimestampTz => "timestamptz",
+            DataType::Real => "float4",
+            DataType::DoublePrecision => "float8",
+            DataType::Bool => "bool",
+            DataType::SmallInt => "int2",
+            DataType::Numeric => "numeric",
+            DataType::Uuid => "uuid",
+            DataType::Oid => "oid",
+            DataType::Vector => todo!(
+                "We don't have a type OID for this within from_oid; not sure what this maps to"
+            ),
+            DataType::Array(inner_oid) => match inner_oid {
+                1000 => "_bool",
+                1005 => "_int2",
+                1007 => "_int4",
+                1009 => "_text",
+                1015 => "_varchar",
+                1016 => "_int8",
+                1021 => "_float4",
+                1022 => "_float8",
+                1028 => "_oid",
+                1115 => "_timestamp",
+                1185 => "_timestamptz",
+                1187 => "_interval",
+                1231 => "_numeric",
+                2951 => "_uuid",
+                _ => panic!("We should have all the array types covered (this matches from_oid)"),
+            },
+            DataType::Other(_) => {
+                panic!("This needs to be handled properly with a client-facing error")
+            }
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+            DataType::Cidr => todo!(),
+        }
+    }
+
+    pub fn pg_catalog_type_to_datatype(pg_catalog_type: &str) -> Option<Self> {
+        Some(match pg_catalog_type {
+            "int8" => DataType::Bigint,
+            "int4" => DataType::Integer,
+            "text" => DataType::Text,
+            "interval" => DataType::Interval,
+            "timestamp" => DataType::Timestamp,
+            "timestamptz" => DataType::TimestampTz,
+            "float4" => DataType::Real,
+            "float8" => DataType::DoublePrecision,
+            "bool" => DataType::Bool,
+            "int2" => DataType::SmallInt,
+            "numeric" => DataType::Numeric,
+            "uuid" => DataType::Uuid,
+            "oid" => DataType::Oid,
+            "_bool" => DataType::Array(16),
+            "_int2" => DataType::Array(21),
+            "_int4" => DataType::Array(23),
+            "_text" => DataType::Array(25),
+            "_varchar" => DataType::Array(1043),
+            "_int8" => DataType::Array(20),
+            "_float4" => DataType::Array(700),
+            "_float8" => DataType::Array(701),
+            "_oid" => DataType::Array(26),
+            "_timestamp" => DataType::Array(1114),
+            "_timestamptz" => DataType::Array(1184),
+            "_interval" => DataType::Array(1186),
+            "_numeric" => DataType::Array(1700),
+            "_uuid" => DataType::Array(2950),
+            _ => return None,
+        })
+    }
 }
 
 impl fmt::Display for DataType {
@@ -368,7 +498,6 @@ impl fmt::Display for DataType {
             DoublePrecision => write!(f, "double precision"),
             Bool => write!(f, "boolean"),
             SmallInt => write!(f, "smallint"),
-            TinyInt => write!(f, "tinyint"),
             Numeric => write!(f, "numeric"),
             Other(i) => write!(f, "unknown type {i}"),
             Uuid => write!(f, "uuid"),

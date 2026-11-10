@@ -11,6 +11,7 @@ use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 pub(crate) mod aggregate;
 pub(crate) mod auto_id;
 pub(crate) mod error;
+pub(crate) mod group_by;
 mod having;
 pub(crate) mod insert;
 pub(crate) mod insert_split_plan;
@@ -26,7 +27,6 @@ pub(crate) mod unique_id;
 pub(crate) mod update;
 
 pub(crate) use error::Error;
-pub(crate) use insert::InsertSplit;
 use pgdog_config::RewriteMode;
 //use pgdog_config::RewriteMode;
 pub(crate) use insert_split_plan::InsertSplitRewriteResult;
@@ -236,7 +236,7 @@ impl<'a> StatementRewrite<'a> {
 
         // Handle planning subqueries
         if config().config.rewrite.subqueries == RewriteMode::Rewrite {
-            plan.subquery = self.plan_subquery(stmt.stmt())?;
+            plan.subqueries = self.plan_subquery(stmt.stmt())?;
         }
 
         if let Node::UpdateStmt(stmt) = stmt.stmt() {
