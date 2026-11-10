@@ -47,6 +47,11 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) query_size_limit: Option<usize>,
     /// When we received the first message of the request.
     pub(super) statement_start: DateTime<Utc>,
+
+    /// Is there a subquery in the pipeline that was
+    /// originally from the simple protocol?
+    /// TODO(jkaczman): (There may be a better way to do this!)
+    pub(super) drop_extended_parse_and_bind: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -70,6 +75,7 @@ impl<'a> QueryEngineContext<'a> {
                 query_log_stdout: client.query_log_stdout,
                 query_size_limit: client.query_size_limit,
                 statement_start: client.statement_start,
+                drop_extended_parse_and_bind: false,
             },
             &mut client.client_request,
         )
@@ -100,6 +106,7 @@ impl<'a> QueryEngineContext<'a> {
             query_log_stdout: false,
             query_size_limit: None,
             statement_start: Utc::now(),
+            drop_extended_parse_and_bind: false,
         }
     }
 

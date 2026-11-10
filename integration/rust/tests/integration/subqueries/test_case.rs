@@ -43,19 +43,16 @@ pub async fn run_tests_for_case(
                     break;
                 };
 
-                if execute_test_case(
+                let result = execute_test_case(
                     &job,
                     worker_name.as_str(),
                     &mut direct_conn,
                     &mut sharded_conn,
                 )
-                .await
-                .is_ok()
-                {
-                    success += 1;
-                } else {
-                    println!("FAILED HERE: {} {}", worker_name.as_str(), job.sql);
-                    println!("FAILED HERE!");
+                .await;
+
+                if let Err(err) = result {
+                    println!("FAILED HERE: {} {}\n{err:?}", worker_name.as_str(), job.sql);
                     // TRUNCATE in case leftover state from error
                     setup_subqueries_suite(worker_name.as_str(), false).await;
 
@@ -64,6 +61,8 @@ pub async fn run_tests_for_case(
                     sharded_conn = wire::connect(6432, "pgdog_sharded_subqueries").await;
 
                     fail.push(job);
+                } else {
+                    success += 1;
                 }
             }
 
@@ -225,16 +224,18 @@ pub enum StatementType {
 impl StatementType {
     pub fn parse(query: &str) -> Self {
         let query = query.to_lowercase();
-        if query.contains("select") {
-            StatementType::Select
-        } else if query.contains("insert") {
+        if query.starts_with("insert") {
             StatementType::Insert
-        } else if query.contains("update") {
+        } else if query.starts_with("update") {
             StatementType::Update
-        } else if query.contains("delete") {
+        } else if query.starts_with("delete") {
             StatementType::Delete
+        } else if query.contains("select") {
+            // This deliberately uses `contains` instead of `starts_with` to match on CTEs.
+            // Also deliberately matched last to match INSERT / UPDATE / DELETE beforehand.
+            StatementType::Select
         } else {
-            panic!("Unknown query type!");
+            panic!("Unknown query type! {query:?}");
         }
     }
 }
