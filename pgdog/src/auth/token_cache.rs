@@ -21,8 +21,8 @@ use tokio::sync::OnceCell;
 use tracing::error;
 
 use super::Error;
-use crate::tasks;
 use crate::{backend::pool::Connection, config::config};
+use crate::{tasks, util::LruHasher};
 
 /// Client token cache.
 ///
@@ -101,14 +101,16 @@ struct Stats {
 #[derive(Clone, Debug)]
 pub(crate) struct AuthTokenCache {
     // Lookups use peek to preserve FIFO eviction order.
-    inner: Arc<Mutex<LruCache<Key, Arc<Entry>>>>,
+    inner: Arc<Mutex<LruCache<Key, Arc<Entry>, LruHasher>>>,
     stats: Arc<Stats>,
 }
 
 impl Default for AuthTokenCache {
     fn default() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(LruCache::unbounded())),
+            inner: Arc::new(Mutex::new(LruCache::unbounded_with_hasher(
+                Default::default(),
+            ))),
             stats: Arc::new(Stats::default()),
         }
     }

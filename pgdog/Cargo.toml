@@ -15,6 +15,7 @@ fips = ["tokio-rustls/fips"]
 bench = []
 
 [dependencies]
+foldhash = { version = "0.2", default-features = false }
 bon.workspace = true
 pin-project = "1"
 tokio.workspace = true

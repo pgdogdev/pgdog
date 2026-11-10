@@ -13,6 +13,7 @@ use crate::{
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
     state::State,
+    util::LruHasher,
 };
 use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
@@ -97,7 +98,7 @@ pub(super) enum HandleResult {
 #[derive(Debug)]
 pub(crate) struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
-    local_cache: LruCache<String, LocalStatement>,
+    local_cache: LruCache<String, LocalStatement, LruHasher>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
@@ -123,7 +124,7 @@ impl PreparedStatements {
     pub(crate) fn new(oids: Arc<Oids>) -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: LruCache::unbounded(),
+            local_cache: LruCache::unbounded_with_hasher(Default::default()),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             parameter_describes: VecDeque::new(),
