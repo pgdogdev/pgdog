@@ -19,8 +19,12 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             "unsupported aggregation count: count(DISTINCT ...) is not yet supported",
         ),
         (
-            "SELECT count(*) FROM sharded HAVING count(*) + 1 > 0",
-            "cross-shard HAVING is unsupported: aggregates would be filtered on each shard before merging",
+            "SELECT count(*) FROM sharded HAVING count(*) > 0 LIMIT 1",
+            "cross-shard HAVING is unsupported: LIMIT and OFFSET are unsupported",
+        ),
+        (
+            "SELECT count(*) FROM sharded HAVING bool_or(id > 0)",
+            "unsupported aggregation bool_or: bool_or() is not yet supported",
         ),
         (
             "SELECT value FROM sharded GROUP BY value ORDER BY count(*)",
@@ -92,9 +96,12 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
                     );
                 }
 
-                // Each shard returns a count row, exercising aggregation again without fixtures.
+                // Each shard returns a count row, exercising aggregation and
+                // the merged HAVING filter without fixtures.
                 client
-                    .send(Query::new("SELECT count(*) FROM sharded WHERE false"))
+                    .send(Query::new(
+                        "SELECT count(*) FROM sharded WHERE false HAVING count(*) + 1 > 0",
+                    ))
                     .await;
                 expect_message!(client.read().await, RowDescription);
                 let row = expect_message!(client.read().await, DataRow);

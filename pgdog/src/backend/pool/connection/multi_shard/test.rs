@@ -1,9 +1,14 @@
+use std::sync::Arc;
+
 use crate::{
+    backend::pool::connection::aggregate::Error as AggregateError,
     frontend::router::parser::{
-        Aggregate, DistinctBy, OrderBy, Shard, ShardWithPriority,
+        Aggregate, DistinctBy, HavingRewritePlan, OrderBy, Shard, ShardWithPriority,
         rewrite::statement::{
             group_by::GroupByRewrite,
-            projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan},
+            projection::{
+                HavingRewriteResult, OrderByHelper, OrderBySource, ProjectionRewritePlan,
+            },
         },
     },
     net::{BindComplete, DataRow, Field, Format, NoData},
@@ -138,6 +143,117 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
         assert_eq!(row.len(), 3);
         assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), expected);
     }
+}
+
+/// `SELECT customer_id, COUNT(*) ... GROUP BY customer_id HAVING ...`, with
+/// `operand` passed to the HAVING filter and `__pgdog_having_0` hidden.
+fn having_route(operand: &str) -> Route {
+    let aggregate = Aggregate::new_count_group_by(1, &[0]);
+    let plan = ProjectionRewritePlan {
+        having: Some(Box::new(HavingRewriteResult::new(
+            HavingRewritePlan::new(
+                String::new(),
+                vec![operand.into()],
+                vec!["__pgdog_having_0".into()],
+            ),
+            aggregate.clone(),
+        ))),
+        ..Default::default()
+    };
+    let mut route = Route::select(
+        ShardWithPriority::new_default_unset(Shard::All),
+        vec![],
+        aggregate,
+        Default::default(),
+        None,
+    );
+    route.projection_rewrite_plan = Some(Arc::new(plan));
+    route
+}
+
+/// Sends a row description, two groups per shard and `CommandComplete` from both shards.
+/// Customer 1 has a partial count of 2 on each shard, customer 2 has 1.
+fn send_having_shard_results(multi_shard: &mut MultiShard) -> Result<Vec<Message>, Error> {
+    let row_description = RowDescription::new(&[
+        Field::bigint("customer_id"),
+        Field::bigint("count"),
+        Field::bigint("__pgdog_having_0"),
+    ]);
+    let mut forwarded = Vec::new();
+    for _ in 0..2 {
+        forwarded.extend(multi_shard.handle_server_message(row_description.message())?);
+    }
+    for _ in 0..2 {
+        for (customer, count) in [(1_i64, 2_i64), (2, 1)] {
+            let mut row = DataRow::new();
+            row.add(customer).add(count).add(3_i64);
+            forwarded.extend(multi_shard.handle_server_message(row.message())?);
+        }
+    }
+    for _ in 0..2 {
+        forwarded.extend(
+            multi_shard.handle_server_message(CommandComplete::from_str("SELECT 2").message())?,
+        );
+    }
+    Ok(forwarded)
+}
+
+#[test]
+fn test_having_collects_merged_inputs_and_drops_hidden_columns() {
+    let route = having_route("count");
+    let mut multi_shard = MultiShard::new(2, &route);
+
+    let forwarded = send_having_shard_results(&mut multi_shard).unwrap();
+    let [client_description] = forwarded.as_slice() else {
+        panic!("expected only the row description to be forwarded")
+    };
+    let client_description = RowDescription::from_bytes(client_description.to_bytes()).unwrap();
+    assert_eq!(
+        client_description
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["customer_id", "count"]
+    );
+
+    // Every merged group is kept for the query engine to filter, with the
+    // merged counts (2 + 2 and 1 + 1) as the HAVING input.
+    let mut counts = Vec::new();
+    for _ in 0..2 {
+        let row =
+            DataRow::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
+        assert_eq!(row.len(), 2);
+        counts.push(row.get::<i64>(1, Format::Text).unwrap());
+    }
+    counts.sort();
+    assert_eq!(counts, [2, 4]);
+
+    let command_complete =
+        CommandComplete::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
+    assert_eq!(command_complete.rows(), Some(2));
+    assert!(multi_shard.get_server_message().is_none());
+
+    multi_shard.query_complete();
+    let inputs = multi_shard.take_having_inputs().unwrap();
+    assert_eq!(inputs.rows(), 2);
+    assert_eq!(inputs.columns().len(), 1);
+}
+
+#[test]
+fn test_having_evaluation_error_clears_buffer() {
+    let route = having_route("__pgdog_missing");
+    let mut multi_shard = MultiShard::new(2, &route);
+
+    let error = send_having_shard_results(&mut multi_shard).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            Error::Aggregate(AggregateError::HavingColumnMissing(alias)) if alias == "__pgdog_missing"
+        ),
+        "{error}"
+    );
+    assert!(!multi_shard.buffer.can_take());
 }
 
 #[test]

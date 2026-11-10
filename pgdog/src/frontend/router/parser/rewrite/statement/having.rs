@@ -6,6 +6,7 @@ use pg_raw_parse::{
     transform::{self, Assignable},
 };
 
+use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{AggregateFunction, HavingRewritePlan};
 
 use super::{
@@ -50,6 +51,7 @@ const TABLE_ALIAS: &str = "__pgdog_having";
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
+    schema: &Schema,
 ) -> Result<HavingRewritePlan, Error> {
     debug_assert!(
         !matches!(select.having_clause(), Node::None),
@@ -59,6 +61,7 @@ pub(super) fn rewrite_select<'a>(
     let having = original.as_ref();
 
     let mut operands = Operands {
+        schema,
         aliases: HiddenAliases::new(ALIAS_PREFIX, select.target_list()),
         projected: Vec::new(),
         error: None,
@@ -168,14 +171,15 @@ fn groups_by_output_alias(
         })
 }
 
-struct Operands<'a> {
+struct Operands<'a, 's> {
+    schema: &'s Schema,
     aliases: HiddenAliases,
     /// Hidden columns added to the shard query.
     projected: Vec<(String, make::Unique<'a, Node<'a>>)>,
     error: Option<Error>,
 }
 
-impl<'a> Operands<'a> {
+impl<'a> Operands<'a, '_> {
     /// Replace an aggregate call or column with a reference to its hidden column.
     fn replace<'f, 'r>(
         &mut self,
@@ -187,7 +191,7 @@ impl<'a> Operands<'a> {
             return None;
         }
         match &*node {
-            NodeMut::FuncCall(function) if is_aggregate(function) => {
+            NodeMut::FuncCall(function) if is_aggregate(function, self.schema) => {
                 if function.agg_distinct
                     || function.agg_within_group
                     || !function.agg_order().is_empty()
@@ -230,13 +234,15 @@ impl<'a> Operands<'a> {
     }
 }
 
-fn is_aggregate(function: &nodes::FuncCall) -> bool {
+/// Aggregates PgDog can't merge, such as `bool_or`, are still projected
+/// whole, so the merge rejects them like it does in the SELECT list.
+fn is_aggregate(function: &nodes::FuncCall, schema: &Schema) -> bool {
     function
         .funcname()
         .iter()
         .next_back()
         .and_then(Node::as_str)
-        .is_some_and(|name| AggregateFunction::from_builtin_name(name).is_some())
+        .is_some_and(|name| AggregateFunction::from_name(name, schema).is_some())
 }
 
 #[cfg(test)]
@@ -251,7 +257,11 @@ mod tests {
         let mut plan = None;
         let rewritten = make::try_owned(|mem| {
             let mut select = mem.make_unique(select);
-            plan = Some(rewrite_select(&mut select.as_mut(), mem)?);
+            plan = Some(rewrite_select(
+                &mut select.as_mut(),
+                mem,
+                &Schema::default(),
+            )?);
             Ok::<_, Error>(select)
         })?;
         Ok((
