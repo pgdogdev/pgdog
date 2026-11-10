@@ -2,12 +2,14 @@ use super::super::ee;
 use super::insert::build_resolved_split_requests;
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
-use super::{Error, InsertSplit, InsertSplitRewriteResult, PrepareExecute, ShardingKeyUpdate};
+use super::{Error, InsertSplitRewriteResult, PrepareExecute, ShardingKeyUpdate};
 use crate::frontend::client::QueryTimestamps;
 
 use crate::frontend::router::Route;
 use crate::frontend::router::parser::ShardWithPriority;
-use crate::frontend::router::parser::rewrite::statement::insert::{Subquery, build_split_requests};
+use crate::frontend::router::parser::rewrite::statement::insert::{
+    InsertSplitPlan, Subquery, build_split_requests,
+};
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
@@ -121,7 +123,7 @@ where
 ///
 /// Executed in order of fields in this struct.
 ///
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug)]
 pub(crate) struct RewritePlan {
     /// One-based parameter indexes and ID sources in allocation order.
     /// Simple protocol records sequence calls here without using the indexes.
@@ -137,11 +139,11 @@ pub(crate) struct RewritePlan {
 
     /// Splitting of multi-tuple INSERT statements into
     /// multiple queries.
-    pub(crate) insert_split: Vec<InsertSplit>,
+    pub(crate) insert_split: Option<InsertSplitPlan>,
 
     /// Executing an inner subquery separately to ensure proper routing
     /// Involves injecting the results of the inner query into the outer query
-    pub(crate) subquery: Option<Subquery>,
+    pub(crate) subqueries: Vec<Subquery>,
 
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
@@ -151,11 +153,11 @@ pub(crate) struct RewritePlan {
     pub(crate) offset: Option<OffsetPlan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum RewriteResult {
     InPlace { offset: Option<OffsetPlan> },
     InsertSplit(InsertSplitRewriteResult),
-    Subquery(Subquery),
+    Subquery(Vec<Subquery>),
     ShardingKeyUpdate(ShardingKeyUpdate),
 }
 
@@ -216,7 +218,7 @@ impl RewritePlan {
         self.bind_params.is_original()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
-            && self.insert_split.is_empty()
+            && self.insert_split.is_none()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
     }
@@ -374,7 +376,15 @@ impl RewritePlan {
         // Only rewrite executable requests. Some clients prepare the statement
         // separately (e.g. go/pq with Parse, Describe, Sync). We don't need to rewrite
         // those since insert split will return the same row(s) as multi-tuple insert.
-        if !self.insert_split.is_empty() && request.is_executable() {
+        if let Some(InsertSplitPlan::Unnest(unnest_insert)) = &self.insert_split
+            && request.is_executable()
+        {
+            return Ok(RewriteResult::InsertSplit(unnest_insert.build(request)?));
+        }
+
+        if let Some(InsertSplitPlan::Values(values_splits)) = &self.insert_split
+            && request.is_executable()
+        {
             if self
                 .bind_params
                 .iter()
@@ -388,7 +398,8 @@ impl RewritePlan {
                     build_resolved_split_requests(query, request)?,
                 )));
             }
-            let requests = build_split_requests(&self.insert_split, request)?;
+
+            let requests = build_split_requests(values_splits, request)?;
             return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult::new(
                 requests,
             )));
@@ -402,10 +413,8 @@ impl RewritePlan {
             ));
         }
 
-        if let Some(subqueries) = &self.subquery
-            && request.is_executable()
-        {
-            return Ok(RewriteResult::Subquery(subqueries.clone()));
+        if !self.subqueries.is_empty() && request.is_executable() {
+            return Ok(RewriteResult::Subquery(self.subqueries.clone()));
         }
 
         Ok(RewriteResult::InPlace {

@@ -53,6 +53,25 @@ impl Default for Dimension {
 }
 
 impl Array {
+    /// Create an `Array` with pre-existing elements, primarily used for purposes of
+    /// getting the binary encoding of a list of `DataRow`s
+    pub fn new(elements: Vec<Datum>, element_oid: i32) -> Self {
+        let size = elements.len() as i32;
+
+        Self {
+            elements,
+            element_oid,
+            dim: Dimension {
+                size,
+                lower_bound: 1,
+            },
+        }
+    }
+
+    pub fn elements(&self) -> &Vec<Datum> {
+        &self.elements
+    }
+
     /// Decode an array with a known element type OID.
     ///
     /// For binary format, the element OID is also present in the wire header

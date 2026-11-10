@@ -7,7 +7,7 @@ use crate::{
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
-        Bind, DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
+        DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
     state::State,
@@ -136,29 +136,34 @@ impl QueryEngine {
                 // We get to here when detecting a Subquery in a top-level statement; this isn't recursed.
                 // Thus, we should now fetch the Bind, if present, and pass it in (at the top-level),
                 // so that we can supply the very top level's Bind to all sub-levels.
-                //
-                // TODO(jkaczman): don't need to do this if it's not extended protocol; do we have an easy way
-                // to find that out via a pre-computed flag?
-                let top_level_bind: Option<&Bind> =
-                    client_request.messages.iter().find_map(|message| {
-                        if let ProtocolMessage::Bind(bind) = message {
-                            Some(bind)
-                        } else {
-                            None
-                        }
-                    });
 
-                multi_step::SubqueryMulti::new(self, &subquery, top_level_bind)
-                    .execute(context, client_request)
-                    .await?;
+                match multi_step::SubqueryMulti::new(subquery, client_request)
+                    .execute(self, context)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err @ multi_step::Error::Subquery(_)) => {
+                        if let Some(transaction) = context.transaction.as_mut() {
+                            transaction.set_error();
+                        }
+                        self.error_response(
+                            context,
+                            client_request,
+                            ErrorResponse::unsupported(&err),
+                        )
+                        .await?;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
             }
 
             Some(RewriteResult::InPlace { .. }) | None
                 if let Some(plan) = client_request
                     .route()
                     .projection_rewrite_plan
-                    .clone()
-                    .filter(|plan| plan.having.is_some()) =>
+                    .as_ref()
+                    .filter(|plan| plan.having.is_some())
+                    .cloned() =>
             {
                 Box::pin(multi_step::HavingMulti::new(self, plan).execute(context, client_request))
                     .await?;
@@ -352,10 +357,20 @@ impl QueryEngine {
 
         // Pipelined requests only return
         // one ReadyForQuery message.
-        let drop_message = message.code() == 'Z'
+        let mut drop_message = message.code() == 'Z'
             && !context.pipeline.is_done()
             && context.pipeline.is_simple()
             && !context.in_error(); // On error, pipeline is done executing.
+
+        // TODO(jkaczman): these constants can go in a new crate (waiting to rebase off main for the whole stack first)
+        const BIND_COMPLETE_CODE: char = '2';
+        const PARSE_COMPLETE_CODE: char = '1';
+        const NO_DATA_CODE: char = 'n';
+        let not_allowed = &[BIND_COMPLETE_CODE, PARSE_COMPLETE_CODE, NO_DATA_CODE];
+
+        drop_message = drop_message
+            || (context.drop_extended_parse_and_bind
+                && (not_allowed.iter().find(|e| message.code() == **e).is_some()));
 
         if !drop_message {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());

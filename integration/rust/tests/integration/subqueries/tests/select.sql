@@ -151,3 +151,82 @@ SELECT * FROM subusers WHERE id = 3 AND status IN (
 SELECT * FROM subusers WHERE id = $1 AND status IN (
     SELECT status FROM subusers WHERE id = $1
 ) ORDER BY id;
+
+-- case
+-- what: SELECT <agg>(..) FROM (<sq>) s, <sq> is cross-shard
+-- route select: 0,1
+-- route select: any
+SELECT count(*) FROM (
+    SELECT id FROM subusers WHERE status = 'VIP'
+) s;
+
+-- case
+-- what: SELECT .. FROM (SELECT .. ORDER BY .. LIMIT <n>) s, the <n> rows come from several shards
+-- route select: 0,1
+-- route select: any
+SELECT s.id, s.username FROM (
+    SELECT id, username FROM subusers ORDER BY id DESC LIMIT 3
+) s ORDER BY s.id;
+
+-- case
+-- what: SELECT .. FROM (<sq>) s ORDER BY .. LIMIT <n>, <sq> is cross-shard
+-- route select: 0,1
+-- route select: any
+SELECT s.id, s.status FROM (
+    SELECT id, status FROM subusers WHERE status IS NOT NULL
+) s ORDER BY s.id DESC LIMIT 2;
+
+-- case
+-- what: Derived table with an inner-table that returns an empty response.
+--       Want to make sure that the OIDs returned are correct (if present)
+--       based on us relying on the first row normally setting them
+--       properly in the response via explicit casts.
+-- route select: 0,1
+-- route select: any
+SELECT s.id, s.status FROM (
+    SELECT id, status FROM subusers WHERE status = 'some random status which doesnt exist'
+) s ORDER BY s.id DESC LIMIT 2;
+
+-- case
+-- what: WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
+-- route select: 0,1
+-- route select: 0,1
+WITH c AS (
+    SELECT id FROM subusers WHERE status = 'VIP'
+) SELECT * FROM suborders WHERE id IN (
+    SELECT id FROM c
+) ORDER BY id;
+
+-- case
+-- what: WITH c (a, b) AS (..) SELECT .. FROM c
+-- route select: 0,1
+-- route select: any
+WITH c (a, b) AS (
+    SELECT id, status FROM subusers
+) SELECT a, b FROM c ORDER BY a;
+
+-- case
+-- what: WITH c AS (SELECT .. FROM <st1>) SELECT <col>, <agg>(..) FROM c GROUP BY <col>
+-- route select: 0,1
+-- route select: any
+WITH c AS (
+    SELECT id, status FROM subusers
+) SELECT status, count(*) FROM c GROUP BY status ORDER BY status;
+
+-- case
+-- what: WITH a AS (..), b AS (SELECT .. FROM a) .. FROM a JOIN b .., one CTE over another
+-- route select: 0,1
+-- route select: any
+WITH a AS (
+    SELECT id, status FROM subusers
+), b AS (
+    SELECT id FROM a WHERE status = 'VIP'
+) SELECT a.id, a.status FROM a JOIN b ON a.id = b.id ORDER BY a.id;
+
+-- case
+-- what: WITH a AS (..), b AS (SELECT .. FROM a) .. FROM a JOIN b .., same CTE referenced more than once
+-- route select: 0,1
+-- route select: any
+WITH a AS (
+    SELECT id, status FROM subusers
+) SELECT x.id, y.id FROM a x JOIN a y ON x.status = y.status ORDER BY x.id, y.id;

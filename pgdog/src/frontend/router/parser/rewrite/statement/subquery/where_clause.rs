@@ -1,4 +1,4 @@
-use pg_raw_parse::{Node, deparse, nodes::SubLink};
+use pg_raw_parse::{Node, nodes::SubLink};
 
 use crate::frontend::router::parser::{
     StatementParser,
@@ -6,10 +6,11 @@ use crate::frontend::router::parser::{
 };
 
 impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
-    pub(crate) fn handle_subquery_in_where(
-        &mut self,
-        sub_link: &SubLink,
-    ) -> Result<Option<Subquery>, Error> {
+    pub(crate) fn handle_subquery_in_where(&mut self) -> Result<Option<Subquery>, Error> {
+        let Some((sub_link, _)) = has_sub_link_in_where(self.outer_stmt) else {
+            return Ok(None);
+        };
+
         let subselect = sub_link.subselect();
 
         // Is it sharded? if not, doesn't need to be separate (strictly for WHERE).
@@ -38,16 +39,17 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
                 return Ok(None);
             }
 
-            let subselect_sql = deparse(subselect).unwrap();
-            let subselect_sql = subselect_sql.as_str().to_string();
-
-            return Ok(Some(Subquery {
-                inner_stmt: subselect_sql,
-            }));
+            return Ok(Some(Subquery::WhereClause));
         }
 
         Ok(None)
     }
+}
+
+pub(crate) fn parse_where_clause<'a>(outer_stmt: Node<'a>) -> Option<Node<'a>> {
+    let (sub_link, _) = has_sub_link_in_where(outer_stmt)?;
+
+    Some(sub_link.subselect())
 }
 
 /// When we have a SELECT / UPDATE / DELETE, is there a SubLink present in its
