@@ -3,8 +3,9 @@
 //! The shards return every group, with the `HAVING` operands in hidden
 //! columns. Once the groups are merged, the operands are sent to one shard as
 //! arrays, and the shard returns the positions of the groups that pass.
+//! DISTINCT, OFFSET and LIMIT then apply to those groups.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::{
@@ -103,7 +104,8 @@ impl<'a> HavingMulti<'a> {
             .as_deref()
             .expect("HAVING execution requires a HAVING plan")
             .rewrite();
-        let keep = match filter(&mut self.engine.backend, having, &inputs, client_request).await {
+        let mut keep = match filter(&mut self.engine.backend, having, &inputs, client_request).await
+        {
             Ok(keep) => keep,
             Err(Error::Execution(error)) => {
                 return self.forward_error(context, messages, *error).await;
@@ -115,6 +117,7 @@ impl<'a> HavingMulti<'a> {
             }
             Err(err) => return Err(err),
         };
+        distinct_and_limit(&mut keep, &messages, client_request.route());
 
         let kept = keep.iter().filter(|&&keep| keep).count();
         let mut keep = keep.into_iter();
@@ -236,6 +239,30 @@ async fn filter(
     Ok(keep)
 }
 
+/// Apply DISTINCT, then OFFSET and LIMIT, to the groups that passed the
+/// filter, in the order PgDog sorted them.
+fn distinct_and_limit(keep: &mut [bool], messages: &VecDeque<Message>, route: &Route) {
+    let mut seen = HashSet::new();
+    let mut skip = route.limit().offset.unwrap_or(0);
+    let mut remaining = route.limit().limit;
+    let rows = messages.iter().filter(|message| message.code() == 'D');
+    for (keep, row) in keep.iter_mut().zip(rows) {
+        if !*keep {
+            continue;
+        }
+        if route.distinct().is_some() && !seen.insert(row.payload()) {
+            *keep = false;
+        } else if skip > 0 {
+            skip -= 1;
+            *keep = false;
+        } else if remaining == Some(0) {
+            *keep = false;
+        } else {
+            remaining = remaining.map(|limit| limit - 1);
+        }
+    }
+}
+
 fn invalid(error: AggregateError) -> Error {
     BackendError::from(error).into()
 }
@@ -261,4 +288,37 @@ fn client_param_types(client_request: &ClientRequest, bind: &Bind) -> Vec<u32> {
         .chunks_exact(4)
         .map(|oid| u32::from_be_bytes([oid[0], oid[1], oid[2], oid[3]]))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        frontend::router::parser::{DistinctBy, Limit},
+        net::DataRow,
+    };
+
+    #[test]
+    fn distinct_then_offset_then_limit_apply_to_passing_groups() {
+        let messages = [1_i64, 1, 2, 2, 3, 4]
+            .into_iter()
+            .map(|value| DataRow::from_columns(vec![value]).message())
+            .collect();
+        let route = Route::select(
+            ShardWithPriority::new_table(Shard::All),
+            vec![],
+            Default::default(),
+            Limit {
+                limit: Some(2),
+                offset: Some(1),
+            },
+            Some(DistinctBy::Row),
+        );
+        // The first 2 fails the filter, so the second one is kept.
+        let mut keep = vec![true, true, false, true, true, true];
+
+        distinct_and_limit(&mut keep, &messages, &route);
+
+        assert_eq!(keep, [false, false, false, true, true, false]);
+    }
 }

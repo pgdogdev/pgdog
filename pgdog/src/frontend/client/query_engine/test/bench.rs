@@ -95,6 +95,10 @@ const CASES: &[Case] = &[
         "SELECT value, COUNT(*) FROM sharded GROUP BY value HAVING COUNT(*) > 1",
     ),
     Case(
+        "having_distinct_limit",
+        "SELECT DISTINCT value, COUNT(*) FROM sharded GROUP BY value HAVING COUNT(*) > 1 ORDER BY value LIMIT 5 OFFSET 2",
+    ),
+    Case(
         "min_max_sum",
         "SELECT MIN(id), MAX(id), SUM(id) FROM sharded",
     ),

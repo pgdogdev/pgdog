@@ -283,8 +283,11 @@ impl MultiShard {
                     }
                 }
                 self.buffer.drop_helper_columns(plan, &self.decoder);
-                self.buffer.distinct(self.route.distinct(), &self.decoder);
-                self.buffer.limit(self.route.limit());
+                // With HAVING, the query engine applies these to the groups that pass.
+                if self.having_inputs.is_none() {
+                    self.buffer.distinct(self.route.distinct(), &self.decoder);
+                    self.buffer.limit(self.route.limit());
+                }
             }
 
             if has_rows {
