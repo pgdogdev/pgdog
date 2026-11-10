@@ -40,7 +40,7 @@ pub(crate) enum InsertSplitPlan {
     // INSERT .. VALUES (..), (..), split into one INSERT per tuple.
     Values(Vec<InsertSplit>),
     // INSERT .. SELECT * FROM unnest($1, ..), split by shards of the rows.
-    Unnest(UnnestInsert),
+    Unnest(Box<UnnestInsert>),
 }
 
 // INSERT INTO .. SELECT * FROM unnest($1::pg_catalog._int8, ..)
@@ -622,7 +622,7 @@ impl StatementRewrite<'_> {
             && let Some(unnest_insert) =
                 plan_unnest_insert(insert, select, unnest_range_function, unnest_call)?
         {
-            plan.insert_split = Some(InsertSplitPlan::Unnest(unnest_insert));
+            plan.insert_split = Some(InsertSplitPlan::Unnest(Box::new(unnest_insert)));
             return Ok(());
         }
 
