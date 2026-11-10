@@ -12,7 +12,7 @@ use tracing::debug;
 
 use crate::{
     frontend::{client::query_engine::multi_step::SubqueryMulti, router::parser::rewrite},
-    net::{DataRow, Decoder, RowDescription},
+    net::{Bind, DataRow, Decoder, RowDescription},
 };
 
 impl<'a> SubqueryMulti<'a> {
@@ -22,6 +22,7 @@ impl<'a> SubqueryMulti<'a> {
         mut statement: Unique<'mem, Node<'mem>>,
         row_description: Option<&RowDescription>,
         data_rows: &[DataRow],
+        _new_bind: &Bind,
     ) -> Unique<'mem, Node<'mem>> {
         let Some((sublink, lexpr)) =
             rewrite::statement::subquery::where_clause::has_sub_link_in_where(statement.as_ref())
@@ -68,6 +69,7 @@ impl<'a> SubqueryMulti<'a> {
         statement
     }
 
+    // TODO: can use unnest() here too
     fn rewrite_sublink_in_where_clause<'mem>(
         &self,
         sublink: &SubLink,

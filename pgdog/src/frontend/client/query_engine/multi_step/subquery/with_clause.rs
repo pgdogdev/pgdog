@@ -9,7 +9,7 @@ use crate::{
         client::query_engine::multi_step::SubqueryMulti,
         router::parser::rewrite::statement::subquery::where_clause::has_sub_link_in_where,
     },
-    net::{DataRow, RowDescription},
+    net::{Bind, DataRow, RowDescription},
 };
 
 impl<'a> SubqueryMulti<'a> {
@@ -20,6 +20,7 @@ impl<'a> SubqueryMulti<'a> {
         mut statement: Unique<'mem, Node<'mem>>,
         row_description: Option<&'a RowDescription>,
         data_rows: &'a [DataRow],
+        new_bind: &mut Bind,
     ) -> Unique<'mem, Node<'mem>> {
         let Some((sublink, _)) = has_sub_link_in_where(statement.as_ref()) else {
             return statement;
@@ -31,6 +32,7 @@ impl<'a> SubqueryMulti<'a> {
             mem.make_unique(sublink.subselect()),
             row_description,
             data_rows,
+            new_bind,
         );
 
         let mut rewritten_sublink = mem.make_unique(sublink);
@@ -76,6 +78,7 @@ impl<'a> SubqueryMulti<'a> {
         mut statement: Unique<'mem, Node<'mem>>,
         row_description: Option<&'a RowDescription>,
         data_rows: &'a [DataRow],
+        new_bind: &mut Bind,
     ) -> Unique<'mem, Node<'mem>> {
         let Some(row_description) = row_description else {
             return statement;
@@ -115,8 +118,13 @@ impl<'a> SubqueryMulti<'a> {
             //
             // Any memory implications from storing it? Is it good
             // as it's reusable? What about the length of the strings?
-            let new_cte_query =
-                Self::new_select_with_explicit_values(mem, row_description.clone(), data_rows);
+            let new_cte_query = Self::new_select_with_unnest(
+                new_bind,
+                mem,
+                cte.ctequery(),
+                data_rows,
+                row_description,
+            );
 
             let mut alias_col_names = mem.make_unique(cte.aliascolnames());
             if alias_col_names.is_empty() {

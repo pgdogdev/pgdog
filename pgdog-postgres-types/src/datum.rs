@@ -376,6 +376,29 @@ impl DataType {
         }
     }
 
+    // Returns None for arrays, Vector and Other, since we can't send those types as one-dimensional arrays (unnest would flatten arrays of arrays)
+    pub fn into_array_type(&self) -> Option<DataType> {
+        match self {
+            DataType::Bigint => Some(DataType::Array(1016)),
+            DataType::Integer => Some(DataType::Array(1007)),
+            DataType::Text => Some(DataType::Array(1009)),
+            DataType::Interval => Some(DataType::Array(1187)),
+            DataType::Timestamp => Some(DataType::Array(1115)),
+            DataType::TimestampTz => Some(DataType::Array(1185)),
+            DataType::Real => Some(DataType::Array(1021)),
+            DataType::DoublePrecision => Some(DataType::Array(1022)),
+            DataType::Bool => Some(DataType::Array(1000)),
+            DataType::SmallInt => Some(DataType::Array(1005)),
+            DataType::Numeric => Some(DataType::Array(1231)),
+            DataType::Uuid => Some(DataType::Array(2951)),
+            DataType::Oid => Some(DataType::Array(1028)),
+            DataType::Array(_) | DataType::Vector | DataType::Other(_) => None,
+            DataType::Cidr => todo!(),
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+        }
+    }
+
     /// Format the `DataType` into a type that can be
     /// expressed as pg_catalog.<TYPE>
     ///
