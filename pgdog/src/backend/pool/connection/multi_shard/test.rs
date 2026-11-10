@@ -155,6 +155,7 @@ fn having_route(operand: &str) -> Route {
                 String::new(),
                 vec![operand.into()],
                 vec!["__pgdog_having_0".into()],
+                vec![],
             ),
             aggregate.clone(),
         ))),

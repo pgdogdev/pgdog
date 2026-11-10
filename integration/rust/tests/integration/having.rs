@@ -1,5 +1,5 @@
 use crate::setup::{admin_sqlx, connections_sqlx, connections_tokio};
-use sqlx::{Executor, postgres::PgPool};
+use sqlx::{Executor, Row, postgres::PgPool};
 
 #[tokio::test]
 async fn having_errors_reach_the_client() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,6 +52,67 @@ async fn having_errors_reach_the_client() -> Result<(), Box<dyn std::error::Erro
         client.simple_query("ROLLBACK").await?;
         client.simple_query("SELECT 1").await?;
     }
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepared_having_parameter_typed_and_untyped() -> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset_table(&sharded).await?;
+
+    seed(
+        &sharded,
+        0,
+        "INSERT INTO having_merge_test VALUES (1, 10), (1, 11)",
+    )
+    .await?;
+    seed(
+        &sharded,
+        1,
+        "INSERT INTO having_merge_test VALUES (1, 20), (2, 21)",
+    )
+    .await?;
+
+    let rows = sqlx::query(
+        "SELECT customer_id, COUNT(*) AS order_count \
+         FROM having_merge_test \
+         GROUP BY customer_id \
+         HAVING COUNT(*) > $1",
+    )
+    .bind(2_i64)
+    .fetch_all(&sharded)
+    .await?;
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].columns().len(), 2);
+    assert_eq!(rows[0].get::<i64, _>("customer_id"), 1);
+    assert_eq!(rows[0].get::<i64, _>("order_count"), 3);
+
+    // Parameters are renumbered in the merged filter query.
+    let rows = sqlx::query(
+        "SELECT customer_id FROM having_merge_test \
+         GROUP BY customer_id HAVING MAX(order_id) > $2 AND COUNT(*) > $1",
+    )
+    .bind(0_i64)
+    .bind(20_i64)
+    .fetch_all(&sharded)
+    .await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<i64, _>("customer_id"), 2);
+
+    // Parse without parameter types, so PostgreSQL has to infer $1.
+    let client = connections_tokio().await.remove(1);
+    let statement = client
+        .prepare(
+            "SELECT customer_id FROM having_merge_test \
+             GROUP BY customer_id HAVING COUNT(*) > $1",
+        )
+        .await?;
+    let rows = client.query(&statement, &[&2_i64]).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i64>(0), 1);
 
     cleanup(&sharded).await;
     Ok(())
