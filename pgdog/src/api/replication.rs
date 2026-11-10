@@ -6,9 +6,9 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use dashmap::DashMap;
-use futures::future::{FusedFuture, FutureExt};
+use futures::future::{FusedFuture, FutureExt, TryFutureExt};
 use futures::stream::{FuturesUnordered, StreamExt};
-use tokio::select;
+use tokio::{select, try_join};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -38,7 +38,7 @@ use pgdog_stats::{
     ReplicationCutoverReason, ReplicationDefinition, ReplicationShardDefinition,
     ReplicationShardStatus, ReplicationStatus, ReshardingDirection, TaskDefinition,
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// When a replication cuts over to the destination.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -55,11 +55,11 @@ pub(crate) enum CutoverMode {
 
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReplicationTask {
-    pub(crate) state: ReshardingState,
+    state: ReshardingState,
     #[builder(default)]
-    pub(crate) cutover: CutoverMode,
-    pub(crate) schema_sync: SchemaSyncBuilder,
-    pub(crate) validate: bool,
+    cutover: CutoverMode,
+    schema_sync: SchemaSyncBuilder,
+    validate: bool,
 }
 
 /// Executes the whole replication process. It runs a replication until a cutover,
@@ -169,7 +169,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
     async fn run(mut self, ctx: &TaskContext<T>) -> Result<(), Error> {
         let state = self.state.clone();
         let result = self.replicate_loop(ctx, self.cutover).await;
-        self.resume_traffic();
+        self.resume_traffic().await;
 
         let cancelled = ctx.cancellation_token().is_cancelled();
         let stopped_in_rollback_window = cancelled
@@ -314,7 +314,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             .await;
 
             if result.is_err() {
-                self.maintenance.resume_traffic();
+                self.maintenance.resume_traffic().await;
             }
 
             // stop the cluster replication and wait until it gracefully finishes,
@@ -333,7 +333,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
                     "[replication] {direction} cutover aborted: {}, traffic resumed, restarting replication",
                     Error::CatchUpTimeout
                 );
-                self.maintenance.resume_traffic();
+                self.maintenance.resume_traffic().await;
                 // Changes up to the applied LSN are already on the destination.
                 for (shard, tables) in &mut tables {
                     if let Some(applied) = progress.applied_lsn(*shard) {
@@ -411,8 +411,8 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             .build()
     }
 
-    fn resume_traffic(&mut self) {
-        self.maintenance.resume_traffic();
+    async fn resume_traffic(&mut self) {
+        self.maintenance.resume_traffic().await;
     }
 
     async fn sync_schema(
@@ -438,15 +438,19 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         let cutover_policy = CutoverPolicy::new(config().as_ref().into(), progress);
         cutover_policy.wait_for_stop_threshold().await;
         ctx.set_status(ReplicationStatus::StoppingTraffic.into());
-        maintenance.stop_traffic();
+        maintenance.stop_traffic().await;
         let result = async {
-            cancel_all(&state.source.identifier().database).await?;
+            let database = &state.source.identifier().database;
+            try_join!(
+                super::ee::cancel_queries(database),
+                cancel_all(database).map_err(Error::from)
+            )?;
             ctx.set_status(ReplicationStatus::WaitingForCatchUp.into());
             cutover_policy.wait_for_catchup().await
         }
         .await;
         if result.is_err() {
-            maintenance.resume_traffic();
+            maintenance.resume_traffic().await;
         }
         result
     }
@@ -454,7 +458,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
     /// Execute the cutover: create reverse slots, update the config,
     /// refresh the state and resume traffic.
     async fn cutover(&mut self, ctx: &TaskContext<T>) -> Result<(), Error> {
-        info!("Cutting over");
+        warn!("cutting over");
         ctx.set_status(ReplicationStatus::PreparingReverseReplication.into());
 
         // remove slots on the current source
@@ -470,13 +474,14 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             }
             .into(),
         );
-        cutover(
+        let config = cutover(
             &self.state.source.identifier().database,
             &self.state.destination.identifier().database,
         )
         .await?;
+        super::ee::sync_config(&config).await?;
         self.state.reload()?;
-        self.maintenance.resume_traffic();
+        self.maintenance.resume_traffic().await;
         Ok(())
     }
 }
@@ -846,14 +851,27 @@ impl MaintenanceMode {
         }
     }
 
-    fn stop_traffic(&mut self) {
+    async fn stop_traffic(&mut self) {
         maintenance_mode::start(None);
+        if let Err(err) = super::ee::stop_traffic(None).await {
+            error!(
+                "[cutover] maintenance mode not disabled across the fleet: {}",
+                err
+            );
+        }
         self.stopped_traffic = true;
     }
 
-    fn resume_traffic(&mut self) {
+    async fn resume_traffic(&mut self) {
         if self.stopped_traffic {
             maintenance_mode::stop(None);
+            if let Err(err) = super::ee::resume_traffic(None).await {
+                error!(
+                    "[cutover] maintenance mode not enabled across the fleet: {}",
+                    err
+                );
+            }
+
             self.stopped_traffic = false;
         }
     }
@@ -861,7 +879,11 @@ impl MaintenanceMode {
 
 impl Drop for MaintenanceMode {
     fn drop(&mut self) {
-        self.resume_traffic();
+        // Drop cannot await: release the local barrier synchronously so an
+        // aborted task cannot leave traffic stopped.
+        if self.stopped_traffic {
+            maintenance_mode::stop(None);
+        }
     }
 }
 
@@ -1022,13 +1044,13 @@ mod tests {
         let mut maintenance = MaintenanceMode::new();
         assert!(!traffic_stopped());
 
-        maintenance.stop_traffic();
+        maintenance.stop_traffic().await;
         assert!(traffic_stopped());
 
-        maintenance.resume_traffic();
+        maintenance.resume_traffic().await;
         assert!(!traffic_stopped());
 
-        maintenance.resume_traffic();
+        maintenance.resume_traffic().await;
         assert!(!traffic_stopped());
     }
 
@@ -1036,7 +1058,7 @@ mod tests {
     async fn dropping_the_maintenance_guard_resumes_traffic() {
         let _guard = MAINTENANCE_TEST_LOCK.lock().await;
         let mut maintenance = MaintenanceMode::new();
-        maintenance.stop_traffic();
+        maintenance.stop_traffic().await;
         assert!(traffic_stopped());
 
         drop(maintenance);

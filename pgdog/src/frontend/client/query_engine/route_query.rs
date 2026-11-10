@@ -167,6 +167,7 @@ impl QueryEngine {
                     Ok(()) => {}
                     Err(
                         err @ (RewriteError::UnsupportedHaving(_)
+                        | RewriteError::UnsupportedGroupBy(_)
                         | RewriteError::OrderByExpressionUnsupported),
                     ) => {
                         if let Some(transaction) = context.transaction.as_mut() {
@@ -198,6 +199,15 @@ impl QueryEngine {
 
                 return Ok(false);
             }
+            Err(RouterError::Parser(err @ ParserError::InsertSelectWithoutShardingKey)) => {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                self.error_response(context, client_request, ErrorResponse::unsupported(&err))
+                    .await?;
+
+                return Ok(false);
+            }
             Err(RouterError::Parser(ParserError::UnmappedShardKey(shard_key))) => {
                 self.error_response(
                     context,
@@ -207,6 +217,17 @@ impl QueryEngine {
                     ),
                 )
                 .await?;
+
+                return Ok(false);
+            }
+            Err(RouterError::Parser(ParserError::Rewrite(
+                err @ RewriteError::UnsupportedHaving(_),
+            ))) => {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                self.error_response(context, client_request, ErrorResponse::unsupported(&err))
+                    .await?;
 
                 return Ok(false);
             }

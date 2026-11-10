@@ -1,6 +1,9 @@
 use std::ops::{Deref, DerefMut};
 
-use super::{Error, insert::group_split_requests_by_shard};
+use super::{
+    Error,
+    insert::{UnnestArray, group_split_requests_by_shard, group_unnest_insert_by_shard},
+};
 use crate::frontend::{ClientRequest, PreparedStatements, router::parser::Shard};
 use crate::net::Message;
 
@@ -8,6 +11,7 @@ use crate::net::Message;
 pub(crate) struct InsertSplitRewriteResult {
     pub(super) requests: Vec<ClientRequest>,
     pub(super) tuples: Option<Vec<Vec<usize>>>,
+    pub(super) unnest_arrays: Option<Vec<UnnestArray>>,
 }
 
 impl Deref for InsertSplitRewriteResult {
@@ -30,6 +34,18 @@ impl InsertSplitRewriteResult {
         Self {
             requests,
             tuples: None,
+            unnest_arrays: None,
+        }
+    }
+
+    pub(crate) fn new_unnest_insert(
+        single_row_requests: Vec<ClientRequest>,
+        unnest_arrays: Vec<UnnestArray>,
+    ) -> Self {
+        Self {
+            requests: single_row_requests,
+            tuples: None,
+            unnest_arrays: Some(unnest_arrays),
         }
     }
 
@@ -41,7 +57,12 @@ impl InsertSplitRewriteResult {
         prepared_statements: &mut PreparedStatements,
     ) -> Result<(), Error> {
         let requests = std::mem::take(&mut self.requests);
-        *self = group_split_requests_by_shard(requests, request, prepared_statements)?;
+
+        *self = match self.unnest_arrays.take() {
+            Some(unnest_arrays) => group_unnest_insert_by_shard(requests, request, unnest_arrays)?,
+            None => group_split_requests_by_shard(requests, request, prepared_statements)?,
+        };
+
         Ok(())
     }
 

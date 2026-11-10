@@ -11,22 +11,28 @@ pub(crate) enum ParameterValue {
     Tuple(Vec<String>),
 }
 
-impl ToBytes for ParameterValue {
-    fn to_bytes(&self) -> Bytes {
-        let mut bytes = BytesMut::new();
+impl ParameterValue {
+    /// Write the value as a NULL-terminated string.
+    pub(crate) fn put(&self, bytes: &mut BytesMut) {
         match self {
             Self::String(string) => bytes.put_slice(string.as_bytes()),
             Self::Tuple(values) => {
-                let values = values
-                    .iter()
-                    .map(|value| value.as_bytes().to_vec())
-                    .collect::<Vec<_>>()
-                    .join(", ".as_bytes());
-                bytes.put(Bytes::from(values));
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        bytes.put_slice(b", ");
+                    }
+                    bytes.put_slice(value.as_bytes());
+                }
             }
         }
         bytes.put_u8(0);
+    }
+}
 
+impl ToBytes for ParameterValue {
+    fn to_bytes(&self) -> Bytes {
+        let mut bytes = BytesMut::new();
+        self.put(&mut bytes);
         bytes.freeze()
     }
 }

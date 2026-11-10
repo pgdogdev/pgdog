@@ -38,7 +38,10 @@ impl AdminServer {
 
     /// Handle command.
     pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
-        let message = client_request.messages.first().ok_or(Error::Empty)?;
+        let message = client_request
+            .messages
+            .first()
+            .ok_or_else(|| Error::Empty)?;
         let message: ProtocolMessage = message.clone();
 
         if message.code() != 'Q' {

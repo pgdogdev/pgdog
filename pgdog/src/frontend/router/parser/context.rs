@@ -107,9 +107,10 @@ impl<'a> QueryParserContext<'a> {
         ) && self.rw_conservative()
             && !self.read_only;
         // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
+        // Readonly clusters have no primary to prefer.
         txn_write
             || role == Some(Role::Primary)
-            || (self.prefer_primary && role != Some(Role::Replica))
+            || (self.prefer_primary && role != Some(Role::Replica) && !self.read_only)
     }
 
     /// Are we using the conservative read/write separation strategy?
@@ -119,7 +120,10 @@ impl<'a> QueryParserContext<'a> {
 
     /// Get the query we're parsing, if any.
     pub(super) fn query(&self) -> Result<&BufferedQuery, Error> {
-        self.router_context.query.as_ref().ok_or(Error::EmptyQuery)
+        self.router_context
+            .query
+            .as_ref()
+            .ok_or_else(|| Error::EmptyQuery)
     }
 
     /// Multi-tenant checks.

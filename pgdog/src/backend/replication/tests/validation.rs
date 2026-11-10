@@ -107,13 +107,13 @@ async fn fk_validation_setup(
     state.sync_tables().await?;
     state.create_slots(&cancel).await?;
     let tables = state.tables();
-    let tables = tables.get(&0).ok_or(Error::MissingData)?;
+    let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
     let find = |name: &str| {
         tables
             .iter()
             .find(|table| table.table.name == name)
             .cloned()
-            .ok_or(Error::MissingData)
+            .ok_or_else(|| Error::MissingData)
     };
     let (child, parent) = (find("children")?, find("parents")?);
 

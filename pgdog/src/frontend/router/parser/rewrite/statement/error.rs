@@ -17,6 +17,9 @@ pub(crate) enum Error {
     #[error("cross-shard HAVING is unsupported: {0}")]
     UnsupportedHaving(&'static str),
 
+    #[error("cross-shard GROUP BY is unsupported: {0}")]
+    UnsupportedGroupBy(&'static str),
+
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 

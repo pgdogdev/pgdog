@@ -78,7 +78,7 @@ async fn resharding_connection_rejects_unprivileged_user() -> Result<(), Box<dyn
             .execute_checked(format!("GRANT CONNECT ON DATABASE pgdog TO {user}"))
             .await?;
         let cluster = resharding_test_cluster(&user);
-        let result = connect_primary(cluster.shards().first().ok_or(Error::MissingData)?)
+        let result = connect_primary(cluster.shards().first().ok_or_else(|| Error::MissingData)?)
             .await
             .map(drop);
         Ok::<_, Box<dyn std::error::Error>>(result)
@@ -117,7 +117,7 @@ async fn resharding_connection_accepts_privileged_user() -> Result<(), Box<dyn s
             .await?;
         let cluster = resharding_test_cluster(&user);
         let mut server =
-            connect_primary(cluster.shards().first().ok_or(Error::MissingData)?).await?;
+            connect_primary(cluster.shards().first().ok_or_else(|| Error::MissingData)?).await?;
         let users: Vec<String> = server.fetch_all("SELECT current_user").await?;
         let roles: Vec<String> = server.fetch_all("SHOW session_replication_role").await?;
         Ok::<_, Box<dyn std::error::Error>>((users, roles))
@@ -271,7 +271,7 @@ fn text_column(data: &str) -> TupleColumn {
     }
 }
 
-pub(super) fn begin_copy_data(lsn: i64) -> CopyData {
+pub(super) fn begin_copy_data(lsn: u64) -> CopyData {
     xlog_copy_data(
         Begin {
             final_transaction_lsn: lsn,
@@ -282,7 +282,7 @@ pub(super) fn begin_copy_data(lsn: i64) -> CopyData {
     )
 }
 
-pub(super) fn commit_copy_data(end_lsn: i64) -> CopyData {
+pub(super) fn commit_copy_data(end_lsn: u64) -> CopyData {
     xlog_copy_data(
         Commit {
             flags: 0,
@@ -378,7 +378,7 @@ async fn make_subscriber_single_shard() -> StreamSubscriber {
     StreamSubscriber::new(&cluster, tables, test_origins(&cluster).await)
 }
 
-async fn wait_for_commit(sub: &mut StreamSubscriber, lsn: i64) {
+async fn wait_for_commit(sub: &mut StreamSubscriber, lsn: u64) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         sub.check_confirmed_sent_lsn().await.unwrap();
@@ -2606,7 +2606,7 @@ async fn transaction_on_one_shard_is_confirmed() {
 
     let mut progress = origin_progress(&mut verify).await;
     progress.sort();
-    assert_eq!(progress, [None, Some(Lsn::from_i64(200))]);
+    assert_eq!(progress, [None, Some(Lsn::from_u64(200))]);
 
     cleanup(&mut verify, "public.sharded", &[&id]).await;
 }
@@ -2631,7 +2631,7 @@ async fn transactions_without_written_rows_are_confirmed() {
     assert!(
         origin_progress(&mut verify)
             .await
-            .contains(&Some(Lsn::from_i64(200)))
+            .contains(&Some(Lsn::from_u64(200)))
     );
 
     sub.handle(begin_copy_data(300)).await.unwrap();
@@ -2653,7 +2653,7 @@ async fn one_check_confirms_several_transactions() {
 
     sub.handle(relation_copy_data(oid)).await.unwrap();
     for (n, id) in ids.iter().enumerate() {
-        let lsn = 200 * (n as i64 + 1);
+        let lsn = 200 * (n as u64 + 1);
         sub.handle(begin_copy_data(lsn - 100)).await.unwrap();
         sub.handle(insert_copy_data(oid, id, "batch"))
             .await

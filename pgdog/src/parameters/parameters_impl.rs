@@ -1,7 +1,14 @@
-use std::{collections::BTreeMap, fmt::Display, ops::Deref};
+use std::{
+    collections::BTreeMap,
+    fmt::Display,
+    ops::Deref,
+    sync::{Arc, LazyLock},
+};
+
+use pg_internals::guc::normalize_datestyle;
 
 use crate::{
-    net::{Error, Parameter, ParameterStatus},
+    net::{Error, Parameter},
     stats::memory::MemoryUsage,
 };
 
@@ -12,6 +19,22 @@ pub(crate) struct Parameters {
     parameters: BTreeMap<ParameterName, ParameterValue>,
     hash: u64,
 }
+/// Parameters we return to admin clients to make this seem
+/// like a legitimate PostgreSQL connection.
+pub(crate) static ADMIN_PARAMETERS: LazyLock<Arc<Parameters>> = LazyLock::new(|| {
+    Arc::new(Parameters::from(
+        &[
+            ("server_name", "PgDog"),
+            ("server_encoding", "UTF8"),
+            ("client_encoding", "UTF8"),
+            (
+                "server_version",
+                concat!(env!("CARGO_PKG_VERSION"), " (PgDog)"),
+            ),
+            ("standard_conforming_strings", "on"),
+        ][..],
+    ))
+});
 
 impl Deref for Parameters {
     type Target = BTreeMap<ParameterName, ParameterValue>;
@@ -22,15 +45,22 @@ impl Deref for Parameters {
 }
 
 impl Parameters {
-    /// Add server parameters that the client didn't supply. We'll
-    /// use them to handle RESET without talking to the server again.
-    pub(crate) fn set_server_defaults(&mut self, server_params: &[ParameterStatus]) {
-        for param in server_params {
-            // RESET DateStyle must reset server's original value,
-            // even if client supplied one.
-            if param.name.eq_ignore_ascii_case("DateStyle") && !self.contains_key(&param.name) {
-                self.insert(&param.name, param.value.clone());
-            }
+    /// Add the server's DateStyle if the client didn't supply one, and normalize
+    /// the client's DateStyle against the server's, like PostgreSQL does at startup.
+    /// We'll use DateStyle to normalize and RESET without talking to the server again.
+    pub(crate) fn set_server_defaults(&mut self, server_params: &Parameters) {
+        let Some(server) = server_params
+            .get("DateStyle")
+            .and_then(ParameterValue::as_str)
+        else {
+            return;
+        };
+        let value = match self.get("DateStyle").and_then(ParameterValue::as_str) {
+            Some(client) => normalize_datestyle(client, server, server).ok(),
+            None => Some(server.to_owned()),
+        };
+        if let Some(value) = value {
+            self.insert("DateStyle", value);
         }
     }
 
@@ -57,6 +87,15 @@ impl Parameters {
         self.get(name)
             .and_then(ParameterValue::as_str)
             .unwrap_or(default)
+    }
+
+    /// The client's value for a parameter that pgdog syncs to the server.
+    pub(crate) fn tracked_value(&self, name: &str) -> Option<&ParameterValue> {
+        if is_untracked(name) {
+            None
+        } else {
+            self.get(name)
+        }
     }
 
     /// Create new parameters store from values.

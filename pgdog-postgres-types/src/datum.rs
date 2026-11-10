@@ -7,8 +7,8 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
-    Array, Data, Double, Error, Format, FromDataType, Interval, Numeric, Oid, Timestamp,
-    TimestampTz, ToDataRowColumn,
+    Array, Data, Double, Error, Format, FromDataType, Inet, Interval, Money, Numeric, Oid,
+    Timestamp, TimestampTz, ToDataRowColumn,
 };
 
 /// Represents a single piece of data in expression position. Trait
@@ -44,6 +44,10 @@ pub enum Datum {
     Oid(Oid),
     /// Array.
     Array(Array),
+    /// MONEY.
+    Money(Money),
+    /// INET or CIDR.
+    Inet(Inet),
     /// We don't know.
     Unknown(Bytes),
     /// NULL.
@@ -85,6 +89,10 @@ impl PartialOrd for Datum {
             (Oid(_), _) | (_, Oid(_)) => None,
             (Array(a), Array(b)) => a.partial_cmp(b),
             (Array(_), _) | (_, Array(_)) => None,
+            (Money(a), Money(b)) => a.partial_cmp(b),
+            (Money(_), _) | (_, Money(_)) => None,
+            (Inet(a), Inet(b)) => a.partial_cmp(b),
+            (Inet(_), _) | (_, Inet(_)) => None,
             (Unknown(a), Unknown(b)) => a.partial_cmp(b),
             (Unknown(_), _) | (_, Unknown(_)) => None,
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
@@ -116,6 +124,8 @@ impl ToDataRowColumn for Datum {
                 .encode(Format::Text)
                 .expect("array text encode should succeed for any decoded array")
                 .into(),
+            Money(money) => money.to_data_row_column(),
+            Inet(inet) => inet.to_data_row_column(),
             Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
             Boolean(val) => val.to_data_row_column(),
@@ -179,6 +189,9 @@ impl Datum {
             DataType::SmallInt => Ok(Datum::SmallInt(i16::decode(bytes, encoding)?)),
             DataType::Oid => Ok(Datum::Oid(Oid::decode(bytes, encoding)?)),
             DataType::Bool => Ok(Datum::Boolean(bool::decode(bytes, encoding)?)),
+            DataType::Money => Ok(Datum::Money(Money::decode(bytes, encoding)?)),
+            DataType::Inet => Ok(Datum::Inet(Inet::decode(bytes, encoding)?)),
+            DataType::Cidr => Ok(Datum::Inet(Inet::decode(bytes, encoding)?.into_cidr())),
             DataType::Array(element_oid) => match Array::decode_typed(bytes, encoding, element_oid)
             {
                 Ok(array) => Ok(Datum::Array(array)),
@@ -210,6 +223,8 @@ impl Datum {
             Datum::Vector(v) => v.encode(format),
             Datum::Oid(o) => o.encode(format),
             Datum::Array(a) => a.encode(format),
+            Datum::Money(m) => m.encode(format),
+            Datum::Inet(i) => i.encode(format),
             Datum::Null => Ok(Bytes::new()),
             Datum::Unknown(bytes) => Ok(bytes.clone()),
         }
@@ -232,6 +247,8 @@ impl Datum {
             Datum::Vector(..) => DataType::Vector,
             Datum::Oid(..) => DataType::Oid,
             Datum::Array(a) => DataType::Array(a.element_oid),
+            Datum::Money(..) => DataType::Money,
+            Datum::Inet(inet) => inet.data_type(),
             Datum::Null => DataType::Other(0),
             Datum::Unknown(..) => DataType::Other(0),
         }
@@ -280,7 +297,6 @@ pub enum DataType {
     DoublePrecision,
     Bool,
     SmallInt,
-    TinyInt,
     Numeric,
     Other(i32),
     Uuid,
@@ -288,6 +304,9 @@ pub enum DataType {
     Vector,
     /// Array type, carrying the element type OID.
     Array(i32),
+    Money,
+    Inet,
+    Cidr,
 }
 
 impl DataType {
@@ -300,8 +319,11 @@ impl DataType {
             23 => DataType::Integer,
             25 => DataType::Text,
             26 => DataType::Oid,
+            650 => DataType::Cidr,
             700 => DataType::Real,
             701 => DataType::DoublePrecision,
+            790 => DataType::Money,
+            869 => DataType::Inet,
             1043 => DataType::Text, // varchar
             1114 => DataType::Timestamp,
             1184 => DataType::TimestampTz,
@@ -309,6 +331,8 @@ impl DataType {
             1700 => DataType::Numeric,
             2950 => DataType::Uuid,
             // Array OIDs → Array(element_oid)
+            651 => DataType::Array(650),   // cidr[]
+            791 => DataType::Array(790),   // money[]
             1000 => DataType::Array(16),   // bool[]
             1005 => DataType::Array(21),   // int2[]
             1007 => DataType::Array(23),   // int4[]
@@ -318,6 +342,7 @@ impl DataType {
             1021 => DataType::Array(700),  // float4[]
             1022 => DataType::Array(701),  // float8[]
             1028 => DataType::Array(26),   // oid[]
+            1041 => DataType::Array(869),  // inet[]
             1115 => DataType::Array(1114), // timestamp[]
             1185 => DataType::Array(1184), // timestamptz[]
             1187 => DataType::Array(1186), // interval[]
@@ -325,6 +350,114 @@ impl DataType {
             2951 => DataType::Array(2950), // uuid[]
             _ => DataType::Other(oid),
         }
+    }
+
+    pub fn to_oid(&self) -> Option<i32> {
+        match self {
+            DataType::Bool => Some(16),
+            DataType::Bigint => Some(20),
+            DataType::SmallInt => Some(21),
+            DataType::Integer => Some(23),
+            DataType::Text => Some(25), //or 1043 (varchar)
+            DataType::Oid => Some(26),
+            DataType::Real => Some(700),
+            DataType::DoublePrecision => Some(701),
+            DataType::Timestamp => Some(1114),
+            DataType::TimestampTz => Some(1184),
+            DataType::Interval => Some(1186),
+            DataType::Numeric => Some(1700),
+            DataType::Uuid => Some(2950),
+            DataType::Array(oid) => Some(*oid),
+            DataType::Other(oid) => Some(*oid),
+            DataType::Vector => None,
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+            DataType::Cidr => todo!(),
+        }
+    }
+
+    /// Format the `DataType` into a type that can be
+    /// expressed as pg_catalog.<TYPE>
+    ///
+    /// Manually checked via `SELECT oid, typname, typnamespace::regnamespace AS schema_name
+    /// FROM pg_catalog.pg_type ORDER BY oid;` against `DataType::from_oid`
+    ///
+    /// <https://www.postgresql.org/docs/current/datatype.html>
+    pub fn as_pg_catalog_type(&self) -> &'static str {
+        match self {
+            DataType::Bigint => "int8",
+            DataType::Integer => "int4",
+            DataType::Text => "text",
+            DataType::Interval => "interval",
+            DataType::Timestamp => "timestamp",
+            DataType::TimestampTz => "timestamptz",
+            DataType::Real => "float4",
+            DataType::DoublePrecision => "float8",
+            DataType::Bool => "bool",
+            DataType::SmallInt => "int2",
+            DataType::Numeric => "numeric",
+            DataType::Uuid => "uuid",
+            DataType::Oid => "oid",
+            DataType::Vector => todo!(
+                "We don't have a type OID for this within from_oid; not sure what this maps to"
+            ),
+            DataType::Array(inner_oid) => match inner_oid {
+                1000 => "_bool",
+                1005 => "_int2",
+                1007 => "_int4",
+                1009 => "_text",
+                1015 => "_varchar",
+                1016 => "_int8",
+                1021 => "_float4",
+                1022 => "_float8",
+                1028 => "_oid",
+                1115 => "_timestamp",
+                1185 => "_timestamptz",
+                1187 => "_interval",
+                1231 => "_numeric",
+                2951 => "_uuid",
+                _ => panic!("We should have all the array types covered (this matches from_oid)"),
+            },
+            DataType::Other(_) => {
+                panic!("This needs to be handled properly with a client-facing error")
+            }
+            DataType::Money => todo!(),
+            DataType::Inet => todo!(),
+            DataType::Cidr => todo!(),
+        }
+    }
+
+    pub fn pg_catalog_type_to_datatype(pg_catalog_type: &str) -> Option<Self> {
+        Some(match pg_catalog_type {
+            "int8" => DataType::Bigint,
+            "int4" => DataType::Integer,
+            "text" => DataType::Text,
+            "interval" => DataType::Interval,
+            "timestamp" => DataType::Timestamp,
+            "timestamptz" => DataType::TimestampTz,
+            "float4" => DataType::Real,
+            "float8" => DataType::DoublePrecision,
+            "bool" => DataType::Bool,
+            "int2" => DataType::SmallInt,
+            "numeric" => DataType::Numeric,
+            "uuid" => DataType::Uuid,
+            "oid" => DataType::Oid,
+            "_bool" => DataType::Array(16),
+            "_int2" => DataType::Array(21),
+            "_int4" => DataType::Array(23),
+            "_text" => DataType::Array(25),
+            "_varchar" => DataType::Array(1043),
+            "_int8" => DataType::Array(20),
+            "_float4" => DataType::Array(700),
+            "_float8" => DataType::Array(701),
+            "_oid" => DataType::Array(26),
+            "_timestamp" => DataType::Array(1114),
+            "_timestamptz" => DataType::Array(1184),
+            "_interval" => DataType::Array(1186),
+            "_numeric" => DataType::Array(1700),
+            "_uuid" => DataType::Array(2950),
+            _ => return None,
+        })
     }
 }
 
@@ -342,13 +475,15 @@ impl fmt::Display for DataType {
             DoublePrecision => write!(f, "double precision"),
             Bool => write!(f, "boolean"),
             SmallInt => write!(f, "smallint"),
-            TinyInt => write!(f, "tinyint"),
             Numeric => write!(f, "numeric"),
             Other(i) => write!(f, "unknown type {i}"),
             Uuid => write!(f, "uuid"),
             Oid => write!(f, "oid"),
             Vector => write!(f, "vector"),
             Array(i) => write!(f, "{}[]", Self::from_oid(*i)),
+            Money => write!(f, "money"),
+            Inet => write!(f, "inet"),
+            Cidr => write!(f, "cidr"),
         }
     }
 }
@@ -379,6 +514,69 @@ mod tests {
             None
         );
         assert_eq!(Datum::Null.compare_numeric(&Datum::Integer(2)), None);
+    }
+
+    fn text_datum(oid: i32, value: &str) -> Datum {
+        Datum::new(
+            value.as_bytes(),
+            DataType::from_oid(oid),
+            Format::Text,
+            false,
+        )
+        .expect(value)
+    }
+
+    #[test]
+    fn test_money_inet_oids_decode_to_typed_datums() {
+        for (oid, value, data_type) in [
+            (790, "$5.00", DataType::Money),
+            (869, "10.0.0.10", DataType::Inet),
+            (650, "10.0.0.0/8", DataType::Cidr),
+            (791, "{$5.00}", DataType::Array(790)),
+            (1041, "{10.0.0.10}", DataType::Array(869)),
+            (651, "{10.0.0.0/8}", DataType::Array(650)),
+        ] {
+            assert_eq!(text_datum(oid, value).data_type(), data_type, "{value}");
+        }
+    }
+
+    #[test]
+    fn test_money_inet_data_row_column_is_original_text() {
+        for (oid, value) in [(790, "₹1,00,000.00"), (869, "10.0.0.1/32")] {
+            let column = text_datum(oid, value).to_data_row_column();
+            assert_eq!(column.data, Bytes::from(value));
+        }
+    }
+
+    #[test]
+    fn test_money_inet_do_not_compare_with_other_types() {
+        let money = text_datum(790, "$5.00");
+        let inet = text_datum(869, "10.0.0.1");
+        assert_eq!(money.partial_cmp(&Datum::Bigint(500)), None);
+        assert_eq!(inet.partial_cmp(&money), None);
+
+        for (data_type, name) in [
+            (DataType::Money, "money"),
+            (DataType::Inet, "inet"),
+            (DataType::Cidr, "cidr"),
+        ] {
+            assert_eq!(data_type.to_string(), name);
+        }
+    }
+
+    #[test]
+    fn test_type_arrays_compare_elements_by_value() {
+        let larger = text_datum(791, r#"{"₹1,000.00"}"#);
+        let smaller = text_datum(791, "{₹5.00}");
+        assert_eq!(larger.partial_cmp(&smaller), Some(Ordering::Greater));
+
+        let larger = text_datum(1041, "{10.0.0.10}");
+        let smaller = text_datum(1041, "{9.0.0.1}");
+        assert_eq!(larger.partial_cmp(&smaller), Some(Ordering::Greater));
+        assert_eq!(
+            larger.encode(Format::Text).unwrap(),
+            Bytes::from_static(b"{10.0.0.10}")
+        );
     }
 
     #[test]

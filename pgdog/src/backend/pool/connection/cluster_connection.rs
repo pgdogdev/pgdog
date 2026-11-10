@@ -27,6 +27,7 @@ pub(crate) struct ClusterConnection {
     cluster: Option<Cluster>,
     // Cancelled when an admin terminates the cluster (`FORCE_RELOAD`).
     query_cancellation: CancellationToken,
+    reloads: usize,
     // Traffic mirrors.
     mirrors: Vec<MirrorHandler>,
 }
@@ -43,7 +44,9 @@ impl ClusterConnection {
 
     /// Get cluster reference.
     pub(super) fn cluster(&self) -> Result<&Cluster, Error> {
-        self.cluster.as_ref().ok_or(Error::ClusterNotConnected)
+        self.cluster
+            .as_ref()
+            .ok_or_else(|| Error::ClusterNotConnected)
     }
 
     /// Get mirror references.
@@ -54,6 +57,10 @@ impl ClusterConnection {
     /// Get cluster query cancellation token.
     pub(super) fn query_cancellation_token(&self) -> CancellationToken {
         self.query_cancellation.clone()
+    }
+
+    pub(super) fn reloads(&self) -> usize {
+        self.reloads
     }
 
     /// Perform an atomic and safe reload of the cluster config. This is needed
@@ -73,6 +80,7 @@ impl ClusterConnection {
         let cluster = databases::databases().cluster(self.identity())?;
         self.cluster = Some(cluster);
         self.query_cancellation = self.cluster()?.get_cancellation_token().child_token();
+        self.reloads += 1;
 
         self.init_mirrors()?;
 
@@ -138,18 +146,19 @@ impl ClusterConnection {
         shard: usize,
         is_read: bool,
     ) -> Result<Guard, Error> {
-        match self.get_conn_internal(request, shard, is_read).await {
-            Ok(conn) => Ok(conn),
-            Err(Error::Pool(PoolError::Offline | PoolError::AllReplicasDown)) => {
-                debug!(
-                    "detected configuration reload, reloading [{}]",
-                    self.cluster()?.identifier()
-                );
+        loop {
+            match self.get_conn_internal(request, shard, is_read).await {
+                Ok(conn) => return Ok(conn),
+                Err(Error::Pool(PoolError::Offline)) => {
+                    debug!(
+                        "detected configuration reload, reloading [{}]",
+                        self.cluster()?.identifier()
+                    );
 
-                self.safe_reload().await?;
-                self.get_conn_internal(request, shard, is_read).await
+                    self.safe_reload().await?;
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => Err(err),
         }
     }
 

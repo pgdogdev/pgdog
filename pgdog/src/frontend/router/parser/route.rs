@@ -146,6 +146,8 @@ pub(crate) struct Route {
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
     stmt_type: Option<StatementType>,
     table_change: TableChange,
+    /// Minimum replica LSN in its 64-bit representation.
+    pub(crate) lsn: Option<u64>,
 }
 
 impl Display for Route {
@@ -270,7 +272,10 @@ impl Route {
     }
 
     pub(crate) fn aggregate(&self) -> &Aggregate {
-        &self.aggregate
+        self.projection_rewrite_plan
+            .as_deref()
+            .and_then(ProjectionRewritePlan::aggregate)
+            .unwrap_or(&self.aggregate)
     }
 
     /// Set shard on this route, along with reasoning

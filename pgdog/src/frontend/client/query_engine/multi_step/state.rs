@@ -39,7 +39,7 @@ impl MultiServerState {
             'T' | '1' | '2' | '3' | 't' => *count == 1,
             'C' => {
                 let command_complete = CommandComplete::from_bytes(message.to_bytes())?;
-                self.rows += command_complete.rows()?.unwrap_or(0);
+                self.rows += command_complete.rows().unwrap_or(0);
                 false
             }
             'Z' => {

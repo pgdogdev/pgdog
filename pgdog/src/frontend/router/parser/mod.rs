@@ -46,7 +46,7 @@ pub(crate) use distinct::{Distinct, DistinctBy, DistinctColumn};
 pub(crate) use error::Error;
 pub(crate) use from_clause::FromClause;
 use function::Function;
-pub(crate) use having::{CompareOperator, HavingExpr, HavingRewritePlan, HavingValue};
+pub(crate) use having::HavingRewritePlan;
 pub(crate) use key::Key;
 pub(crate) use limit::{Limit, LimitClause};
 pub(crate) use order_by::OrderBy;

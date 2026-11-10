@@ -60,4 +60,7 @@ pub enum Error {
 
     #[error("value out of range for {0}")]
     NumericOutOfRange(DataType),
+
+    #[error("{0} text output depends on server settings")]
+    SessionDependentText(DataType),
 }

@@ -90,7 +90,7 @@ async fn wait_for_slot(
     let target: Vec<String> = server
         .fetch_all("SELECT pg_current_wal_lsn()::text")
         .await?;
-    let target = target.first().ok_or(Error::MissingData)?;
+    let target = target.first().ok_or_else(|| Error::MissingData)?;
     let query = format!(
         "SELECT 1::bigint FROM pg_replication_slots \
          WHERE slot_name = '{slot_name}' \
@@ -392,16 +392,16 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
             state.sync_tables().await?;
             state.create_slots(&cancel).await?;
             let tables = state.tables();
-            let tables = tables.get(&0).ok_or(Error::MissingData)?;
+            let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
             let child_table = tables
                 .iter()
                 .find(|table| table.table.name == "children")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
             let parent_table = tables
                 .iter()
                 .find(|table| table.table.name == "parents")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
 
             (child_table, parent_table)
@@ -527,16 +527,16 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
             state.sync_tables().await?;
             state.create_slots(&cancel).await?;
             let tables = state.tables();
-            let tables = tables.get(&0).ok_or(Error::MissingData)?;
+            let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
             let child = tables
                 .iter()
                 .find(|table| table.table.name == "children")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
             let parent = tables
                 .iter()
                 .find(|table| table.table.name == "parents")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
 
             (child, parent)
@@ -649,16 +649,16 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
             state.sync_tables().await?;
             state.create_slots(&cancel).await?;
             let tables = state.tables();
-            let tables = tables.get(&0).ok_or(Error::MissingData)?;
+            let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
             let child = tables
                 .iter()
                 .find(|table| table.table.name == "children")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
             let parent = tables
                 .iter()
                 .find(|table| table.table.name == "parents")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
 
             (child, parent)

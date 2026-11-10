@@ -1,10 +1,8 @@
 //! Handles re-writing the WHERE clause of a Select / Update / Delete statement when a subquery is present.
 
-use std::ops::Deref;
-
 use pg_raw_parse::{
-    ConstValue, Node, NodeMut, deparse,
-    make::{MemoryToken, Unique, owned},
+    ConstValue, Node, NodeMut,
+    make::{MemoryToken, Unique},
     nodes::SubLink,
     raw::SubLinkType,
     transform,
@@ -13,83 +11,67 @@ use pgdog_postgres_types::Datum;
 use tracing::debug;
 
 use crate::{
-    frontend::{
-        client::query_engine::multi_step::{Error, SubqueryMulti},
-        router::parser::{Error as ParserError, rewrite},
-    },
+    frontend::{client::query_engine::multi_step::SubqueryMulti, router::parser::rewrite},
     net::{DataRow, Decoder, RowDescription},
 };
 
 impl<'a> SubqueryMulti<'a> {
-    pub(crate) fn handle_where_clause(
+    pub(crate) fn handle_where_clause<'mem>(
         &self,
-        statement: Node<'a>,
+        mem: MemoryToken<'mem>,
+        mut statement: Unique<'mem, Node<'mem>>,
         row_description: Option<&RowDescription>,
-        data_rows: &Vec<DataRow>,
-    ) -> Result<Option<String>, Error> {
+        data_rows: &[DataRow],
+    ) -> Unique<'mem, Node<'mem>> {
         let Some((sublink, lexpr)) =
-            rewrite::statement::subquery::where_clause::has_sub_link_in_where(statement)
+            rewrite::statement::subquery::where_clause::has_sub_link_in_where(statement.as_ref())
         else {
-            return Ok(None);
+            return statement;
         };
-        let new_stmt = owned(|mem| {
-            let owned_stmt = mem.make_unique(statement);
-            let mut owned_raw_stmt = mem.make_raw_stmt(owned_stmt);
-            let mut mutable_raw_stmt = owned_raw_stmt.as_mut();
 
-            // Fetch the where clause.
-            let mut where_clause = mem.make_unique(match mutable_raw_stmt.stmt() {
-                Node::SelectStmt(stmt) => stmt.where_clause(),
-                Node::UpdateStmt(stmt) => stmt.where_clause(),
-                Node::DeleteStmt(stmt) => stmt.where_clause(),
-                _ => unreachable!("Parser should prevent other statements from reaching here."),
-            });
-
-            // Replace the SubLink node present with our own re-written version.
-            transform::transform(&mut where_clause, |node| match &*node {
-                NodeMut::SubLink(_) => {
-                    let sublink_replacement = self.rewrite_sublink_in_where_clause(
-                        sublink,
-                        data_rows,
-                        row_description.as_ref().unwrap(),
-                        mem,
-                        lexpr,
-                    );
-
-                    node.replace(sublink_replacement);
-
-                    // We shouldn't recurse here. Even if we have nested subqueries,
-                    // that'll be handled later through routing through the QueryEngine again.
-                    None
-                }
-                _ => Some(node),
-            });
-
-            // Put back the modified where clause.
-            match mutable_raw_stmt.stmt_mut() {
-                NodeMut::SelectStmt(mut stmt) => stmt.set_where_clause(where_clause),
-                NodeMut::UpdateStmt(mut stmt) => stmt.set_where_clause(where_clause),
-                NodeMut::DeleteStmt(mut stmt) => stmt.set_where_clause(where_clause),
-                _ => unreachable!("Parser should prevent other statements from reaching here."),
-            };
-
-            owned_raw_stmt
+        // Fetch the where clause.
+        let mut where_clause = mem.make_unique(match statement.as_ref() {
+            Node::SelectStmt(stmt) => stmt.where_clause(),
+            Node::UpdateStmt(stmt) => stmt.where_clause(),
+            Node::DeleteStmt(stmt) => stmt.where_clause(),
+            _ => unreachable!("Parser should prevent other statements from reaching here."),
         });
 
-        let new_sql: String = {
-            let new_insert_sql = deparse(new_stmt.deref()).map_err(ParserError::from)?;
-            let new_insert_sql = new_insert_sql.as_str();
+        // Replace the SubLink node present with our own re-written version.
+        transform::transform(&mut where_clause, |node| match &*node {
+            NodeMut::SubLink(_) => {
+                let sublink_replacement = self.rewrite_sublink_in_where_clause(
+                    sublink,
+                    data_rows,
+                    row_description.as_ref().unwrap(),
+                    mem,
+                    lexpr,
+                );
 
-            new_insert_sql.to_string()
+                node.replace(sublink_replacement);
+
+                // We shouldn't recurse here. Even if we have nested subqueries,
+                // that'll be handled later through routing through the QueryEngine again.
+                None
+            }
+            _ => Some(node),
+        });
+
+        // Put back the modified where clause.
+        match statement.as_mut() {
+            NodeMut::SelectStmt(mut stmt) => stmt.set_where_clause(where_clause),
+            NodeMut::UpdateStmt(mut stmt) => stmt.set_where_clause(where_clause),
+            NodeMut::DeleteStmt(mut stmt) => stmt.set_where_clause(where_clause),
+            _ => unreachable!("Parser should prevent other statements from reaching here."),
         };
 
-        Ok(Some(new_sql))
+        statement
     }
 
     fn rewrite_sublink_in_where_clause<'mem>(
         &self,
         sublink: &SubLink,
-        data_rows: &Vec<DataRow>,
+        data_rows: &[DataRow],
         row_description: &RowDescription,
         mem: MemoryToken<'mem>,
         lexpr: Node<'_>,

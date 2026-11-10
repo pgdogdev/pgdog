@@ -41,6 +41,7 @@ use multi_tenant::MultiTenantCheck;
 use pg_raw_parse::{Node, nodes};
 use plugins::PluginOutput;
 
+use crate::frontend::router::parser::rewrite::statement::insert::InsertSplitPlan;
 use tracing::{debug, trace};
 
 /// Query parser.
@@ -273,7 +274,10 @@ impl QueryParser {
             }
         }
 
-        let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
+        let statement = context
+            .router_context
+            .ast
+            .ok_or_else(|| Error::EmptyQuery)?;
         let routing_comment = context
             .router_context
             .comment
@@ -283,7 +287,7 @@ impl QueryParser {
             self.ensure_explain_recorder(stmt, context);
         }
 
-        // Parse hardcoded shard from a query comment.
+        // Parse hardcoded shard, role or LSN from a query comment.
         if context.router_needed || context.dry_run {
             let mut comment_shard_set = false;
             match &routing_comment.shard {
@@ -515,11 +519,9 @@ impl QueryParser {
             if shard.is_direct() {
                 route.set_shard(shard);
             }
-        }
 
-        // Set plugin-specified route, if available.
-        // Plugins override what we calculated above.
-        if let Command::Query(ref mut route) = command {
+            // Set plugin-specified route, if available.
+            // Plugins override what we calculated above.
             if let Some(read) = self.plugin_output.read {
                 route.set_read(read);
             }
@@ -529,6 +531,10 @@ impl QueryParser {
                     .shards_calculator
                     .push(ShardWithPriority::new_plugin(shard.clone()));
                 route.set_shard(context.shards_calculator.shard());
+            }
+
+            if let Some(lsn) = routing_comment.lsn {
+                route.lsn = Some(lsn.lsn);
             }
         }
 
@@ -556,7 +562,11 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !context.router_context.cached {
                 Cache::get().record_normalized(
-                    statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
+                    statement
+                        .ast
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| Error::EmptyQuery)?,
                     command.route(),
                 )?;
             }
@@ -658,10 +668,19 @@ impl QueryParser {
             user: context.router_context.cluster.user(),
             search_path: context.router_context.parameter_hints.search_path,
         };
+        let insert_rewritten = context.router_context.ast.is_some_and(|ast| {
+            !ast.rewrite_plan.subqueries.is_empty()
+                || matches!(
+                    ast.rewrite_plan.insert_split,
+                    Some(InsertSplitPlan::Unnest(_))
+                )
+        });
+
         let mut parser =
             StatementParser::new(stmt, context.router_context.bind, context.sharding_schema)
                 .with_schema_lookup(schema_lookup)
-                .with_explain(self.recorder_mut().is_some());
+                .with_explain(self.recorder_mut().is_some())
+                .with_insert_rewritten(insert_rewritten);
         parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(

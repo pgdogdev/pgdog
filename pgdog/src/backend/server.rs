@@ -35,7 +35,7 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
+    config::{ConfigAndUsers, ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
     net::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
@@ -132,7 +132,7 @@ pub(crate) struct Server {
     stream: Option<Stream>,
     key: BackendKeyData,
     id: BackendPid,
-    params: Parameters,
+    params: Arc<Parameters>,
     changed_params: Parameters,
     client_params: ParameterStore,
     stats: Stats,
@@ -200,9 +200,6 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
-                    if options.session_replication_role {
-                        server.set_session_replication_role().await?;
-                    }
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {
@@ -231,6 +228,24 @@ impl Server {
         ))))
     }
 
+    async fn open(addr: &Address, config: &ConfigAndUsers) -> Result<Stream, Error> {
+        #[cfg(test)]
+        if addr.host == super::fake_server::HOST {
+            return Ok(super::fake_server::connect());
+        }
+
+        let stream = TcpStream::connect(addr.addr().await?).await?;
+
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
+            warn!(
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                config.config.tcp, err, addr,
+            );
+        }
+
+        Ok(Stream::plain(stream, config.config.memory.net_buffer))
+    }
+
     /// Create new PostgreSQL server connection with the given auth secret (e.g. password).
     async fn connect_with_auth_secret(
         addr: &Address,
@@ -241,17 +256,8 @@ impl Server {
         oids: Arc<Oids>,
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let stream = TcpStream::connect(addr.addr().await?).await?;
         let config = config();
-
-        if let Err(err) = tweak(&stream, &config.config.tcp) {
-            warn!(
-                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
-                config.config.tcp, err, addr,
-            );
-        }
-
-        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
+        let mut stream = Self::open(addr, &config).await?;
 
         let tls = UpstreamTlsSettings::resolve(&config.config.general, &addr.tls);
 
@@ -410,7 +416,7 @@ impl Server {
         // Generating a random one is fine, it just won't work when we try to
         // cancel a query with this secret.
         let key = key_data.unwrap_or_else(BackendKeyData::random_legacy);
-        let params: Parameters = params.into();
+        let params = Arc::new(Parameters::from(params));
 
         info!(
             "new server connection: auth={}, source={}, reason={} [{}] {}",
@@ -513,10 +519,6 @@ impl Server {
                 self.send_stream(protocol_message).await?;
                 self.send_stream(message).await?;
             }
-            HandleResult::PrependProtocolMessageRewrite { prepend, rewrite } => {
-                self.send_stream(prepend).await?;
-                self.send_stream(rewrite).await?;
-            }
             HandleResult::PrependRewrite { prepend, rewrite } => {
                 self.send_prepare(prepend).await?;
                 self.send_stream(rewrite).await?;
@@ -532,11 +534,7 @@ impl Server {
             self.send_stream(close).await?;
         }
 
-        self.send_stream(prepare.parse()).await?;
-        if let Some(describe) = prepare.describe() {
-            self.send_stream(describe).await?;
-        }
-        Ok(())
+        self.send_stream(prepare.parse()).await
     }
 
     /// Send a message to Postgres and force us to ignore its respose in [`Self::read`].
@@ -881,18 +879,8 @@ impl Server {
     }
 
     /// Server parameters.
-    pub(crate) fn params(&self) -> &Parameters {
+    pub(crate) fn params(&self) -> &Arc<Parameters> {
         &self.params
-    }
-
-    /// Manually set the session_replication_role setting via SET
-    /// since apparently we can't do this via startup parameters.
-    async fn set_session_replication_role(&mut self) -> Result<(), Error> {
-        self.execute_checked("SET session_replication_role TO replica")
-            .await?;
-        self.params.insert("session_replication_role", "replica");
-
-        Ok(())
     }
 
     /// Execute a batch of queries and return all results.
@@ -1423,7 +1411,7 @@ pub(crate) mod test {
                 stream: None,
                 key,
                 id,
-                params: Parameters::default(),
+                params: Arc::default(),
                 changed_params: Parameters::default(),
                 client_params: ParameterStore::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
@@ -1783,7 +1771,7 @@ pub(crate) mod test {
 
             assert!(server.done());
             assert_eq!(
-                server.stats().total().idle_in_transaction_time,
+                server.stats().last_checkout().idle_in_transaction_time,
                 Duration::ZERO
             );
         }
@@ -3072,17 +3060,13 @@ pub(crate) mod test {
 
         server.execute("SELECT 1").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
-            Duration::ZERO,
-        );
-        assert_eq!(
             server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
         server.execute("BEGIN").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
@@ -3091,7 +3075,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 2").await.unwrap();
 
-        let idle_time = server.stats().total().idle_in_transaction_time;
+        let idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             idle_time >= Duration::from_millis(50),
             "Expected idle time >= 50ms, got {:?}",
@@ -3107,7 +3091,7 @@ pub(crate) mod test {
 
         server.execute("COMMIT").await.unwrap();
 
-        let final_idle_time = server.stats().total().idle_in_transaction_time;
+        let final_idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             final_idle_time >= Duration::from_millis(150),
             "Expected final idle time >= 150ms, got {:?}",
@@ -3121,7 +3105,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 3").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             final_idle_time,
         );
     }
@@ -3139,7 +3123,6 @@ pub(crate) mod test {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(server.read().await.is_err());
-        assert_eq!(server.stats().total().idle_xact_timeouts, 1);
         assert_eq!(server.stats().last_checkout().idle_xact_timeouts, 1);
     }
 

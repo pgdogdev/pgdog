@@ -24,14 +24,11 @@ impl Debug for CommandComplete {
 
 impl CommandComplete {
     /// Number of rows sent/received.
-    pub(crate) fn rows(&self) -> Result<Option<usize>, Error> {
-        Ok(self
-            .command()
-            .split(" ")
-            .last()
-            .ok_or(Error::CommandCompleteNoRows)?
-            .parse()
-            .ok())
+    pub(crate) fn rows(&self) -> Option<usize> {
+        let command = self.command();
+        let rows = command.rsplit_once(' ').map_or(command, |(_, rows)| rows);
+
+        rows.parse().ok()
     }
 
     /// Get command tag.
@@ -54,13 +51,23 @@ impl CommandComplete {
     }
 
     /// Rewrite the message with new number of rows.
-    pub(crate) fn rewrite(&self, rows: usize) -> Result<Self, Error> {
-        let mut parts = self.command().split(" ").collect::<Vec<_>>();
-        parts.pop();
-        let rows = rows.to_string();
-        parts.push(rows.as_str());
+    pub(crate) fn rewrite(&self, rows: usize) -> Self {
+        let command = self.command();
+        let mut rows_buffer = itoa::Buffer::new();
+        let rows = rows_buffer.format(rows);
 
-        Ok(Self::from_str(&parts.join(" ")))
+        let mut payload = Payload::named('C');
+        payload.reserve(command.len() + rows.len() + 1);
+
+        if let Some((prefix, _)) = command.rsplit_once(' ') {
+            payload.put_slice(prefix.as_bytes());
+            payload.put_u8(b' ');
+        }
+        payload.put_string(rows);
+
+        Self {
+            payload: payload.freeze(),
+        }
     }
 
     pub(crate) fn new(command: impl AsRef<str>) -> Self {
@@ -106,32 +113,32 @@ mod test {
     fn rows_and_tag_for_dml() {
         let insert = CommandComplete::from_str("INSERT 0 5");
         assert_eq!(insert.tag(), "INSERT");
-        assert_eq!(insert.rows().unwrap(), Some(5));
+        assert_eq!(insert.rows(), Some(5));
 
         let update = CommandComplete::from_str("UPDATE 3");
         assert_eq!(update.tag(), "UPDATE");
-        assert_eq!(update.rows().unwrap(), Some(3));
+        assert_eq!(update.rows(), Some(3));
 
         let delete = CommandComplete::from_str("DELETE 2");
         assert_eq!(delete.tag(), "DELETE");
-        assert_eq!(delete.rows().unwrap(), Some(2));
+        assert_eq!(delete.rows(), Some(2));
     }
 
     #[test]
     fn rows_and_tag_for_copy() {
         let copy = CommandComplete::from_str("COPY 42");
         assert_eq!(copy.tag(), "COPY");
-        assert_eq!(copy.rows().unwrap(), Some(42));
+        assert_eq!(copy.rows(), Some(42));
     }
 
     #[test]
     fn rows_none_for_non_dml() {
         let begin = CommandComplete::from_str("BEGIN");
         assert_eq!(begin.tag(), "BEGIN");
-        assert_eq!(begin.rows().unwrap(), None);
+        assert_eq!(begin.rows(), None);
 
         let select = CommandComplete::from_str("SELECT 10");
         assert_eq!(select.tag(), "SELECT");
-        assert_eq!(select.rows().unwrap(), Some(10));
+        assert_eq!(select.rows(), Some(10));
     }
 }

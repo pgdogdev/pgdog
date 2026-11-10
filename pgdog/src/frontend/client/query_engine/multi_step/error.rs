@@ -27,6 +27,9 @@ pub(crate) enum Error {
 
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("sql parser: {0}")]
+    SqlParser(#[from] pg_raw_parse::error::Error),
 }
 
 #[derive(Debug, Error)]

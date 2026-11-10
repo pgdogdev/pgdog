@@ -30,9 +30,6 @@ pub(crate) enum Error {
     #[error("unexpected message, expected {0} got {1}")]
     UnexpectedMessage(char, char),
 
-    #[error("CommandComplete contains no row counts")]
-    CommandCompleteNoRows,
-
     #[error("not utf-8")]
     Utf8(#[from] std::str::Utf8Error),
 
@@ -56,7 +53,6 @@ impl From<NetError> for Error {
             NetError::UnexpectedMessage(expected, actual) => {
                 Self::UnexpectedMessage(expected, actual)
             }
-            NetError::CommandCompleteNoRows => Self::CommandCompleteNoRows,
             NetError::Utf8(error) => Self::Utf8(error),
             other => Self::Unexpected(other.to_string()),
         }

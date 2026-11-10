@@ -73,7 +73,7 @@ impl ReplicationStream {
         if let Err(err) = stream.check_confirmed_sent_lsn().await {
             warn!("[replication] final completion check failed: {err}");
         }
-        let final_lsn = Lsn::from_i64(stream.status_update().last_applied);
+        let final_lsn = Lsn::from_u64(stream.status_update().last_applied);
         let missed = stream.missed_rows();
         self.updater.update(|p| {
             p.advance_applied_lsn(final_lsn);
@@ -88,10 +88,10 @@ impl ReplicationStream {
         stream: &mut StreamSubscriber,
     ) -> Result<(), Error> {
         let missed = stream.missed_rows();
-        let applied = Lsn::from_i64(stream.status_update().last_applied);
+        let applied = Lsn::from_u64(stream.status_update().last_applied);
         let bytes_sharded = stream.bytes_sharded();
         let rows_sharded = stream.rows_sharded();
-        let origin_lsn = Lsn::from_i64(stream.lsn());
+        let origin_lsn = Lsn::from_u64(stream.lsn());
         self.updater.update(|p| {
             p.advance_applied_lsn(applied);
             p.missed_rows.merge(missed);
@@ -246,12 +246,12 @@ impl ReplicationStream {
                                     }
                                     debug!(
                                         "origin at lsn {} [{}]",
-                                        Lsn::from_i64(ka.wal_end),
+                                        Lsn::from_u64(ka.wal_end),
                                         slot.addr()
                                     );
                                 } else {
                                     if let Some(su) = stream.handle(data).await? {
-                                        let applied = Lsn::from_i64(su.last_applied);
+                                        let applied = Lsn::from_u64(su.last_applied);
                                         self.updater.update(|p| {
                                             p.last_transaction = Some(Instant::now());
                                             p.advance_applied_lsn(applied);
@@ -378,7 +378,10 @@ mod tests {
                 ))
                 .await?;
             let mut tables = Table::load(&self.publication, &mut self.server).await?;
-            let table = tables.first_mut().ok_or("publication has no table")?;
+            #[allow(clippy::unnecessary_lazy_evaluations)]
+            let table = tables
+                .first_mut()
+                .ok_or_else(|| "publication has no table")?;
             table.table.parent_name = self.destination_table.clone();
             table.table.parent_schema = table.table.schema.clone();
             let slot = ReplicationSlot::new_permanent(

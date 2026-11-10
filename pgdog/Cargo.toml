@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.63"
+version = "0.1.64"
 edition = "2024"
 description = "Modern PostgreSQL proxy, pooler, load balancer and database sharder."
 authors = ["PgDog <hi@pgdog.dev>"]
@@ -38,6 +38,7 @@ aws-lc-rs = "1"
 arc-swap = "1"
 toml = "0.8"
 pgdog-plugin.workspace = true
+pgdog-util.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
 itoa = "1"

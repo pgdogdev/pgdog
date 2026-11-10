@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     net::{Parameter, Query},
     parameters::*,
@@ -485,6 +487,177 @@ fn test_restore_startup_discards_all_runtime_state() {
     store.set("application_name", "new_session");
     store.rollback();
     assert_parameter(&store, "application_name", Some("new_session"));
+}
+
+fn startup_with_server_datestyle(server: &str, client: Option<&str>) -> Parameters {
+    let mut startup = Parameters::default();
+    if let Some(client) = client {
+        startup.insert("datestyle", client);
+    }
+    startup.set_server_defaults(&Parameters::from([("DateStyle", server)].as_slice()));
+    startup
+}
+
+#[test]
+fn test_startup_datestyle_merges_with_server_datestyle() {
+    for (client, expected) in [
+        (None, "SQL, DMY"),
+        (Some("YMD"), "SQL, YMD"),
+        (Some("iso"), "ISO, DMY"),
+        (Some("german"), "German, DMY"),
+        (Some("iso,mdy"), "ISO, MDY"),
+        (Some("ISO, MDY"), "ISO, MDY"),
+    ] {
+        let startup = startup_with_server_datestyle("SQL, DMY", client);
+        assert_eq!(
+            startup.get("DateStyle").and_then(ParameterValue::as_str),
+            Some(expected),
+            "startup DateStyle {client:?}"
+        );
+    }
+
+    let mut client = Parameters::from([("DateStyle", "YMD")].as_slice());
+    client.set_server_defaults(&Parameters::default());
+    assert_eq!(
+        client.get("DateStyle").and_then(ParameterValue::as_str),
+        Some("YMD"),
+        "no server DateStyle leaves the client value unchanged"
+    );
+}
+
+#[test]
+fn test_invalid_startup_datestyle_is_kept_unlike_postgres() {
+    let startup = startup_with_server_datestyle("SQL, DMY", Some("bogus"));
+    assert_eq!(
+        startup.get("DateStyle").and_then(ParameterValue::as_str),
+        Some("bogus")
+    );
+}
+
+#[test]
+fn test_reset_datestyle_restores_normalized_startup_value() {
+    for in_transaction in [false, true] {
+        let mut store =
+            ParameterStore::new(startup_with_server_datestyle("ISO, MDY", Some("sql,dmy")));
+        if in_transaction {
+            store.begin();
+        }
+        store.set("DateStyle", "Postgres, MDY");
+        store.reset("DateStyle");
+        assert_parameter(&store, "DateStyle", Some("SQL, DMY"));
+    }
+}
+
+#[test]
+fn test_partial_startup_datestyle_syncs_full_value() {
+    let mut server = ParameterStore::new(Parameters::from([("DateStyle", "ISO, MDY")].as_slice()));
+    let previous = ParameterStore::new(startup_with_server_datestyle("ISO, MDY", Some("sql,dmy")));
+    let queries = server.sync(&previous);
+    server.sync_complete(queries);
+
+    let client = ParameterStore::new(startup_with_server_datestyle("ISO, MDY", Some("YMD")));
+    assert_eq!(
+        server.sync(&client),
+        vec![Query::new(r#"SET "datestyle" TO "ISO, YMD""#)],
+        "a partial startup DateStyle must not keep the previous client's style"
+    );
+}
+
+fn store_with_server_timezone(startup: &[(&str, &str)]) -> ParameterStore {
+    ParameterStore::new(Parameters::from(startup))
+        .with_server_reported(Arc::new(Parameters::from([("TimeZone", "UTC")].as_slice())))
+}
+
+fn reported_timezone(store: &ParameterStore) -> Option<&str> {
+    store
+        .get_reported("TimeZone")
+        .and_then(ParameterValue::as_str)
+}
+
+#[test]
+fn test_get_reported_falls_back_to_server() {
+    let mut store = store_with_server_timezone(&[]);
+    assert_eq!(reported_timezone(&store), Some("UTC"));
+
+    store.set("TimeZone", "Europe/Paris");
+    assert_eq!(reported_timezone(&store), Some("Europe/Paris"));
+
+    store.reset("TimeZone");
+    assert_eq!(
+        reported_timezone(&store),
+        Some("UTC"),
+        "RESET without a startup value restores the server value"
+    );
+}
+
+#[test]
+fn test_get_reported_prefers_startup_over_server() {
+    let mut store = store_with_server_timezone(&[("TimeZone", "Europe/Paris")]);
+    store.set("TimeZone", "UTC");
+    store.reset("TimeZone");
+    assert_eq!(reported_timezone(&store), Some("Europe/Paris"));
+}
+
+#[test]
+fn test_set_to_server_value_is_not_reported() {
+    let store = store_with_server_timezone(&[]);
+    let utc = ParameterValue::from("UTC");
+    assert!(
+        ParameterValidator::notify_client("TimeZone", store.get_reported("TimeZone"), Some(&utc))
+            .is_none()
+    );
+}
+
+#[test]
+fn test_rollback_reports_server_value() {
+    let mut store = store_with_server_timezone(&[]);
+    store.begin();
+    store.set("TimeZone", "Europe/Paris");
+
+    let statuses: Vec<_> = store.transaction_end_status(true).collect();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].name, "TimeZone");
+    assert_eq!(statuses[0].value.as_str(), Some("UTC"));
+
+    store.rollback();
+    assert_eq!(reported_timezone(&store), Some("UTC"));
+}
+
+#[test]
+fn test_commit_reports_nothing_when_value_kept() {
+    let mut store = store_with_server_timezone(&[]);
+    store.begin();
+    store.set("TimeZone", "Europe/Paris");
+    assert_eq!(store.transaction_end_status(false).count(), 0);
+}
+
+#[test]
+fn test_commit_after_set_local_reports_server_value() {
+    let mut store = store_with_server_timezone(&[]);
+    store.begin();
+    store.set_local("TimeZone", "Europe/Paris");
+
+    let statuses: Vec<_> = store.transaction_end_status(false).collect();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].name, "TimeZone");
+    assert_eq!(statuses[0].value.as_str(), Some("UTC"));
+
+    store.commit();
+    assert_eq!(reported_timezone(&store), Some("UTC"));
+}
+
+#[test]
+fn test_commit_after_reset_in_transaction_reports_nothing() {
+    let mut store = store_with_server_timezone(&[]);
+    store.set("TimeZone", "Europe/Paris");
+    store.begin();
+    store.reset("TimeZone");
+
+    assert_eq!(reported_timezone(&store), Some("UTC"));
+    assert_eq!(store.transaction_end_status(false).count(), 0);
+
+    store.commit();
+    assert_eq!(reported_timezone(&store), Some("UTC"));
 }
 
 mod server;

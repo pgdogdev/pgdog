@@ -4,6 +4,42 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### v0.1.64
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.64` |
+
+#### Performance
+
+- Use PGO for release builds improving x86 performance by 5% and ARM64 by 30%
+
+#### Bug fixes
+
+- Two-phase commit in auto mode would not commit correctly with multi-tuple INSERT statements
+- Empty query (`;`) used by Rails for health checking a connection would be blocked inside a failed transaction
+- Query cancellation would leak between connections if the query finished on its own before the cancellation request was processed by Postgres
+- Primary key discovery wouldn't work for read-only users which would cause automatic primary key injection to break in sharded deployments if the read user was used to fetch the database schema (race condition)
+- UNLISTEN * wouldn't do anything, it now correctly unsubscribes the client from all channel notifications
+- Fast, consecutive RELOADs could propagate "pool is offline" to connected clients
+- Replica lag formula would break if user changed the `timezone` session parameter; this is because the replica lag monitor re-uses connections from the user pool & and we don't (intentionally) reset parameters on connection checkin. All time functions in the replica lag query now use `AT TIME ZONE 'UTC'`
+- `read_write_split = "exclude_primary"` was allowing reads on primary if no replicas were available
+- Inject `Describe` into extended protocol used in cross-shard queries and use the returned `RowDescription` to decode rows when performing cross-shard aggregation; this avoids data type mismatches during resharding when we automatically upgrade `integer` columns to `bigint`
+
+#### Features
+
+- Correctly handle `count(*)::numeric` type cast in cross-shard SELECT
+- Filter replicas from the load balancer using their last known LSN by providing the LSN as part of a query comment, e.g., `/* pgdog_lsn: 0/0 */ SELECT [...]`
+- Add `read_write_split` setting to users in `users.toml`
+- Partial support for `HAVING` clause in aggregates
+- Support sorting/aggregating on `inet`, `money` and `cidr` data types
+
+#### Security
+
+- Added snakeoil certs back into the Docker image. Don't use them in prod, but they are useful for testing. Security scanners flag those; just ignore it.
+
+**Full Changelog**: https://github.com/pgdogdev/pgdog/compare/v0.1.63...v0.1.64
+
 ### v0.1.63
 
 | Application | Docker image                     |

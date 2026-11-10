@@ -254,6 +254,10 @@ impl Message {
         self.payload.clone()
     }
 
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.payload
+    }
+
     /// Number of bytes in the message.
     pub(crate) fn len(&self) -> usize {
         self.payload.len()

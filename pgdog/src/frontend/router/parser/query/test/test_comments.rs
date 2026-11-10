@@ -1,6 +1,28 @@
-use crate::frontend::router::parser::Shard;
+use crate::{backend::pool::Request, frontend::router::parser::Shard};
 
 use super::setup::*;
+
+#[test]
+fn test_comment_pgdog_lsn() {
+    let mut test = QueryParserTest::new();
+
+    for (sql, expected) in [
+        ("SELECT 1", None),
+        ("/* pgdog_lsn: 0/16B6C50 */ SELECT 1", Some(0x16B6C50)),
+        ("/* pgdog_lsn: 1/0 */ SELECT 1", Some(1 << 32)),
+        ("/* pgdog_lsn: 80000000/0 */ SELECT 1", Some(1 << 63)),
+        (
+            "/* pgdog_lsn: FFFFFFFF/FFFFFFFF */ SELECT 1",
+            Some(u64::MAX),
+        ),
+    ] {
+        let command = test.execute(vec![Query::new(sql).into()]);
+        let route = command.route();
+        assert_eq!(route.lsn, expected, "{sql}");
+        let request = Request::new(Default::default(), route, false);
+        assert_eq!(request.lsn, expected, "{sql}");
+    }
+}
 
 #[test]
 fn test_comment_pgdog_role_primary() {
