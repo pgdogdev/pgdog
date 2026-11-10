@@ -44,13 +44,26 @@ pub(crate) enum InsertSplitPlan {
 }
 
 // INSERT INTO .. SELECT * FROM unnest($1::pg_catalog._int8, ..)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UnnestInsert {
     // The Bind parameter numbers of the unnest(..) arguments (in argument order) + OIDs of the array elements
     array_params: Vec<(u16, i32)>,
-    // INSERT with VALUES ($1, .., $k) instead of unnest(..); only used to route the rows one at a time (there's
+    // INSERT with VALUES (..) instead of unnest(..); only used to route the rows one at a time (there's
     // a perf TODO to remove this later).
     single_row_insert_sql: String,
+}
+
+// Target of INSERT INTO .. SELECT <targets> FROM unnest(..) (e.g., u.value or NULL in SELECT u.value, NULL FROM unnest($1) AS u(value)).
+// We copy the targets (in the same order as the SELECT) into the VALUES (..) for the INSERT that we use to route the rows (the routing INSERT, aka single_row_insert_sql)
+#[derive(Debug, Clone, Copy)]
+enum UnnestSelectTarget<'a> {
+    // Output column of unnest(..) (e.g., in SELECT u.value FROM unnest($1, $2) AS u(id, value), the second arg would produce u.value)
+    // We store the position of that argument, starting at 0 (e.g., 1 for u.value).
+    // In the routing INSERT (single_row_insert_sql) for row N, we bind $1 to element N of the first argument, $2 to element N of the second argument, and so on.
+    // Therefore, we write the column as $<position + 1> in VALUES (e.g., $2 for u.value).
+    UnnestColumn { unnest_argument_index: usize },
+    // Constant that's the same for all rows (e.g., NULL or 'VIP'::text), which we copy into VALUES as is.
+    Constant(Node<'a>),
 }
 
 // Singular decoded unnest(..) array
@@ -450,24 +463,153 @@ fn find_unnest_call(
     None
 }
 
-// We only split INSERT INTO .. SELECT * FROM unnest(..) where all arguments are typed Bind parameters since we can cut those arrays into one Bind per shard.
-// Other parts in the SELECT (e.g., WHERE or LIMIT) would apply to all rows at once, so cutting the rows into one INSERT per shard would change the result.
-// Therefore, we don't consider those, yet.
+// The table name and the column names that Postgres uses for the unnest(..) output.
+// We look up the column references in the SELECT (e.g., u.id) in these names.
+// E.g., for SELECT .. FROM unnest($1, $2) AS u(id, value), the table name is u and the column names are id and value.
+struct UnnestOutputNames<'a> {
+    table_name: &'a str,
+    column_names: Vec<&'a str>,
+}
+
+impl<'a> UnnestOutputNames<'a> {
+    // We use the same table name and column names that Postgres uses for the unnest(..) output.
+    // If the unnest(..) call doesn't have an alias, Postgres would call the table "unnest" (after the function)
+    // For the column that the N-th argument produces (counting from 1), Postgres uses the N-th column name in the alias if the alias has N or more column names (e.g., id for the first argument in AS u(id, value)).
+    // Otherwise, if unnest(..) has one argument, Postgres would call the column after the table (e.g., u in unnest($1) AS u).
+    // Otherwise, Postgres would call the column "unnest".
+    fn new(unnest_range_function: &'a nodes::RangeFunction, unnest_argument_count: usize) -> Self {
+        let alias = unnest_range_function.alias();
+
+        let table_name = alias
+            .and_then(|alias| alias.aliasname())
+            .unwrap_or("unnest");
+
+        let column_aliases: Vec<&str> = alias
+            .map(|alias| {
+                alias
+                    .colnames()
+                    .into_iter()
+                    .filter_map(|column_alias| column_alias.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let column_names = (0..unnest_argument_count)
+            .map(|unnest_argument_index| {
+                if let Some(column_alias) = column_aliases.get(unnest_argument_index) {
+                    column_alias
+                } else if unnest_argument_count == 1 {
+                    table_name
+                } else {
+                    "unnest"
+                }
+            })
+            .collect();
+
+        Self {
+            table_name,
+            column_names,
+        }
+    }
+
+    // Returns the positions (starting at 0) of the unnest(..) arguments that the column reference selects.
+    // E.g., for SELECT .. FROM unnest($1, $2) AS u(id, value), we return [1] (the second argument, $2) for value or u.value, and [0, 1] (both arguments) for * or u.*.
+    // Returns None if the column reference refers to a table that's different than the unnest(..) output (e.g., other.id) if the column reference refers to a column that the output of the unnest(..) doesn't include, or if two output columns have the name in the column reference.
+    fn unnest_argument_indexes(&self, column_ref: &nodes::ColumnRef) -> Option<Vec<usize>> {
+        let fields: Vec<Node<'_>> = column_ref.fields().into_iter().collect();
+
+        let (referenced_table_name, column_field) = match fields.as_slice() {
+            [column_field] => (None, *column_field),
+            [table_field, column_field] => (Some(table_field.as_str()?), *column_field),
+            _ => return None,
+        };
+
+        if referenced_table_name
+            .is_some_and(|referenced_table_name| referenced_table_name != self.table_name)
+        {
+            return None;
+        }
+
+        if let Node::A_Star(_) = column_field {
+            return Some((0..self.column_names.len()).collect());
+        }
+
+        let referenced_column_name = column_field.as_str()?;
+
+        let matching_unnest_argument_indexes: Vec<usize> = self
+            .column_names
+            .iter()
+            .enumerate()
+            .filter(|(_, column_name)| **column_name == referenced_column_name)
+            .map(|(unnest_argument_index, _)| unnest_argument_index)
+            .collect();
+
+        // We only get here for column names since we return early for * and u.* above.
+        // If none of the unnest(..) output columns are the name, Postgres rejects the reference as unknown.
+        // If two unnest(..) output columns are the name (e.g., two columns named "unnest" without column aliases), Postgres rejects the reference as ambiguous.
+        // In both cases, we can't map the reference to one unnest(..) argument, so we return None here.
+        if matching_unnest_argument_indexes.len() != 1 {
+            return None;
+        }
+
+        Some(matching_unnest_argument_indexes)
+    }
+}
+
+// Returns true for constants with or without a type cast, e.g., NULL, 'VIP' and 'VIP'::text.
+fn is_constant(node: Node<'_>) -> bool {
+    match node {
+        Node::A_Const(_) => true,
+        Node::TypeCast(type_cast) => matches!(type_cast.arg(), Node::A_Const(_)),
+        _ => false,
+    }
+}
+
+// Maps the targets of the SELECT to unnest(..) output columns (including * and u.*) and constants.
+// Returns None if the SELECT has targets other than unnest(..) output columns and constants (e.g., u.id + 1).
+fn unnest_select_targets<'a>(
+    select: &'a nodes::SelectStmt,
+    unnest_range_function: &nodes::RangeFunction,
+    unnest_argument_count: usize,
+) -> Option<Vec<UnnestSelectTarget<'a>>> {
+    let unnest_output_names = UnnestOutputNames::new(unnest_range_function, unnest_argument_count);
+
+    let mut select_targets = Vec::new();
+    for target in select.target_list() {
+        let target_value = target.val();
+
+        if let Node::ColumnRef(column_ref) = target_value {
+            let unnest_argument_indexes =
+                unnest_output_names.unnest_argument_indexes(column_ref)?;
+
+            for unnest_argument_index in unnest_argument_indexes {
+                select_targets.push(UnnestSelectTarget::UnnestColumn {
+                    unnest_argument_index,
+                });
+            }
+        } else if is_constant(target_value) {
+            select_targets.push(UnnestSelectTarget::Constant(target_value));
+        } else {
+            return None;
+        }
+    }
+
+    Some(select_targets)
+}
+
+// We only split INSERT INTO .. SELECT .. FROM unnest(..) if all unnest(..) arguments are Bind parameters with an array type cast (e.g., $1::pg_catalog._int8).
+// We need the arrays in the Bind to cut the arrays into one Bind per shard, and we need the type cast to decode the arrays (when we have a text array such as {1,2,3} we have no idea what the type of the elements are)
+// If the SELECT has clauses other than FROM unnest(..) (e.g., WHERE or LIMIT), Postgres applies those clauses to all rows at once.
+// Therefore, cutting the rows into one INSERT per shard would change the result (e.g., LIMIT 1 would insert one row on all shards instead of one row in total), so we don't split those INSERTs, yet.
 fn plan_unnest_insert(
     insert: &nodes::InsertStmt,
     select: &nodes::SelectStmt,
     unnest_range_function: &nodes::RangeFunction,
     unnest_call: &nodes::FuncCall,
 ) -> Result<Option<UnnestInsert>, Error> {
-    let select_star = select.target_list().len() == 1
-        && select.target_list().into_iter().all(|target| {
-            matches!(target.val(), Node::ColumnRef(column)
-                if matches!(column.fields().first(), Some(Node::A_Star(_))))
-        });
-
-    let only_unnest = select_star
-        && select.from_clause().len() == 1
+    let only_unnest = select.from_clause().len() == 1
         && unnest_range_function.functions().len() == 1
+        && !unnest_range_function.ordinality
         && matches!(select.where_clause(), Node::None)
         && select.group_clause().is_empty()
         && matches!(select.having_clause(), Node::None)
@@ -495,22 +637,37 @@ fn plan_unnest_insert(
         return Ok(None);
     };
 
+    let Some(select_targets) =
+        unnest_select_targets(select, unnest_range_function, array_params.len())
+    else {
+        return Ok(None);
+    };
+
     let mut single_row_insert_sql = String::new();
     make::try_owned(|mem| {
         let mut single_row_insert = mem.make_unique(insert);
 
-        let value_params: Vec<_> = (1..=array_params.len())
-            .map(|param_number| {
-                let mut value_param = mem.make_node::<nodes::ParamRef>();
-                value_param.as_mut().set_number(param_number as i32);
-                value_param.uncast()
+        let values: Vec<_> = select_targets
+            .iter()
+            .map(|select_target| match *select_target {
+                UnnestSelectTarget::UnnestColumn {
+                    unnest_argument_index,
+                } => {
+                    let mut value_param = mem.make_node::<nodes::ParamRef>();
+                    value_param
+                        .as_mut()
+                        .set_number(unnest_argument_index as i32 + 1);
+                    value_param.uncast()
+                }
+
+                UnnestSelectTarget::Constant(constant) => mem.make_unique(constant),
             })
             .collect();
 
         let mut values_select = mem.make_node::<nodes::SelectStmt>();
         values_select
             .as_mut()
-            .set_values_lists(mem.make_list(&[mem.make_list(&value_params)]));
+            .set_values_lists(mem.make_list(&[mem.make_list(&values)]));
 
         single_row_insert
             .as_mut()
@@ -783,6 +940,80 @@ mod tests {
         );
 
         assert!(plan.insert_split.is_none());
+    }
+
+    // To route the rows of INSERT .. SELECT .. FROM unnest(..), we build an INSERT .. VALUES (..) with one row (the routing INSERT), and we route that INSERT one time per row of the unnest(..) arrays.
+    // We only use the routing INSERT to find the shards.
+    // The shards get the INSERT that the client sent (with the arrays cut down to the rows that the router thinks should be sent to that corresponding shard)
+    // The routing INSERT uses $1 for the element of the first unnest(..) argument, $2 for the element of the second argument, and so on.
+    //
+    // We check these cases.
+    // - We split INSERT .. SELECT <targets> FROM unnest(..) if the targets are unnest(..) output columns (including *) and constants (with or without a type cast, e.g., NULL and 'VIP'::text).
+    // - The routing INSERT has the targets in the same order as the SELECT.
+    //   E.g., for SELECT value, 'VIP'::text, id FROM unnest($1, $2) AS u(id, value), the routing INSERT has VALUES ($2, 'VIP'::text, $1).
+    // - We don't split the INSERT if the targets have expressions (e.g., id + 1 or 1 + 1), ambiguous column names (e.g., unnest when both arguments produce a column named unnest) or references to a table other than the unnest(..) output (e.g., other.id).
+    #[test]
+    fn test_split_insert_with_unnest_select_targets() {
+        let split_cases = [
+            (
+                "INSERT INTO my_table (id, value) SELECT * FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text)",
+                "INSERT INTO my_table (id, value) VALUES ($1, $2)",
+                vec![(1, 20), (2, 25)],
+            ),
+            (
+                "INSERT INTO my_table (id, status, value) SELECT u.id, NULL, u.value FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text) AS u(id, value)",
+                "INSERT INTO my_table (id, status, value) VALUES ($1, NULL, $2)",
+                vec![(1, 20), (2, 25)],
+            ),
+            (
+                "INSERT INTO my_table (value, status, id) SELECT value, 'VIP'::text, id FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text) AS u(id, value)",
+                "INSERT INTO my_table (value, status, id) VALUES ($2, 'VIP'::text, $1)",
+                vec![(1, 20), (2, 25)],
+            ),
+            (
+                "INSERT INTO my_table (id, value, status) SELECT u.*, NULL FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text) AS u(id, value)",
+                "INSERT INTO my_table (id, value, status) VALUES ($1, $2, NULL)",
+                vec![(1, 20), (2, 25)],
+            ),
+            (
+                "INSERT INTO my_table (id) SELECT u FROM unnest($1::pg_catalog._int8) AS u",
+                "INSERT INTO my_table (id) VALUES ($1)",
+                vec![(1, 20)],
+            ),
+        ];
+
+        for (sql, expected_single_row_insert_sql, expected_array_params) in split_cases {
+            let Some(InsertSplitPlan::Unnest(unnest_insert)) = parse_and_plan(sql).insert_split
+            else {
+                panic!("expected an unnest(..) split for {sql}");
+            };
+
+            assert_eq!(
+                *unnest_insert,
+                UnnestInsert {
+                    array_params: expected_array_params,
+                    single_row_insert_sql: expected_single_row_insert_sql.to_string(),
+                },
+                "unnest(..) split for {sql}"
+            );
+        }
+
+        let not_split_cases = [
+            "INSERT INTO my_table (id, value) SELECT id + 1, value FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text) AS u(id, value)",
+            "INSERT INTO my_table (id, value) SELECT unnest, unnest FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text)",
+            "INSERT INTO my_table (id) SELECT other.id FROM unnest($1::pg_catalog._int8) AS u(id)",
+            "INSERT INTO my_table (id) SELECT u.missing FROM unnest($1::pg_catalog._int8) AS u(id)",
+            "INSERT INTO my_table (id) SELECT s.u.id FROM unnest($1::pg_catalog._int8) AS u(id)",
+            "INSERT INTO my_table (id) SELECT other.* FROM unnest($1::pg_catalog._int8) AS u(id)",
+            "INSERT INTO my_table (id, value, pos) SELECT * FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text) WITH ORDINALITY",
+        ];
+
+        for sql in not_split_cases {
+            assert!(
+                parse_and_plan(sql).insert_split.is_none(),
+                "expected no split for {sql}"
+            );
+        }
     }
 
     #[test]
