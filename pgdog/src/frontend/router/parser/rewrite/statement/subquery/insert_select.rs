@@ -37,7 +37,8 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
 pub(crate) fn parse_insert_select<'a>(entire_ast: Node<'a>) -> Option<Node<'a>> {
     if let Node::InsertStmt(insert_stmt) = entire_ast
         && let Node::SelectStmt(select) = insert_stmt.select_stmt()
-    // This won't be a SubLink node as the select statement is naturally apart of the insert's AST.
+        // This won't be a SubLink node as the select statement is naturally apart of the insert's AST.
+        && !select.from_clause().is_empty()
     {
         // We don't want to recurse back through for a re-written query.
         // TODO(jkaczman): this is a redundant check that we use in multiple places; could
