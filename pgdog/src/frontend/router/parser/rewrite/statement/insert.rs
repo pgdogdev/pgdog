@@ -989,7 +989,7 @@ mod tests {
             };
 
             assert_eq!(
-                unnest_insert,
+                *unnest_insert,
                 UnnestInsert {
                     array_params: expected_array_params,
                     single_row_insert_sql: expected_single_row_insert_sql.to_string(),
