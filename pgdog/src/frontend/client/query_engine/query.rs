@@ -161,8 +161,9 @@ impl QueryEngine {
                 if let Some(plan) = client_request
                     .route()
                     .projection_rewrite_plan
-                    .clone()
-                    .filter(|plan| plan.having.is_some()) =>
+                    .as_ref()
+                    .filter(|plan| plan.having.is_some())
+                    .cloned() =>
             {
                 Box::pin(multi_step::HavingMulti::new(self, plan).execute(context, client_request))
                     .await?;
