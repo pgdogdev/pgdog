@@ -31,6 +31,7 @@ async fn stopped_replication_reports_every_stream_as_cancelled()
                 .state(state.clone())
                 .schema_sync(
                     SchemaSyncTask::builder()
+                        .publication_tables_only(false)
                         .databases(state.databases())
                         .publication(schema.to_owned()),
                 )
@@ -101,6 +102,7 @@ async fn cutover_and_rollback_swap_the_direction() -> Result<(), Box<dyn std::er
                 .state(state.clone())
                 .schema_sync(
                     SchemaSyncTask::builder()
+                        .publication_tables_only(false)
                         .databases(state.databases())
                         .publication(schema.to_owned()),
                 )

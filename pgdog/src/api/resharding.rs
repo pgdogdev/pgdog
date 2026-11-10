@@ -69,9 +69,9 @@ impl Task for ReshardTask {
         let cutover = self.cutover_mode();
         let mut state = self.state;
         let schema_sync = SchemaSyncTask::builder()
+            .publication_tables_only(self.tables_only)
             .databases(state.databases())
-            .publication(state.publication.clone())
-            .publication_tables_only(self.tables_only);
+            .publication(state.publication.clone());
 
         // Pre-data schema sync, unless skipped. It runs before any replication
         // slots exist, so it stays outside the cleanup guard below.

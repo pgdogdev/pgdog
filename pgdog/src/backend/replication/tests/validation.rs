@@ -90,6 +90,7 @@ async fn fk_validation_setup(
         .await?;
 
     let schema_sync = SchemaSyncTask::builder()
+        .publication_tables_only(false)
         .databases(pgdog_stats::Databases {
             source: schema.into(),
             destination: destination.into(),
