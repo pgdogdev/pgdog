@@ -24,17 +24,6 @@ async fn empty_query_then_rollback_parser_off() -> Result<()> {
 
 async fn check_empty_query_then_rollback(level: &str) -> Result<()> {
     let admin = admin_tokio().await;
-    let previous = admin
-        .simple_query("SHOW CONFIG")
-        .await?
-        .into_iter()
-        .find_map(|message| match message {
-            SimpleQueryMessage::Row(row) if row.get("name") == Some("query_parser") => {
-                row.get("value").map(str::to_owned)
-            }
-            _ => None,
-        })
-        .context("query_parser setting")?;
     admin
         .batch_execute(&format!("SET query_parser TO '{level}'"))
         .await?;
@@ -71,8 +60,6 @@ async fn check_empty_query_then_rollback(level: &str) -> Result<()> {
     }
     .await;
 
-    admin
-        .batch_execute(&format!("SET query_parser TO '{previous}'"))
-        .await?;
+    admin.batch_execute("RELOAD").await?;
     result
 }
