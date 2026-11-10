@@ -287,6 +287,9 @@ pub(crate) struct StatementParser<'a, 'b> {
     /// Added for the ability to try to `shard()` the top-level statement (ignoring any subqueries within)
     /// to see if there's a sharding key or not, to determine solely the top-level's routing
     ignore_subqueries: bool,
+
+    // If a rewrite runs the INSERT instead of this route (e.g., the subquery rewrite evaluates the SELECT first), we don't need the shards of the rows.
+    insert_rewritten: bool,
 }
 
 impl<'a, 'b: 'a> StatementParser<'a, 'b> {
@@ -307,7 +310,13 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             pending_lookups: Vec::new(),
             resolved_lookups: None,
             ignore_subqueries: false,
+            insert_rewritten: false,
         }
+    }
+
+    pub(crate) fn with_insert_rewritten(mut self, insert_rewritten: bool) -> Self {
+        self.insert_rewritten = insert_rewritten;
+        self
     }
 
     pub(crate) fn new_that_ignore_subqueries(
@@ -1128,6 +1137,28 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         Ok(shard)
     }
 
+    /// If we're about to send a query round-robin, however, the SELECT provides the sharding key column,
+    /// meaning that we don't have a way to know where the query should actually go, then we error.
+    ///
+    /// This function performs those checks to see if it qualifies for the error.
+    fn select_sends_keys_without_shards(
+        &self,
+        stmt: &'a nodes::InsertStmt,
+        sharded_table: &ShardedTable,
+    ) -> bool {
+        let Node::SelectStmt(select) = stmt.select_stmt() else {
+            return false;
+        };
+
+        let waiting_for_bind = self.bind.is_none() && contains_param(Node::InsertStmt(stmt));
+
+        self.schema.shards > 1
+            && select.values_lists().is_empty()
+            && sharded_table.insert_sends_key_column(stmt)
+            && !self.insert_rewritten
+            && !waiting_for_bind
+    }
+
     /// Get column names from the INSERT statement, or look them up from schema if not specified.
     fn get_insert_columns(
         &self,
@@ -1226,14 +1257,27 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
         // Round-robin fallback: if table is sharded but no sharding key found,
         // pick a shard at random
+        let tables = Tables::new(self.schema);
         if let Some(table) = ctx.table
-            && Tables::new(self.schema).sharded(table).is_some()
+            && let Some(sharded_table) = tables.sharded(table)
         {
+            if self.select_sends_keys_without_shards(stmt, sharded_table) {
+                return Err(Error::InsertSelectWithoutShardingKey);
+            }
+
             Ok(Some(Shard::Direct(round_robin::next(self.schema.shards))))
         } else {
             Ok(None)
         }
     }
+}
+
+fn contains_param(node: Node<'_>) -> bool {
+    walk::walk_manual(node, |node| match node {
+        Node::ParamRef(_) => ControlFlow::Break(()),
+        _ => Recurse::yes(),
+    })
+    .is_some()
 }
 
 #[cfg(test)]
