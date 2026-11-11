@@ -17,7 +17,7 @@ use super::{
     pool::Address,
     prepared_statements::{HandleResult, Prepare},
 };
-use crate::parameters::{ParameterStore, Parameters};
+use crate::parameters::{KnownParameter, ParameterStore, Parameters};
 use crate::{
     auth::{md5, scram::Client},
     backend::pool::stats::MemoryStats,
@@ -743,8 +743,10 @@ impl Server {
         let mut executed = 0;
 
         // Sync application_name parameter and update it in the stats.
-        let server_name = self.client_params.get_default("application_name", "PgDog");
-        let client_name = params.get_default("application_name", "PgDog");
+        let server_name = self
+            .client_params
+            .get_known_default(KnownParameter::ApplicationName, "PgDog");
+        let client_name = params.get_known_default(KnownParameter::ApplicationName, "PgDog");
 
         self.stats.link_client(client_name, server_name, id);
 
