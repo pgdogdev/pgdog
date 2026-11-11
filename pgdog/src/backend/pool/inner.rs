@@ -328,11 +328,12 @@ impl Inner {
     /// or give it to a waiting client.
     pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) {
         // Try to give it to a client that's been waiting, if any.
-        let cancel_key = conn.key().clone();
         let server_id = conn.id();
         let cancelled = self.cancelled.contains(&conn.id().pid);
 
         while !cancelled && let Some(waiter) = self.waiting.pop_front() {
+            let cancel_key = conn.key().clone();
+
             match waiter.tx.send(Ok(conn)) {
                 Err(conn_ret) => {
                     conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
@@ -975,6 +976,7 @@ mod test {
         let mut inner = Inner::default();
         let (tx, mut rx) = channel();
         let waiter_request = Request::default();
+        let waiter_id = waiter_request.id;
 
         inner.waiting.push_back(Waiter {
             request: waiter_request,
@@ -982,11 +984,13 @@ mod test {
         });
 
         let server = Box::new(Server::default());
+        let server_key = server.key().clone();
         inner.put(server, Instant::now());
 
         assert_eq!(inner.idle(), 0); // Connection given to waiter, not idle
         assert_eq!(inner.checked_out(), 1); // Connection now checked out to waiter
         assert!(inner.waiting.is_empty()); // Waiter was served
+        assert_eq!(inner.taken.cancel_key(waiter_id), Some(&server_key));
 
         // Verify waiter received the connection
         assert!(rx.try_recv().is_ok());

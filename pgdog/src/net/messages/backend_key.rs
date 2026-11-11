@@ -18,9 +18,19 @@ const EXTENDED_SECRET_LEN: usize = 32;
 const MAX_SECRET_LEN: usize = 256;
 
 /// Variable-length cancel secret.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SecretKey {
     bytes: SmallVec<[u8; EXTENDED_SECRET_LEN]>,
+}
+
+// We implement `Clone` by hand to copy the secret with one `memcpy` (`SmallVec::from_slice`).
+// The derived `Clone` for `SmallVec` copies the secret byte by byte
+impl Clone for SecretKey {
+    fn clone(&self) -> Self {
+        Self {
+            bytes: SmallVec::from_slice(&self.bytes),
+        }
+    }
 }
 
 impl SecretKey {
