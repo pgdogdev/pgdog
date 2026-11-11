@@ -94,6 +94,12 @@ pub(crate) enum Commands {
         #[arg(long, default_value = "false")]
         replicate_only: bool,
 
+        /// Copy only the publication's tables: schema sync creates just those
+        /// tables, referenced tables must already exist on the destination,
+        /// and replication runs until stopped, without cutover.
+        #[arg(long)]
+        tables_only: bool,
+
         /// Only copy data and synchronize tables; skip replication and cutover.
         #[arg(long, default_value = "false")]
         sync_only: bool,
@@ -231,6 +237,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         to_database,
         publication,
         replicate_only,
+        tables_only,
         sync_only,
         replication_slot,
         skip_schema_sync,
@@ -246,6 +253,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         let result = run_task(
             ReshardTask::builder()
                 .state(state)
+                .tables_only(tables_only)
                 .skip_schema_sync(skip_schema_sync)
                 .replicate_only(replicate_only)
                 .sync_only(sync_only)
@@ -346,6 +354,38 @@ pub(crate) async fn route(commands: Commands) -> Result<(), Box<dyn std::error::
 
 #[cfg(test)]
 mod test {
+    mod data_sync {
+        use crate::cli::*;
+
+        fn parse(args: &[&str]) -> Result<Commands, clap::Error> {
+            let mut argv = vec![
+                "pgdog",
+                "data-sync",
+                "--from-database",
+                "a",
+                "--to-database",
+                "b",
+            ];
+            argv.extend_from_slice(args);
+            Ok(Cli::try_parse_from(argv)?
+                .command
+                .expect("data-sync is a command"))
+        }
+
+        #[test]
+        fn test_tables_only() {
+            for (args, expected) in [
+                (vec!["--publication", "p"], false),
+                (vec!["--publication", "p", "--tables-only"], true),
+            ] {
+                let Commands::DataSync { tables_only, .. } = parse(&args).unwrap() else {
+                    panic!("not a data sync command");
+                };
+                assert_eq!(tables_only, expected, "{args:?}");
+            }
+        }
+    }
+
     mod schema_sync {
         use crate::cli::*;
 

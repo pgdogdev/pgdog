@@ -49,6 +49,9 @@ impl From<SchemaSyncPhase> for SyncState {
 pub(crate) struct SchemaSyncTask {
     #[builder(field)]
     dump: SchemaDump,
+    /// Sync only the publication's tables instead of the whole source schema.
+    #[builder(default)]
+    publication_tables_only: bool,
     databases: Databases,
     publication: String,
     phase: SchemaSyncPhase,
@@ -61,7 +64,9 @@ pub(crate) struct SchemaSyncTask {
 }
 
 pub(crate) type SchemaSyncBuilder = SchemaSyncTaskBuilder<
-    schema_sync_task_builder::SetPublication<schema_sync_task_builder::SetDatabases>,
+    schema_sync_task_builder::SetPublication<
+        schema_sync_task_builder::SetDatabases<schema_sync_task_builder::SetPublicationTablesOnly>,
+    >,
 >;
 
 impl Task for SchemaSyncTask {
@@ -92,6 +97,7 @@ impl Task for SchemaSyncTask {
             &self.databases.source,
             &self.databases.destination,
             &self.publication,
+            self.publication_tables_only,
         )?;
 
         ctx.set_status(SchemaSyncStatus::LoadingSchema);

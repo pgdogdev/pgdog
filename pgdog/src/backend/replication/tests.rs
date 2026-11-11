@@ -14,7 +14,7 @@ use crate::{
     api::{
         MigrationError,
         copy_data::{CopyDataTask, TableDataSyncTask},
-        replication::{ReplicationClusterStop, ReplicationClusterTask},
+        replication::{ReplicationClusterStop, ReplicationClusterTask, ReplicationTask},
         resharding::ReshardTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
@@ -974,6 +974,128 @@ async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn 
         ),
         "post-data did not report the unique index error: {post_data:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tables_only_copies_and_replicates_one_table() -> Result<(), Box<dyn std::error::Error>> {
+    crate::logger();
+    let schema = "tables_only_e2e";
+    let destination = "tables_only_e2e_dest";
+    let original_config = config();
+    let mut admin = test_server().await;
+    let result = async {
+        setup_replication_test(&mut admin, schema, destination).await?;
+        let source = databases::databases().schema_owner(schema)?;
+        let dest = databases::databases().schema_owner(destination)?;
+        let mut server = source.primary(0, &Request::default()).await?;
+        server
+            .execute_checked(format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.main (id BIGSERIAL PRIMARY KEY, payload TEXT); \
+                 CREATE INDEX main_payload_idx ON {schema}.main (payload); \
+                 CREATE TABLE {schema}.other (id BIGINT PRIMARY KEY); \
+                 INSERT INTO {schema}.main (payload) SELECT 'row' FROM generate_series(1, 10); \
+                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
+            ))
+            .await?;
+        let mut dest_server = dest.primary(0, &Request::default()).await?;
+
+        let state = ReshardingState::builder()
+            .source(schema)
+            .destination(destination)
+            .publication(schema)
+            .maybe_replication_slot(Some(schema.into()))
+            .build()?;
+        let task = run_task(ReshardTask::builder().state(state).tables_only(true).build());
+        let id = task.id();
+
+        wait_for_reshard_status(
+            id,
+            ReshardStatus::Replication {
+                stage: ReplicationStatus::Replicating,
+            },
+        )
+        .await?;
+        wait_for_active_source_slot(&mut server, schema).await?;
+        let cutover_accepted = ReplicationTask::trigger_cutover(Some(id));
+
+        server
+            .execute_checked(format!(
+                "INSERT INTO {schema}.main (payload) SELECT 'live' FROM generate_series(1, 5)"
+            ))
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let rows: Vec<i64> = dest_server
+                    .fetch_all(format!("SELECT count(*) FROM {schema}.main"))
+                    .await?;
+                if rows == [15] {
+                    return Ok::<_, Box<dyn std::error::Error>>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+
+        tasks_storage().cancel_task(id);
+        let outcome = tokio::time::timeout(Duration::from_secs(90), task).await?;
+
+        let leftover_slots = source_slots(&mut server, schema).await?;
+        let source_rows: Vec<i64> = server
+            .fetch_all(format!("SELECT count(*) FROM {schema}.main"))
+            .await?;
+        let next_id: Vec<i64> = dest_server
+            .fetch_all(format!(
+                "INSERT INTO {schema}.main (payload) VALUES ('after') RETURNING id"
+            ))
+            .await?;
+        let other_on_dest: Vec<i64> = dest_server
+            .fetch_all(format!(
+                "SELECT count(*) FROM pg_tables WHERE schemaname = '{schema}' AND tablename = 'other'"
+            ))
+            .await?;
+        let index_on_dest: Vec<i64> = dest_server
+            .fetch_all(format!(
+                "SELECT count(*) FROM pg_indexes WHERE schemaname = '{schema}' AND indexname = 'main_payload_idx'"
+            ))
+            .await?;
+
+        Ok::<_, Box<dyn std::error::Error>>((
+            outcome.is_err(),
+            cutover_accepted,
+            leftover_slots,
+            source_rows,
+            next_id,
+            other_on_dest,
+            index_on_dest,
+        ))
+    }
+    .await;
+
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
+
+    let (
+        stopped,
+        cutover_accepted,
+        leftover_slots,
+        source_rows,
+        next_id,
+        other_on_dest,
+        index_on_dest,
+    ) = result?;
+    assert!(stopped, "a stopped copy reports as cancelled");
+    assert!(!cutover_accepted, "copying some tables must never cut over");
+    assert_eq!(leftover_slots, Vec::<String>::new());
+    assert_eq!(source_rows, [15], "the source table is left in place");
+    assert_eq!(next_id, [16], "the destination sequence follows the data");
+    assert_eq!(other_on_dest, [0], "only the moved table is copied");
+    assert_eq!(
+        index_on_dest,
+        [1],
+        "post-data schema sync adds the table's indexes"
+    );
+
     Ok(())
 }
 
