@@ -346,7 +346,7 @@ mod test {
     fn test_create_temp_sequence_pins_backend() {
         let command = parse_stmt("CREATE TEMP SEQUENCE test_seq");
         assert!(matches!(
-            &command.route().temp_table_change,
+            command.route().temp_table_change.as_deref(),
             Some(TempTableChange::Create {
                 name,
                 drop_on_commit: false,
@@ -356,7 +356,7 @@ mod test {
         let command = parse_stmt("CREATE TEMPORARY SEQUENCE IF NOT EXISTS shard_1.test_seq");
         assert_eq!(command.route().shard(), &Shard::Direct(1));
         assert!(matches!(
-            &command.route().temp_table_change,
+            command.route().temp_table_change.as_deref(),
             Some(TempTableChange::Create {
                 name,
                 drop_on_commit: false,

@@ -82,9 +82,9 @@ pub(super) enum HandleResult {
     Drop,
     Forward,
     Rewrite(ProtocolMessage),
-    Prepend(Prepare),
+    Prepend(Box<Prepare>),
     PrependRewrite {
-        prepend: Prepare,
+        prepend: Box<Prepare>,
         rewrite: ProtocolMessage,
     },
     PrependProtocolMessage(ProtocolMessage),
@@ -190,11 +190,11 @@ impl PreparedStatements {
                                 let mut bind = bind.clone();
                                 bind.anonymize();
                                 return Ok(HandleResult::PrependRewrite {
-                                    prepend: message,
+                                    prepend: Box::new(message),
                                     rewrite: ProtocolMessage::Bind(bind),
                                 });
                             } else {
-                                return Ok(HandleResult::Prepend(message));
+                                return Ok(HandleResult::Prepend(Box::new(message)));
                             }
                         }
 
@@ -235,11 +235,11 @@ impl PreparedStatements {
                                 let mut describe = describe.clone();
                                 describe.anonymize();
                                 return Ok(HandleResult::PrependRewrite {
-                                    prepend: message,
+                                    prepend: Box::new(message),
                                     rewrite: ProtocolMessage::Describe(describe),
                                 });
                             } else {
-                                return Ok(HandleResult::Prepend(message));
+                                return Ok(HandleResult::Prepend(Box::new(message)));
                             }
                         }
 

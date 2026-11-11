@@ -123,7 +123,7 @@ pub(crate) struct Route {
     pub(crate) projection_rewrite_plan: Option<Arc<ProjectionRewritePlan>>,
     /// Our query explain plan. We attach
     /// this to the `EXPLAIN` output.
-    explain: Option<ExplainTrace>,
+    explain: Option<Box<ExplainTrace>>,
     /// This query is a `ROLLBACK SAVEPOINT` command.
     /// Nasty one.
     rollback_savepoint: bool,
@@ -143,7 +143,7 @@ pub(crate) struct Route {
     /// the query doesn't execute while any are unresolved.
     pending_lookups: Vec<PendingLookup>,
     /// The temporary table being created/dropped if present
-    pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
+    pub(in crate::frontend) temp_table_change: Option<Box<TempTableChange>>,
     stmt_type: Option<StatementType>,
     table_change: TableChange,
     /// Minimum replica LSN in its 64-bit representation.
@@ -372,15 +372,15 @@ impl Route {
 
     #[cfg(test)]
     pub(crate) fn explain(&self) -> Option<&ExplainTrace> {
-        self.explain.as_ref()
+        self.explain.as_deref()
     }
 
     pub(crate) fn set_explain(&mut self, trace: ExplainTrace) {
-        self.explain = Some(trace);
+        self.explain = Some(Box::new(trace));
     }
 
     pub(crate) fn take_explain(&mut self) -> Option<ExplainTrace> {
-        self.explain.take()
+        self.explain.take().map(|trace| *trace)
     }
 
     pub(crate) fn with_rollback_savepoint(mut self, rollback: bool) -> Self {
@@ -410,7 +410,7 @@ impl Route {
     }
 
     pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {
-        self.temp_table_change = temp_table;
+        self.temp_table_change = temp_table.map(Box::new);
         self
     }
 

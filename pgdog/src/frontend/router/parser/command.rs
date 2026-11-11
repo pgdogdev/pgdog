@@ -35,7 +35,7 @@ pub(crate) enum Command {
         route: Route,
     },
     StartTransaction {
-        query: BufferedQuery,
+        query: Box<BufferedQuery>,
         transaction_type: TransactionType,
         route: Route,
     },
