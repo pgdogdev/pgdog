@@ -156,11 +156,11 @@ impl LsnMonitor {
         .await
         {
             Ok(Ok(rows)) => {
-                let is_aurora = rows[0];
+                let is_aurora = rows[0]; // SAFETY: Aurora detection query will return one row and one column.
                 if is_aurora {
                     debug!("aurora detected [{}]", self.pool.addr());
                 }
-                Some(is_aurora) // SAFETY: Aurora detection query will return one row and one column.
+                Some(is_aurora)
             }
             Ok(Err(err)) => {
                 error!(
