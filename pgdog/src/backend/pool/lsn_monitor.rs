@@ -19,7 +19,7 @@ use crate::util::{safe_interval, safe_sleep, safe_timeout};
 use pgdog_stats::LsnStats as StatsLsnStats;
 pub(crate) use pgdog_stats::replication::ReplicaLag;
 
-static AURORA_DETECTION_QUERY: &str = "SELECT aurora_version()";
+static AURORA_DETECTION_QUERY: &str = "SELECT to_regproc('aurora_version') IS NOT NULL";
 
 static LSN_QUERY: &str = "
 WITH recovery AS MATERIALIZED (
@@ -151,15 +151,17 @@ impl LsnMonitor {
     async fn detect_aurora(&self, conn: &mut Server) -> Option<bool> {
         match safe_timeout(
             self.pool.config().lsn_check_timeout,
-            conn.fetch_all::<DataRow>(AURORA_DETECTION_QUERY),
+            conn.fetch_all::<bool>(AURORA_DETECTION_QUERY),
         )
         .await
         {
-            Ok(Ok(_)) => {
-                debug!("aurora detected [{}]", self.pool.addr());
-                Some(true)
+            Ok(Ok(rows)) => {
+                let is_aurora = rows[0]; // SAFETY: Aurora detection query will return one row and one column.
+                if is_aurora {
+                    debug!("aurora detected [{}]", self.pool.addr());
+                }
+                Some(is_aurora)
             }
-            Ok(Err(crate::backend::Error::ExecutionError(_))) => Some(false),
             Ok(Err(err)) => {
                 error!(
                     "lsn monitor aurora detection error: {} [{}]",
