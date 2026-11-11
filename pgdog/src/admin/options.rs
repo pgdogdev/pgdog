@@ -2,6 +2,13 @@
 
 use super::error::Error;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunMode {
+    WithCleanup,
+    NoCleanup,
+    Abort,
+}
+
 /// Options after a command's positional arguments. Each command takes the
 /// options it knows, then calls [`Options::finish`] to reject the rest.
 #[derive(Debug, Default)]
@@ -62,6 +69,22 @@ impl<'a> Options<'a> {
         }
     }
 
+    pub(crate) fn run_mode(&mut self) -> Result<RunMode, Error> {
+        let abort = self.flag("abort")?;
+        let cleanup_on_cancel = self.take("cleanup_on_cancel");
+        if abort && cleanup_on_cancel.is_some() {
+            return Err(Error::InvalidOption("abort".into()));
+        }
+        if abort {
+            return Ok(RunMode::Abort);
+        }
+        match cleanup_on_cancel {
+            None | Some(None) | Some(Some("true" | "on")) => Ok(RunMode::WithCleanup),
+            Some(Some("false" | "off")) => Ok(RunMode::NoCleanup),
+            Some(Some(_)) => Err(Error::InvalidOption("cleanup_on_cancel".into())),
+        }
+    }
+
     /// Reject options the command didn't take.
     pub(crate) fn finish(self) -> Result<(), Error> {
         match self.options.first() {
@@ -106,6 +129,55 @@ mod test {
         let (words, options) = Options::parse("copy_data a b").unwrap();
         assert_eq!(words, ["copy_data", "a", "b"]);
         options.finish().unwrap();
+    }
+
+    #[test]
+    fn parses_run_mode() {
+        for (sql, mode) in [
+            ("reshard a b", RunMode::WithCleanup),
+            ("reshard a b ()", RunMode::WithCleanup),
+            ("reshard a b (cleanup_on_cancel)", RunMode::WithCleanup),
+            ("reshard a b (cleanup_on_cancel true)", RunMode::WithCleanup),
+            (
+                "reshard a b (cleanup_on_cancel 'true')",
+                RunMode::WithCleanup,
+            ),
+            ("reshard a b (cleanup_on_cancel on)", RunMode::WithCleanup),
+            ("reshard a b (cleanup_on_cancel false)", RunMode::NoCleanup),
+            (
+                "reshard a b with (cleanup_on_cancel off)",
+                RunMode::NoCleanup,
+            ),
+            (
+                "reshard a b (cleanup_on_cancel 'false')",
+                RunMode::NoCleanup,
+            ),
+            ("reshard a b (abort)", RunMode::Abort),
+        ] {
+            let (_, mut options) = Options::parse(sql).unwrap();
+            assert_eq!(options.run_mode().unwrap(), mode, "{sql}");
+            options.finish().unwrap();
+        }
+
+        for (sql, name) in [
+            ("reshard a b (cleanup_on_cancel maybe)", "cleanup_on_cancel"),
+            ("reshard a b (cleanup_on_cancel 1)", "cleanup_on_cancel"),
+            ("reshard a b (abort true)", "abort"),
+            ("reshard a b (abort, cleanup_on_cancel)", "abort"),
+            ("reshard a b (cleanup_on_cancel false, abort)", "abort"),
+            ("reshard a b (abort, cleanup_on_cancel true)", "abort"),
+        ] {
+            let (_, mut options) = Options::parse(sql).unwrap();
+            assert!(
+                matches!(options.run_mode(), Err(Error::InvalidOption(n)) if n == name),
+                "{sql}"
+            );
+        }
+
+        let (_, mut options) =
+            Options::parse("reshard a b (cleanup_on_cancel false, other)").unwrap();
+        assert_eq!(options.run_mode().unwrap(), RunMode::NoCleanup);
+        assert!(matches!(options.finish(), Err(Error::InvalidOption(n)) if n == "other"));
     }
 
     #[test]

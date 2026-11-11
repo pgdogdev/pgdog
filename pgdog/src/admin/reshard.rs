@@ -6,6 +6,7 @@ use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
 use crate::backend::replication::resharding_state::ReshardingState;
 
+use super::options::{Options, RunMode};
 use super::prelude::*;
 
 pub(crate) struct Reshard {
@@ -13,6 +14,7 @@ pub(crate) struct Reshard {
     pub(crate) to_database: String,
     pub(crate) publication: String,
     pub(crate) replication_slot: Option<String>,
+    pub(crate) mode: RunMode,
 }
 
 #[async_trait]
@@ -22,32 +24,44 @@ impl Command for Reshard {
     }
 
     fn parse(sql: &str) -> Result<Self, Error> {
-        let parts = sql.split(" ").collect::<Vec<_>>();
+        let (words, mut options) = Options::parse(sql)?;
 
-        match parts[..] {
-            ["reshard", from_database, to_database, publication] => Ok(Self {
-                from_database: from_database.to_owned(),
-                to_database: to_database.to_owned(),
-                publication: publication.to_owned(),
-                replication_slot: None,
-            }),
+        let (from_database, to_database, publication, replication_slot) = match words[..] {
+            ["reshard", from_database, to_database, publication] => {
+                (from_database, to_database, publication, None)
+            }
             [
                 "reshard",
                 from_database,
                 to_database,
                 publication,
                 replication_slot,
-            ] => Ok(Self {
-                from_database: from_database.to_owned(),
-                to_database: to_database.to_owned(),
-                publication: publication.to_owned(),
-                replication_slot: Some(replication_slot.to_owned()),
-            }),
-            _ => Err(Error::Syntax),
-        }
+            ] => (
+                from_database,
+                to_database,
+                publication,
+                Some(replication_slot),
+            ),
+            _ => return Err(Error::Syntax),
+        };
+        let mode = options.run_mode()?;
+        options.finish()?;
+
+        Ok(Self {
+            from_database: from_database.to_owned(),
+            to_database: to_database.to_owned(),
+            publication: publication.to_owned(),
+            replication_slot: replication_slot.map(str::to_owned),
+            mode,
+        })
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
+        match self.mode {
+            RunMode::WithCleanup => (),
+            RunMode::NoCleanup => return Err(Error::InvalidOption("cleanup_on_cancel".into())),
+            RunMode::Abort => return Err(Error::InvalidOption("abort".into())),
+        }
         info!(
             r#"resharding "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
@@ -74,5 +88,59 @@ impl Command for Reshard {
             RowDescription::new(&[Field::text("task_id")]).message(),
             dr.message(),
         ])
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parses_run_mode() {
+        for (sql, slot, mode) in [
+            ("reshard a b pub", None, RunMode::WithCleanup),
+            (
+                "reshard a b pub (cleanup_on_cancel)",
+                None,
+                RunMode::WithCleanup,
+            ),
+            (
+                "reshard a b pub (cleanup_on_cancel true)",
+                None,
+                RunMode::WithCleanup,
+            ),
+            (
+                "reshard a b pub with (cleanup_on_cancel false)",
+                None,
+                RunMode::NoCleanup,
+            ),
+            (
+                "reshard a b pub (cleanup_on_cancel off)",
+                None,
+                RunMode::NoCleanup,
+            ),
+            (
+                "reshard a b pub slot with (cleanup_on_cancel false)",
+                Some("slot"),
+                RunMode::NoCleanup,
+            ),
+            ("reshard a b pub (abort)", None, RunMode::Abort),
+        ] {
+            let cmd = Reshard::parse(sql).unwrap();
+            assert_eq!(cmd.publication, "pub", "{sql}");
+            assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
+            assert_eq!(cmd.mode, mode, "{sql}");
+        }
+
+        for sql in [
+            "reshard a b pub (cleanup_on_cancel maybe)",
+            "reshard a b pub (cleanup_on_cancel false, abort)",
+            "reshard a b pub (unknown)",
+        ] {
+            assert!(
+                matches!(Reshard::parse(sql), Err(Error::InvalidOption(_))),
+                "{sql}"
+            );
+        }
     }
 }

@@ -111,6 +111,19 @@ pub(crate) enum Commands {
         /// Don't perform pre-data or post-data schema sync.
         #[arg(long)]
         skip_schema_sync: bool,
+
+        /// Drop the replication slots and origins when the run stops before
+        /// it ends. With `false`, the run keeps them and can be aborted later.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        cleanup_on_cancel: bool,
+
+        /// Abort the unfinished migration from source to destination: drop
+        /// the slots it created, its origins and its state.
+        #[arg(
+            long,
+            conflicts_with_all = ["cleanup_on_cancel", "replicate_only", "tables_only", "sync_only", "skip_schema_sync"]
+        )]
+        abort: bool,
     },
 
     /// Copy schema from source to destination cluster.
@@ -241,8 +254,16 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         sync_only,
         replication_slot,
         skip_schema_sync,
+        cleanup_on_cancel,
+        abort,
     } = commands
     {
+        if !cleanup_on_cancel {
+            return Err("--cleanup-on-cancel false is not available yet".into());
+        }
+        if abort {
+            return Err("--abort is not available yet".into());
+        }
         let state = ReshardingState::builder()
             .source(&from_database)
             .destination(&to_database)
@@ -382,6 +403,49 @@ mod test {
                     panic!("not a data sync command");
                 };
                 assert_eq!(tables_only, expected, "{args:?}");
+            }
+        }
+
+        #[test]
+        fn test_cleanup_on_cancel_and_abort() {
+            for (args, cleanup, abort) in [
+                (vec!["--publication", "p"], true, false),
+                (
+                    vec!["--publication", "p", "--cleanup-on-cancel", "false"],
+                    false,
+                    false,
+                ),
+                (
+                    vec!["--publication", "p", "--cleanup-on-cancel=true"],
+                    true,
+                    false,
+                ),
+                (vec!["--publication", "p", "--abort"], true, true),
+            ] {
+                let Commands::DataSync {
+                    cleanup_on_cancel,
+                    abort: parsed_abort,
+                    ..
+                } = parse(&args).unwrap()
+                else {
+                    panic!("not a data sync command");
+                };
+                assert_eq!(cleanup_on_cancel, cleanup, "{args:?}");
+                assert_eq!(parsed_abort, abort, "{args:?}");
+            }
+
+            for args in [
+                vec![
+                    "--publication",
+                    "p",
+                    "--abort",
+                    "--cleanup-on-cancel",
+                    "false",
+                ],
+                vec!["--publication", "p", "--abort", "--replicate-only"],
+                vec!["--publication", "p", "--abort", "--tables-only"],
+            ] {
+                assert!(parse(&args).is_err(), "{args:?}");
             }
         }
     }

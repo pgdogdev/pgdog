@@ -61,6 +61,7 @@ impl Task for ReshardTask {
             replicate_only: self.replicate_only,
             sync_only: self.sync_only,
             auto_cutover: self.auto_cutover,
+            cleanup_on_cancel: true,
         }
     }
 

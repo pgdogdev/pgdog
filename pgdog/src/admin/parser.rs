@@ -364,6 +364,30 @@ mod tests {
             "REPLICATE source target publication",
             ParseResult::Replicate(_)
         );
+        assert_parses!(
+            "RESHARD source target publication WITH (cleanup_on_cancel false)",
+            ParseResult::Reshard(_)
+        );
+        assert_parses!(
+            "COPY_DATA source target publication WITH (cleanup_on_cancel false)",
+            ParseResult::CopyData(_)
+        );
+        assert_parses!(
+            "REPLICATE source target publication slot WITH (cleanup_on_cancel false)",
+            ParseResult::Replicate(_)
+        );
+        assert_parses!(
+            "RESHARD source target publication WITH (abort)",
+            ParseResult::Reshard(_)
+        );
+        assert_parses!(
+            "COPY_DATA source target publication WITH (abort)",
+            ParseResult::CopyData(_)
+        );
+        assert_parses!(
+            "REPLICATE source target publication WITH (abort)",
+            ParseResult::Replicate(_)
+        );
         assert_parses!("STOP_TASK 1", ParseResult::StopTask(_));
         assert_parses!("CUTOVER", ParseResult::Cutover(_));
     }

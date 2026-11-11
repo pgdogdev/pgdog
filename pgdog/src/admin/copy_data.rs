@@ -6,7 +6,7 @@ use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
 use crate::backend::replication::resharding_state::ReshardingState;
 
-use super::options::Options;
+use super::options::{Options, RunMode};
 use super::prelude::*;
 
 pub(crate) struct CopyData {
@@ -16,6 +16,7 @@ pub(crate) struct CopyData {
     pub(crate) replication_slot: Option<String>,
     /// `tables_only` option: copy only the publication's tables, without cutover.
     pub(crate) tables_only: bool,
+    pub(crate) mode: RunMode,
 }
 
 #[async_trait]
@@ -51,7 +52,11 @@ impl Command for CopyData {
             (slot, option) => slot.or(option).map(str::to_owned),
         };
         let tables_only = options.flag("tables_only")?;
+        let mode = options.run_mode()?;
         options.finish()?;
+        if mode == RunMode::Abort && tables_only {
+            return Err(Error::InvalidOption("tables_only".into()));
+        }
 
         Ok(Self {
             from_database: from_database.to_owned(),
@@ -59,10 +64,16 @@ impl Command for CopyData {
             publication: publication.to_owned(),
             replication_slot,
             tables_only,
+            mode,
         })
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
+        match self.mode {
+            RunMode::WithCleanup => (),
+            RunMode::NoCleanup => return Err(Error::InvalidOption("cleanup_on_cancel".into())),
+            RunMode::Abort => return Err(Error::InvalidOption("abort".into())),
+        }
         info!(
             r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
             self.from_database, self.to_database, self.publication, self.tables_only
@@ -137,5 +148,53 @@ mod test {
             CopyData::parse("copy_data a b pub slot extra"),
             Err(Error::Syntax)
         ));
+    }
+
+    #[test]
+    fn parses_run_mode() {
+        for (sql, slot, mode) in [
+            ("copy_data a b pub", None, RunMode::WithCleanup),
+            (
+                "copy_data a b pub (cleanup_on_cancel)",
+                None,
+                RunMode::WithCleanup,
+            ),
+            (
+                "copy_data a b pub (cleanup_on_cancel true)",
+                None,
+                RunMode::WithCleanup,
+            ),
+            (
+                "copy_data a b pub with (cleanup_on_cancel false)",
+                None,
+                RunMode::NoCleanup,
+            ),
+            (
+                "copy_data a b pub (cleanup_on_cancel off)",
+                None,
+                RunMode::NoCleanup,
+            ),
+            (
+                "copy_data a b pub slot with (cleanup_on_cancel false)",
+                Some("slot"),
+                RunMode::NoCleanup,
+            ),
+            ("copy_data a b pub (abort)", None, RunMode::Abort),
+        ] {
+            let cmd = CopyData::parse(sql).unwrap();
+            assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
+            assert_eq!(cmd.mode, mode, "{sql}");
+        }
+
+        for sql in [
+            "copy_data a b pub (cleanup_on_cancel maybe)",
+            "copy_data a b pub (cleanup_on_cancel false, abort)",
+            "copy_data a b pub (abort, tables_only)",
+        ] {
+            assert!(
+                matches!(CopyData::parse(sql), Err(Error::InvalidOption(_))),
+                "{sql}"
+            );
+        }
     }
 }

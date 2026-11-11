@@ -9,13 +9,19 @@ use crate::{Databases, ReplicationStatus};
 /// The full migration one reshard task runs, and which phases it was asked
 /// to skip.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("reshard {databases}")]
+#[display("reshard {databases}{}", if *cleanup_on_cancel { "" } else { " (resumable)" })]
 pub struct ReshardDefinition {
     pub databases: Databases,
     pub skip_schema_sync: bool,
     pub replicate_only: bool,
     pub sync_only: bool,
     pub auto_cutover: bool,
+    #[serde(default = "default_cleanup_on_cancel")]
+    pub cleanup_on_cancel: bool,
+}
+
+pub(crate) fn default_cleanup_on_cancel() -> bool {
+    true
 }
 
 /// Stages of the migration, reported as the task's status. The fine-grained

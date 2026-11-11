@@ -306,7 +306,7 @@ Exclude the state table from the schema dump. A later run can use this destinati
 - `SHOW TASKS` has no new columns. The type of a resumable root task ends with ` (resumable)`, for example `reshard source -> destination (resumable)`. The abort task shows as `abort <command> <source> -> <destination>`.
 - New `SHOW MIGRATIONS`. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. `config` is `ok`, `mismatch: <fields>`, `changed: <fields>`, `mismatch: <fields>; changed: <fields>`, or `unknown: <reason>`.
 - A startup warning for each unfinished migration.
-- Control plane: a new field `resumable` on the reshard and replication definitions. A new definition kind and status kind `abort_migration`. All changes are additive.
+- Control plane: a new field `cleanup_on_cancel` on the reshard and replication definitions. A missing field reads as `true`. A new definition kind and status kind `abort_migration`. All changes are additive.
 - New table `pgdog.migrations` on destination shard 0. `pg_dump` in schema sync excludes it.
 - The state connection uses `application_name` `pgdog_resharding:<instance_id>`. It holds the advisory lock `(1885824103, hashtext('<source>/<destination>'))`.
 - STOP_TASK on a resumable run pauses it and keeps its slots and origins.

@@ -7,6 +7,7 @@ use crate::api::run_task;
 use crate::api::schema_sync::SchemaSyncTask;
 use crate::backend::replication::resharding_state::ReshardingState;
 
+use super::options::{Options, RunMode};
 use super::prelude::*;
 
 pub(crate) struct Replicate {
@@ -14,6 +15,7 @@ pub(crate) struct Replicate {
     pub(crate) to_database: String,
     pub(crate) publication: String,
     pub(crate) replication_slot: Option<String>,
+    pub(crate) mode: RunMode,
 }
 
 #[async_trait]
@@ -23,32 +25,44 @@ impl Command for Replicate {
     }
 
     fn parse(sql: &str) -> Result<Self, Error> {
-        let parts = sql.split(" ").collect::<Vec<_>>();
+        let (words, mut options) = Options::parse(sql)?;
 
-        match parts[..] {
-            ["replicate", from_database, to_database, publication] => Ok(Self {
-                from_database: from_database.to_owned(),
-                to_database: to_database.to_owned(),
-                publication: publication.to_owned(),
-                replication_slot: None,
-            }),
+        let (from_database, to_database, publication, replication_slot) = match words[..] {
+            ["replicate", from_database, to_database, publication] => {
+                (from_database, to_database, publication, None)
+            }
             [
                 "replicate",
                 from_database,
                 to_database,
                 publication,
                 replication_slot,
-            ] => Ok(Self {
-                from_database: from_database.to_owned(),
-                to_database: to_database.to_owned(),
-                publication: publication.to_owned(),
-                replication_slot: Some(replication_slot.to_owned()),
-            }),
-            _ => Err(Error::Syntax),
-        }
+            ] => (
+                from_database,
+                to_database,
+                publication,
+                Some(replication_slot),
+            ),
+            _ => return Err(Error::Syntax),
+        };
+        let mode = options.run_mode()?;
+        options.finish()?;
+
+        Ok(Self {
+            from_database: from_database.to_owned(),
+            to_database: to_database.to_owned(),
+            publication: publication.to_owned(),
+            replication_slot: replication_slot.map(str::to_owned),
+            mode,
+        })
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
+        match self.mode {
+            RunMode::WithCleanup => (),
+            RunMode::NoCleanup => return Err(Error::InvalidOption("cleanup_on_cancel".into())),
+            RunMode::Abort => return Err(Error::InvalidOption("abort".into())),
+        }
         info!(
             r#"replicate "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
@@ -82,5 +96,59 @@ impl Command for Replicate {
             RowDescription::new(&[Field::text("task_id")]).message(),
             dr.message(),
         ])
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parses_run_mode() {
+        for (sql, slot, mode) in [
+            ("replicate a b pub", None, RunMode::WithCleanup),
+            (
+                "replicate a b pub (cleanup_on_cancel)",
+                None,
+                RunMode::WithCleanup,
+            ),
+            (
+                "replicate a b pub (cleanup_on_cancel true)",
+                None,
+                RunMode::WithCleanup,
+            ),
+            (
+                "replicate a b pub with (cleanup_on_cancel false)",
+                None,
+                RunMode::NoCleanup,
+            ),
+            (
+                "replicate a b pub (cleanup_on_cancel off)",
+                None,
+                RunMode::NoCleanup,
+            ),
+            (
+                "replicate a b pub slot with (cleanup_on_cancel false)",
+                Some("slot"),
+                RunMode::NoCleanup,
+            ),
+            ("replicate a b pub (abort)", None, RunMode::Abort),
+        ] {
+            let cmd = Replicate::parse(sql).unwrap();
+            assert_eq!(cmd.publication, "pub", "{sql}");
+            assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
+            assert_eq!(cmd.mode, mode, "{sql}");
+        }
+
+        for sql in [
+            "replicate a b pub (cleanup_on_cancel maybe)",
+            "replicate a b pub (cleanup_on_cancel false, abort)",
+            "replicate a b pub (unknown)",
+        ] {
+            assert!(
+                matches!(Replicate::parse(sql), Err(Error::InvalidOption(_))),
+                "{sql}"
+            );
+        }
     }
 }

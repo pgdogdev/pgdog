@@ -87,6 +87,7 @@ impl Task for ReplicationTask {
         ReplicationDefinition {
             databases: self.state.databases(),
             auto_cutover: self.cutover == CutoverMode::Auto,
+            cleanup_on_cancel: true,
         }
     }
 
