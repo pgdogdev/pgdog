@@ -1,5 +1,6 @@
 use super::{Error, checked_add};
 use crate::net::messages::Datum;
+use pgdog_postgres_types::{DataType, Error as TypeError};
 use rust_decimal::prelude::*;
 
 #[derive(Debug)]
@@ -96,9 +97,14 @@ fn checked_mul_add(lhs: Datum, mul: Decimal, rhs: Datum) -> Result<Datum, Error>
     }
 }
 
+#[allow(clippy::unnecessary_lazy_evaluations)]
 fn checked_mul(lhs: Datum, rhs: Decimal) -> Result<Datum, Error> {
     match lhs {
-        Datum::Numeric(i) => Ok(Datum::Numeric(i * rhs)),
+        Datum::Numeric(i) => {
+            Ok(Datum::Numeric(i.checked_mul(rhs).ok_or_else(|| {
+                TypeError::NumericOutOfRange(DataType::Numeric)
+            })?))
+        }
         Datum::Double(f) => Ok(Datum::Double(f * rhs.as_f64())),
         Datum::Null if rhs.is_zero() => Ok(Datum::Null),
         Datum::Null => Err(Error::UnsupportedAggregation {
