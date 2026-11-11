@@ -6,7 +6,7 @@ use tracing::info;
 use crate::api::resharding::ReshardTask;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::TaskError;
-use crate::api::{MigrationError, run_task};
+use crate::api::{ReshardingError, run_task};
 use crate::backend::databases::databases;
 use crate::backend::replication::logical::Error::ReplicationAborted;
 use crate::backend::replication::resharding_state::ReshardingState;
@@ -117,7 +117,7 @@ pub(crate) enum Commands {
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         cleanup_on_cancel: bool,
 
-        /// Abort the unfinished migration from source to destination: drop
+        /// Abort the unfinished resharding from source to destination: drop
         /// the slots it created, its origins and its state.
         #[arg(
             long,
@@ -282,7 +282,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         )
         .await;
 
-        if let Err(TaskError::Failed(MigrationError::Replication(ReplicationAborted))) = result
+        if let Err(TaskError::Failed(ReshardingError::Replication(ReplicationAborted))) = result
             && comms().offline()
         {
             // pgdog is shutting down, that's why the replication process is aborted.

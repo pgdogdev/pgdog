@@ -18,7 +18,7 @@ The goal: a run that can stop, resume and survive a crash, in every phase.
 
 |Topic|Selected input|
 |---|---|
-|State store|The Postgres table `pgdog.migrations` on destination shard 0 (SM1). The control plane Raft (SM2) was rejected. See "Storage mode".|
+|State store|The Postgres table `pgdog.resharding` on destination shard 0 (SM1). The control plane Raft (SM2) was rejected. See "Storage mode".|
 |Stored data|Only facts that Postgres does not store. Slots, origins and replication progress come from the catalogs.|
 |Stop mode|The option `cleanup_on_cancel`, default `true`, keeps today's behavior. With `cleanup_on_cancel false`, the run is resumable. A resumable run never drops its slots on stop, error or crash. `WITH (abort)` cleans up.|
 |Resume trigger|Manual command only. Startup only reports unfinished runs.|
@@ -80,12 +80,12 @@ Rule: store a fact only when Postgres does not store it and resume needs it.
 
 |Stored|Why resume needs it|Stage|
 |---|---|---|
-|Source and destination names|Run key. One unfinished run per pair.|1|
-|Command, publication, stage flags, format version|Rebuild the run. Refuse a newer format.|1|
+|Source and destination names, publication|Run key. One unfinished run per key.|1|
+|Command, command flags, format version|Rebuild the run. Refuse a newer format.|1|
 |Slot name|Find the slots and origins. A generated name is lost on crash.|1|
 |"Slot existed before the run" flag|Abort must not drop a user slot.|1|
 |Stage: last phase that started|Skip finished phases. Decide if a missing slot or origin means "create" or "refuse".|1|
-|Config snapshot: shard counts and sharding rules of both clusters (critical), shard endpoints (informational)|Detect a config change before resume|1|
+|Config snapshot: shard counts and sharding rules of both clusters|Detect a config change before resume|1|
 |Copy progress per table part: copy LSN and completion|Skip complete parts. Resolve prepared transactions. Give watermarks to table sync and replication.|3|
 |Cutover step: `none`, `started`, `swap_done`|Recover a crash inside cutover.|5|
 
@@ -150,23 +150,24 @@ SM2 can be revisited if resumable resharding becomes an enterprise-only feature,
 
 ```mermaid
 erDiagram
-  MIGRATION ||--o{ PART_MARKER : "one per destination shard"
-  MIGRATION {
+  RESHARDING ||--o{ PART_MARKER : "one per destination shard"
+  RESHARDING {
     text source_db PK
     text destination_db PK
     text command
-    text publication
-    jsonb stage_flags
+    text publication PK
+    jsonb command_flags
     text slot_name
     bool slot_existed
     text stage
-    text cutover_step
+    text cutover_step "Stage 5"
     jsonb config
     int format_version
   }
   PART_MARKER {
     text source_db PK
     text destination_db PK
+    text publication PK
     text table_schema PK
     text table_name PK
     int source_shard PK
@@ -174,21 +175,42 @@ erDiagram
   }
 ```
 
-Stage 3 records which table parts are copied in table `PART_MARKER`, one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `MIGRATION`.
+Stage 3 records which table parts are copied in table `PART_MARKER`, one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `RESHARDING`.
 
-`MIGRATION` is the table `pgdog.migrations`. It has one row per unfinished migration, on destination shard 0. The row describes the migration and every object it keeps.
+`RESHARDING` is the table `pgdog.resharding`. It has one row per unfinished resharding, on destination shard 0. The row describes the resharding and every object it keeps.
 
 Stage values: `pre_data`, `copy`, `post_data`, `table_sync`, `replication`, `cutover`, `reverse_replication`.
 
 All slots use the stored name: one forward slot per source shard, one reverse slot per destination shard. Each slot has one origin on each shard of the other side. Each table part is its own redo unit.
 
-The state store holds only `MIGRATION`.
+The state store holds only `RESHARDING`.
 
-The state store creates its tables at run start with idempotent DDL. The existing `pgdog` schema setup does not run for every resharding run, so it is not enough. Format changes use additive DDL and the format version.
+The state store creates its tables at run start with idempotent DDL. The existing `pgdog` schema setup does not run for every resharding run, so it is not enough.
+
+### Format changes
+
+Two layers change separately: the table shape and the meaning of a row.
+
+Table shape. The DDL file runs at every state store open, under a transaction advisory lock. Changes are appended to it as idempotent statements.
+
+- Add columns only, and always with a default. Older pgdog versions name their columns, so they ignore new columns, and their inserts still work.
+- Never drop, rename or retype a column. Stop using it instead.
+- The primary key never changes. A key change needs a new table and a format version bump.
+
+Row meaning. Each row stores the format version of the pgdog that wrote it.
+
+|Change|Version bump|Rule|
+|---|---|---|
+|New field in the command flags or config snapshot JSON|No|The field has a serde default. Older versions ignore it.|
+|New column with a default|No|See the table shape rules.|
+|New stage value or cutover step, or a field with a new meaning|Yes|An older pgdog refuses the row. It does not resume or abort a resharding it cannot read.|
+|A newer pgdog reads an older row|No|The row parser fills the defaults of the newer format.|
+
+`SHOW RESHARDING` and the startup scan read the key columns first. A row that this version cannot read still shows its key, with the reason. It does not hide the other rows.
 
 ## Ownership
 
-The owner holds a session advisory lock on the pair. It uses a dedicated state connection. Postgres frees the lock when the owner dies.
+The owner holds a session advisory lock on the run key (source, destination, publication). It uses a dedicated state connection. Postgres frees the lock when the owner dies.
 
 All state writes use this connection. A lost connection ends ownership. The owner then stops all tasks before any new side effect. A lease survives short network breaks, but it needs owner and expiry columns.
 
@@ -209,7 +231,7 @@ flowchart LR
 
 |Job|Where it happens|
 |---|---|
-|Load or create the migration row, take the lock|The start command with `cleanup_on_cancel false` or `WITH (resume)`, before the task starts. The command puts the resumable state into the shared run state.|
+|Load or create the resharding row, take the lock|The start command with `cleanup_on_cancel false` or `WITH (resume)`, before the task starts. The command puts the resumable state into the shared run state.|
 |Hold the lock and the state connection|The shared run state. The lock lives until the run ends or pauses, not until the last copy of the state is dropped.|
 |Skip finished phases|The resharding pipeline reads the stored stage.|
 |Skip done parts, adopt slots, keep origins|Each phase task reads its part of the resumable state.|
@@ -251,12 +273,12 @@ For each side effect, the state records what resume needs before the effect, or 
 
 |Command|Behavior|Stage|
 |---|---|---|
-|RESHARD, COPY_DATA, REPLICATE `WITH (cleanup_on_cancel false)`. CLI `data-sync --cleanup-on-cancel false`.|Starts a resumable run. Returns the task id and slot name. Fails if the pair has an unfinished migration.|1|
+|RESHARD, COPY_DATA, REPLICATE `WITH (cleanup_on_cancel false)`. CLI `data-sync --cleanup-on-cancel false`.|Starts a resumable run. Returns the task id and slot name. Fails if the key (source, destination, publication) has an unfinished resharding. Each other publication on the same pair has its own resharding.|1|
 |STOP_TASK|Pauses. Slots and origins stay. Traffic resumes if it was stopped.|1|
-|RESHARD, COPY_DATA, REPLICATE `WITH (abort)`. CLI `data-sync --abort`.|The pair (source, destination) is the key. The command and the publication must match the stored row. The slot must match when it is given. The config snapshot is not checked. The abort runs as a registered task, `abort <command> <source> -> <destination>` in `SHOW TASKS`. It stops the run if it is active. It drops the slots the run created, all its origins and the row. Destination data stays. Admin returns the task id. The CLI waits for the task.|1, reverse in 5|
+|RESHARD, COPY_DATA, REPLICATE `WITH (abort)`. CLI `data-sync --abort`.|The key is (source, destination, publication). The command must match the stored row. The slot must match when it is given. The config snapshot is not checked. The abort runs as a registered task, `abort <command> <source> -> <destination>` in `SHOW TASKS`. It stops the run if it is active. It drops the slots the run created, all its origins and the row. Destination data stays. Admin returns the task id. The CLI waits for the task.|1, reverse in 5|
 |`SHOW TASKS`|Existing command. The type of a resumable root task ends with ` (resumable)`.|1|
-|`SHOW MIGRATIONS`|New command. It lists every unfinished migration from the state tables. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. Stage 6 adds slot WAL status and retained bytes.|1|
-|RESHARD, COPY_DATA, REPLICATE `WITH (resume)`. CLI `data-sync --resume`.|Continues the unfinished migration of the pair. The command and its arguments must match the stored row, or it refuses. It refuses on a critical config mismatch. Takes the lock, validates, reconciles, continues. No new command.|2|
+|`SHOW RESHARDING`|New command. It lists every unfinished resharding from the state tables. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. Stage 6 adds slot WAL status and retained bytes.|1|
+|RESHARD, COPY_DATA, REPLICATE `WITH (resume)`. CLI `data-sync --resume`.|Continues the unfinished resharding with the same key (source, destination, publication). The command and its arguments must match the stored row, or it refuses. It refuses on a critical config mismatch. Takes the lock, validates, reconciles, continues. No new command.|2|
 |CUTOVER|No change.|5|
 
 After cutover the names point to swapped hosts. The commands search shard 0 of both clusters. Exactly one row must match.
@@ -277,10 +299,10 @@ In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Canc
 ### Approach
 
 1. Parse `cleanup_on_cancel`. The default is `true`. With `true`, nothing changes: no row, no lock, and slots and origins are dropped on stop or error.
-2. With `false`: open a dedicated state connection to destination shard 0. Create `pgdog.migrations` with idempotent DDL. Take the session advisory lock on the pair. Fail if the pair has a row.
+2. With `false`: open a dedicated state connection to destination shard 0. Create `pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication). Fail if the key has a row.
 3. Probe the slots before the insert. If all slots exist, the row records "slot existed". If no slot exists, it records "slot did not exist". If only some slots exist, refuse.
-4. Capture the config snapshot: the shard counts and sharding rules of both clusters, and the shard endpoints.
-5. Insert the row before the first slot exists: command, publication, stage flags, slot name, "existed" flag, stage, config snapshot, format version.
+4. Capture the config snapshot: the shard counts and sharding rules of both clusters.
+5. Insert the row before the first slot exists: command, publication, command flags, slot name, "existed" flag, stage, config snapshot, format version.
 6. Write the stage at each phase start.
 7. Every 5 s the owner checks its state connection (lock watchdog). If the connection is lost, the run pauses.
 8. On stop, error, shutdown or lock loss: stop tasks, keep slots and origins, release the lock. After a crash, Postgres frees the lock.
@@ -289,11 +311,11 @@ In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Canc
 
 Every automatic cleanup path skips resumable runs. Only abort and the normal run end drop objects.
 
-Abort runs as the registered task `AbortMigrationTask`. Admin and CLI use the same task. `SHOW TASKS` lists it, and `STOP_TASK` can stop it. Before the task starts, the command checks the row: the command, the publication, and the slot when it is given. A mismatch is an error at once. The task stops the run if it is active in this process. Then it drops the slots that the run created, all its origins and the row. A slot that existed before the run stays. Each phase skips missing objects, so a failed abort can run again. Abort does not check the config snapshot.
+Abort runs as the registered task `AbortReshardingTask`. Admin and CLI use the same task. `SHOW TASKS` lists it, and `STOP_TASK` can stop it. The command finds the row by its key (source, destination, publication). Before the task starts, the command checks the row: the command, and the slot when it is given. A mismatch is an error at once. The task stops the run if it is active in this process. Then it drops the slots that the run created, all its origins and the row. A slot that existed before the run stays. Each phase skips missing objects, so a failed abort can run again. Abort does not check the config snapshot.
 
-The config snapshot has critical and informational fields. Critical: the shard counts and the `sharded_tables`, `sharded_mappings`, `omnisharded_tables` and `sharded_schemas` entries of both databases. Informational: the host, port and database name of each shard primary. A shared validator compares the snapshot with the live config. Stage 1 only reports the result. Stage 2 refuses a resume on a critical mismatch.
+The config snapshot holds the shard counts and the `sharded_tables`, `sharded_mappings`, `omnisharded_tables` and `sharded_schemas` entries of both databases. Every field is critical. Shard hosts are not stored: a failover or a DNS change keeps the same databases. The stored slots and origins prove that the databases are the same. A shared validator compares the snapshot with the live config. Stage 1 only reports the result. Stage 2 refuses a resume on a mismatch.
 
-`SHOW MIGRATIONS` reads the state table on shard 0 of each configured database at query time. A try-lock tells `running` from `paused`. It also counts the slots and origins that the migration keeps. At startup in server mode, pgdog runs the same scan. It logs one warning for each unfinished migration.
+`SHOW RESHARDING` reads the state table on shard 0 of each configured database at query time. A try-lock tells `running` from `paused`. It also counts the slots and origins that the resharding keeps. At startup in server mode, pgdog runs the same scan. It logs one warning for each unfinished resharding.
 
 Exclude the state table from the schema dump. A later run can use this destination as its source.
 
@@ -301,21 +323,21 @@ Exclude the state table from the schema dump. A later run can use this destinati
 
 - RESHARD, COPY_DATA and REPLICATE accept the option `cleanup_on_cancel <bool>`, default `true`. `WITH (cleanup_on_cancel false)` starts a resumable run. A bare `cleanup_on_cancel` means `true`. Accepted values: `true`, `false`, `on`, `off`.
 - RESHARD and REPLICATE now accept `WITH (...)` options, as COPY_DATA does. A resumable RESHARD or REPLICATE replies with `task_id` and `replication_slot`.
-- RESHARD, COPY_DATA and REPLICATE accept `WITH (abort)`, forward direction only. It aborts the unfinished migration of the pair. The reply is one column `task_id`, the abort task. `abort` together with `cleanup_on_cancel` is refused. COPY_DATA refuses `abort` with `tables_only`.
+- RESHARD, COPY_DATA and REPLICATE accept `WITH (abort)`, forward direction only. It aborts the unfinished resharding with the key (source, destination, publication) of the command. The reply is one column `task_id`, the abort task. `abort` together with `cleanup_on_cancel` is refused. COPY_DATA refuses `abort` with `tables_only`.
 - CLI `data-sync --cleanup-on-cancel <true|false>` (default `true`) and `data-sync --abort`. `--abort` conflicts with `--cleanup-on-cancel`, `--replicate-only`, `--tables-only`, `--sync-only` and `--skip-schema-sync`.
 - `SHOW TASKS` has no new columns. The type of a resumable root task ends with ` (resumable)`, for example `reshard source -> destination (resumable)`. The abort task shows as `abort <command> <source> -> <destination>`.
-- New `SHOW MIGRATIONS`. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. `config` is `ok`, `mismatch: <fields>`, `changed: <fields>`, `mismatch: <fields>; changed: <fields>`, or `unknown: <reason>`.
-- A startup warning for each unfinished migration.
-- Control plane: a new field `cleanup_on_cancel` on the reshard and replication definitions. A missing field reads as `true`. A new definition kind and status kind `abort_migration`. All changes are additive.
-- New table `pgdog.migrations` on destination shard 0. `pg_dump` in schema sync excludes it.
-- The state connection uses `application_name` `pgdog_resharding:<instance_id>`. It holds the advisory lock `(1885824103, hashtext('<source>/<destination>'))`.
+- New `SHOW RESHARDING`. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. `config` is `ok`, the error that names the first changed setting, or `unknown: <reason>`.
+- A startup warning for each unfinished resharding.
+- Control plane: a new field `cleanup_on_cancel` on the reshard and replication definitions. A missing field reads as `true`. A new definition kind and status kind `abort_resharding`. All changes are additive.
+- New table `pgdog.resharding` on destination shard 0. `pg_dump` in schema sync excludes it.
+- The state connection uses `application_name` `pgdog_resharding:<instance_id>`. It holds the advisory lock `(hashtext('pgdog.resharding'), hashtext('<source>/<destination>/<publication>'))`. The first half is the namespace of all resharding locks.
 - STOP_TASK on a resumable run pauses it and keeps its slots and origins.
 
 ### Tests
 
 |#|Scenario|Expected result|
 |---|---|---|
-|1|COPY_DATA `WITH (cleanup_on_cancel false)`. STOP_TASK during replication.|Paused in `SHOW MIGRATIONS`. Forward slots and origins still exist. `config` is `ok`, also after a restart.|
+|1|COPY_DATA `WITH (cleanup_on_cancel false)`. STOP_TASK during replication.|Paused in `SHOW RESHARDING`. Forward slots and origins still exist. `config` is `ok`, also after a restart.|
 |2|`WITH (abort)` after 1.|Row gone. Run slots and origins gone. A slot that existed before the run stays.|
 |3|REPLICATE with the default `cleanup_on_cancel true`. STOP_TASK.|Today's cleanup. No state row.|
 
@@ -333,7 +355,7 @@ What exists when a start command with `WITH (resume)` runs:
 
 |Source|Data|
 |---|---|
-|State table|Command, publication, stage flags, slot name, "slot existed" flag, stage, cutover step, config snapshot, format version|
+|State table|Command, publication, command flags, slot name, "slot existed" flag, stage, config snapshot, format version|
 |Source catalog, per source shard|The slot, its confirmed flush position and its WAL status|
 |Destination catalog, per destination shard|The origin and its progress: the last source commit applied on that shard|
 |Config|The source and destination clusters and their shard counts|
@@ -344,7 +366,7 @@ How resume rebuilds the run:
 
 1. Find the run row and take the lock. If another instance holds the lock, refuse.
 2. Validate: known format, config snapshot with no critical mismatch, matching shard counts, every slot present with its WAL, every origin present.
-3. Build the shared run state from the stored data: same publication, slot name and stage flags. Slot ownership comes from the stored "existed" flag, because every slot now exists.
+3. Build the shared run state from the stored data: same publication, slot name and command flags. Slot ownership comes from the stored "existed" flag, because every slot now exists.
 4. Adopt the slots by name. Create only the origins that are missing (before stage `table_sync`). Never reset origin progress.
 5. Load the publication tables. Set each table's watermark from its stored copy LSN (Stage 3). A REPLICATE run has no copy, so its watermarks start at zero.
 6. Start a new task with the "resumed" flag, at the stored stage.
@@ -402,7 +424,7 @@ Facts:
 
 Needs:
 
-- Link all attempts of one run. The link must not depend on the instance, the token or the task id. The run key (source, destination) in the state table, or a run id stored in the run row, can be this link.
+- Link all attempts of one run. The link must not depend on the instance, the token or the task id. The run key (source, destination, publication) in the state table, or a run id stored in the run row, can be this link.
 - Show that a task is resumed, and which attempt it continues.
 - End the old attempt in the UI (for example "interrupted") when the run is resumed or aborted.
 - Show done parts as done, not as zero progress.
@@ -545,7 +567,7 @@ Today cutover drops the forward slots before the config swap. A crash between th
 ### Interface changes
 
 - `WITH (abort)` works in the reverse direction.
-- The state stores the cutover step.
+- The state stores the cutover step. Stage 5 adds the column `cutover_step` with additive DDL and the default `none`. Rows from earlier stages read as `none`.
 - The config swap survives a restart (with P1, P2 or P4), or resume prints the needed change (P3).
 - CUTOVER is unchanged.
 
@@ -623,7 +645,7 @@ Result: an injected failure at each cutover step, then resume, ends in the actio
 
 ### Interface changes
 
-- Slot WAL status and retained bytes in `SHOW MIGRATIONS`. A paused run keeps its slot, and the slot holds WAL.
+- Slot WAL status and retained bytes in `SHOW RESHARDING`. A paused run keeps its slot, and the slot holds WAL.
 
 Tests: second-instance resume for every stage.
 

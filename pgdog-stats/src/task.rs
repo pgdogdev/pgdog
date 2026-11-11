@@ -386,7 +386,7 @@ impl TaskDefinitionKind {
 }
 
 /// The two ends of a migration.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize, JsonSchema)]
 #[display("{source} -> {destination}")]
 pub struct Databases {
     pub source: String,

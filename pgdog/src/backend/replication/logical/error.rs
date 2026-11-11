@@ -273,6 +273,19 @@ pub(crate) enum Error {
         #[source]
         source: Box<Error>,
     },
+
+    #[error("resharding {key} is owned by another session ({owner})")]
+    ReshardingLocked { key: String, owner: String },
+
+    #[error("unsupported resharding state: {0}")]
+    ResumableFormat(String),
+
+    #[allow(dead_code)]
+    #[error(
+        "sharding config changed since the resharding started: {}",
+        .0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    ConfigChanged(Vec<super::resumable::snapshot::ConfigMismatch>),
 }
 
 impl From<ErrorResponse> for Error {

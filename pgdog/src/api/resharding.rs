@@ -14,7 +14,7 @@ use crate::api::replication::{CutoverMode, ReplicationTask};
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
-use crate::api::{MigrationError, Task, run_task};
+use crate::api::{ReshardingError, Task, run_task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
@@ -48,7 +48,7 @@ pub(crate) struct ReshardTask {
 impl Task for ReshardTask {
     type Status = ReshardStatus;
     type Output = ();
-    type Error = MigrationError;
+    type Error = ReshardingError;
 
     fn cancel_timeout() -> Duration {
         Duration::from_secs(60)
@@ -65,7 +65,7 @@ impl Task for ReshardTask {
         }
     }
 
-    async fn run(self, ctx: TaskContext<Self>) -> Result<(), MigrationError> {
+    async fn run(self, ctx: TaskContext<Self>) -> Result<(), ReshardingError> {
         let cancel = ctx.cancellation_token();
         let cutover = self.cutover_mode();
         let mut state = self.state;
@@ -95,7 +95,7 @@ impl Task for ReshardTask {
 
         // Replicate-only continues an earlier copy.
         let mut copied = self.replicate_only;
-        let result: Result<(), MigrationError> = Box::pin(async {
+        let result: Result<(), ReshardingError> = Box::pin(async {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);
