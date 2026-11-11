@@ -94,6 +94,7 @@ impl ReshardingStore {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn list(
         server: &mut Server,
         destination_db: &str,
@@ -142,6 +143,7 @@ async fn try_lock(server: &mut Server, key: &ReshardingKey) -> Result<bool, Erro
     Ok(locked.first() == Some(&1))
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct UnreadableRecord {
     pub(crate) key: ReshardingKey,
@@ -168,7 +170,7 @@ fn parse_key(row: &DataRow) -> Result<ReshardingKey, Error> {
 }
 
 fn parse_body(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Error> {
-    let format_version = text(row, 9)?
+    let format_version = text(row, 8)?
         .parse::<i32>()
         .map_err(|err| Error::ResumableFormat(format!("format_version: {err}")))?;
     if format_version > FORMAT_VERSION {
@@ -179,13 +181,12 @@ fn parse_body(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Err
 
     Ok(ReshardingRecord {
         key,
-        command: text(row, 3)?.parse()?,
-        command_flags: serde_json::from_str(&text(row, 4)?)
-            .map_err(|err| Error::ResumableFormat(format!("command_flags: {err}")))?,
-        slot_name: text(row, 5)?,
-        slot_existed: text(row, 6)? == "true",
-        stage: text(row, 7)?.parse()?,
-        config: serde_json::from_str(&text(row, 8)?)
+        command: serde_json::from_str(&text(row, 3)?)
+            .map_err(|err| Error::ResumableFormat(format!("command: {err}")))?,
+        slot_name: text(row, 4)?,
+        slot_existed: text(row, 5)? == "true",
+        stage: text(row, 6)?.parse()?,
+        config: serde_json::from_str(&text(row, 7)?)
             .map_err(|err| Error::ResumableFormat(format!("config: {err}")))?,
         format_version,
     })
@@ -193,7 +194,7 @@ fn parse_body(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Err
 
 #[cfg(test)]
 mod test {
-    use super::super::{CommandFlags, ConfigSnapshot, ReshardingCommand};
+    use super::super::{ConfigSnapshot, ReshardingCommand};
     use super::*;
     use crate::backend::server::test::test_server;
 
@@ -225,10 +226,12 @@ mod test {
         .unwrap();
         ReshardingRecord {
             key,
-            command: ReshardingCommand::Reshard,
-            command_flags: CommandFlags {
+            command: ReshardingCommand::Reshard {
+                skip_schema_sync: false,
+                replicate_only: false,
+                sync_only: false,
                 auto_cutover: true,
-                ..Default::default()
+                tables_only: false,
             },
             slot_name: "slot".into(),
             slot_existed: false,

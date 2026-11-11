@@ -32,6 +32,7 @@ pub(crate) struct ReshardingState {
     inner: Arc<Mutex<ReshardingStateInner>>,
     /// Slot name actually used: the supplied one or a generated one.
     slot_name: String,
+    cleanup_on_cancel: bool,
 }
 
 #[derive(Debug, bon::Builder)]
@@ -51,6 +52,8 @@ struct ReshardingStateInner {
     slot_name: String,
     #[builder(skip)]
     direction: ReshardingDirection,
+    #[builder(skip)]
+    keep_slots: bool,
 }
 
 type Slots = HashMap<usize, ReplicationSlot<Permanent>>;
@@ -78,6 +81,9 @@ impl ReshardingStateInner {
 
 impl Drop for ReshardingStateInner {
     fn drop(&mut self) {
+        if self.keep_slots {
+            return;
+        }
         remove_slots(self.take_owned_slots());
         remove_origins(self.take_origins());
     }
@@ -91,6 +97,7 @@ impl ReshardingState {
         destination: &str,
         publication: &str,
         replication_slot: Option<String>,
+        #[builder(default = true)] cleanup_on_cancel: bool,
     ) -> Result<Self, Error> {
         let slot_name = replication_slot
             .unwrap_or(format!("__pgdog_repl_{}", random_string(19).to_lowercase()));
@@ -106,6 +113,7 @@ impl ReshardingState {
             publication: publication.to_owned(),
             inner: Arc::new(Mutex::new(inner)),
             slot_name,
+            cleanup_on_cancel,
         })
     }
 }
@@ -350,6 +358,22 @@ impl ReshardingState {
         };
         remove_origins(origins);
     }
+
+    pub(crate) fn is_resumable(&self) -> bool {
+        !self.cleanup_on_cancel
+    }
+
+    pub(crate) fn set_keep_slots(&self, keep: bool) {
+        self.inner.lock().keep_slots = keep;
+    }
+
+    pub(crate) fn forget_slots(&self) {
+        let forgotten = {
+            let mut inner = self.inner.lock();
+            (inner.take_slots(), inner.take_origins())
+        };
+        drop(forgotten);
+    }
 }
 
 fn remove_slots(slots: Slots) -> JoinHandle<Result<(), Error>> {
@@ -400,6 +424,7 @@ impl Display for ReshardingState {
 #[cfg(test)]
 mod test {
     use super::super::publisher::test::setup_publication;
+    use super::super::resumable::{ReshardingCommand, ResumeState, Stage};
     use super::*;
     use crate::backend::Server;
     use crate::config::config;
@@ -464,6 +489,7 @@ mod test {
             publication: "publication_test".into(),
             inner: Arc::new(Mutex::new(inner)),
             slot_name: slot_name.to_owned(),
+            cleanup_on_cancel: true,
         }
     }
 
@@ -657,6 +683,170 @@ mod test {
         drop(owner);
         wait_until_removed(&mut publication.server, name).await;
 
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    async fn resharding_rows(server: &mut Server, name: &str) -> i64 {
+        let rows: Vec<i64> = server
+            .fetch_all(format!(
+                "SELECT count(*) FROM pgdog.resharding WHERE slot_name = '{name}'"
+            ))
+            .await
+            .unwrap();
+        rows[0]
+    }
+
+    async fn remove_resumable(server: &mut Server, name: &str) {
+        server
+            .execute_checked(format!(
+                "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name LIKE '{name}%'"
+            ))
+            .await
+            .unwrap();
+        server
+            .execute_checked(format!(
+                "SELECT pg_replication_origin_drop(roname) FROM pg_replication_origin WHERE roname LIKE '__pgdog_origin_{name}%'"
+            ))
+            .await
+            .unwrap();
+        server
+            .execute_checked(format!(
+                "DO $$ BEGIN IF to_regclass('pgdog.resharding') IS NOT NULL THEN \
+                DELETE FROM pgdog.resharding WHERE slot_name = '{name}'; END IF; END $$"
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn paused_resumable_run_keeps_slots_origins_and_record() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_resumable_pause";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let shards = source.shards().len() as i64;
+        remove_resumable(&mut publication.server, name).await;
+
+        let mut state = state_for(&source, name);
+        state.cleanup_on_cancel = false;
+        let resumable = ResumeState::load_or_create(
+            &state,
+            ReshardingCommand::Replicate {
+                auto_cutover: false,
+            },
+            Stage::Replication,
+        )
+        .await
+        .unwrap();
+        assert!(resumable.keeps_slots());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+
+        state
+            .prepare_replication(&CancellationToken::new())
+            .await
+            .unwrap();
+        resumable.pause(&state);
+        assert!(!resumable.keeps_slots());
+        assert!(resumable.run_store().is_none());
+        drop(resumable);
+        drop(state);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert_eq!(slot_count(&mut publication.server, name).await, shards);
+        assert_eq!(
+            origin_count(&mut publication.server, name).await,
+            shards * shards
+        );
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    const REPLICATE: ReshardingCommand = ReshardingCommand::Replicate {
+        auto_cutover: false,
+    };
+
+    fn resumable_state(source: &Cluster, name: &str) -> ReshardingState {
+        let mut state = state_for(source, name);
+        state.publication = format!("{name}_pub");
+        state.cleanup_on_cancel = false;
+        state
+    }
+
+    async fn load_when_unlocked(state: &ReshardingState) -> Result<ResumeState, Error> {
+        for _ in 0..50 {
+            match ResumeState::load_or_create(state, REPLICATE, Stage::Replication).await {
+                Err(Error::ReshardingLocked { .. }) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await
+                }
+                other => return other,
+            }
+        }
+        panic!("the resharding lock was not released");
+    }
+
+    #[tokio::test]
+    async fn resume_state_refuses_parallel_and_unfinished_runs() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_resume_refuse";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        remove_resumable(&mut publication.server, name).await;
+        let state = resumable_state(&source, name);
+
+        let running = ResumeState::load_or_create(&state, REPLICATE, Stage::Replication)
+            .await
+            .unwrap();
+
+        let parallel = ResumeState::load_or_create(&state, REPLICATE, Stage::Replication).await;
+        assert!(
+            matches!(parallel, Err(Error::ReshardingLocked { .. })),
+            "{parallel:?}"
+        );
+
+        running.pause(&state);
+        let unfinished = load_when_unlocked(&state).await;
+        assert!(
+            matches!(unfinished, Err(Error::ReshardingExists { .. })),
+            "{unfinished:?}"
+        );
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn finished_resume_state_frees_the_key() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_resume_finish";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        remove_resumable(&mut publication.server, name).await;
+        let state = resumable_state(&source, name);
+
+        let first = ResumeState::load_or_create(&state, REPLICATE, Stage::Replication)
+            .await
+            .unwrap();
+        assert!(state.inner.lock().keep_slots);
+
+        first.finish(&state).await.unwrap();
+        assert!(!first.keeps_slots());
+        assert!(!state.inner.lock().keep_slots);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+
+        let second = load_when_unlocked(&state).await.unwrap();
+        assert!(second.keeps_slots());
+        second.finish(&state).await.unwrap();
+
+        remove_resumable(&mut publication.server, name).await;
         source.shutdown();
         publication.cleanup().await;
     }

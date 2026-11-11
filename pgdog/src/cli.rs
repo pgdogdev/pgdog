@@ -258,9 +258,6 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         abort,
     } = commands
     {
-        if !cleanup_on_cancel {
-            return Err("--cleanup-on-cancel false is not available yet".into());
-        }
         if abort {
             return Err("--abort is not available yet".into());
         }
@@ -269,6 +266,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
             .destination(&to_database)
             .publication(&publication)
             .maybe_replication_slot(replication_slot)
+            .cleanup_on_cancel(cleanup_on_cancel)
             .build()?;
 
         let result = run_task(

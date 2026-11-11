@@ -69,10 +69,8 @@ impl Command for CopyData {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        match self.mode {
-            RunMode::WithCleanup => (),
-            RunMode::NoCleanup => return Err(Error::InvalidOption("cleanup_on_cancel".into())),
-            RunMode::Abort => return Err(Error::InvalidOption("abort".into())),
+        if self.mode == RunMode::Abort {
+            return Err(Error::InvalidOption("abort".into()));
         }
         info!(
             r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
@@ -84,6 +82,7 @@ impl Command for CopyData {
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
+            .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
             .build()?;
 
         let slot_name = state.replication_slot().to_owned();

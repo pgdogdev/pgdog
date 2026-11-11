@@ -280,6 +280,12 @@ pub(crate) enum Error {
     #[error("unsupported resharding state: {0}")]
     ResumableFormat(String),
 
+    #[error("resharding {key} is unfinished at stage {stage}; abort it with WITH (abort)")]
+    ReshardingExists { key: String, stage: String },
+
+    #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
+    ResumableSlotsPartial(String),
+
     #[allow(dead_code)]
     #[error(
         "sharding config changed since the resharding started: {}",

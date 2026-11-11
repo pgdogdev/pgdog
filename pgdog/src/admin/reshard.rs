@@ -57,10 +57,8 @@ impl Command for Reshard {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        match self.mode {
-            RunMode::WithCleanup => (),
-            RunMode::NoCleanup => return Err(Error::InvalidOption("cleanup_on_cancel".into())),
-            RunMode::Abort => return Err(Error::InvalidOption("abort".into())),
+        if self.mode == RunMode::Abort {
+            return Err(Error::InvalidOption("abort".into()));
         }
         info!(
             r#"resharding "{}" to "{}", publication="{}""#,
@@ -71,6 +69,7 @@ impl Command for Reshard {
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
+            .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
             .build()?;
 
         let task_id = run_task(

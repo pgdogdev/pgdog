@@ -58,10 +58,8 @@ impl Command for Replicate {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        match self.mode {
-            RunMode::WithCleanup => (),
-            RunMode::NoCleanup => return Err(Error::InvalidOption("cleanup_on_cancel".into())),
-            RunMode::Abort => return Err(Error::InvalidOption("abort".into())),
+        if self.mode == RunMode::Abort {
+            return Err(Error::InvalidOption("abort".into()));
         }
         info!(
             r#"replicate "{}" to "{}", publication="{}""#,
@@ -73,6 +71,7 @@ impl Command for Replicate {
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
+            .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
             .build()?;
 
         let schema_sync = SchemaSyncTask::builder()

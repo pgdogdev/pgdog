@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use derive_more::{Display, FromStr, FromStrError};
 
 use pgdog_stats::Databases;
@@ -9,10 +7,14 @@ use super::Error;
 
 mod queries;
 pub(crate) mod snapshot;
+pub(crate) mod state;
 pub(crate) mod store;
+pub(crate) mod watchdog;
 
 pub(crate) use snapshot::ConfigSnapshot;
+pub(crate) use state::ResumeState;
 pub(crate) use store::ReshardingStore;
+pub(crate) use watchdog::ActiveRun;
 
 pub(crate) const RESHARDING_TABLE: &str = "resharding";
 
@@ -36,14 +38,20 @@ impl ReshardingKey {
     }
 }
 
-/// Defines the command that was ran
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, FromStr)]
-#[display(rename_all = "snake_case")]
-#[from_str(rename_all = "snake_case")]
-#[from_str(error(Error, format_error))]
+/// Defines the command that was ran, with the options of that command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
 pub(crate) enum ReshardingCommand {
-    Reshard,
-    Replicate,
+    #[display("reshard")]
+    Reshard {
+        skip_schema_sync: bool,
+        replicate_only: bool,
+        sync_only: bool,
+        auto_cutover: bool,
+        tables_only: bool,
+    },
+    #[display("replicate")]
+    Replicate { auto_cutover: bool },
 }
 
 /// Specified the last known stage of the resharding execution.
@@ -65,41 +73,15 @@ fn format_error(err: FromStrError) -> Error {
     Error::ResumableFormat(err.to_string())
 }
 
-/// Save the flags that was specified with the command to run resharding
-/// in order to be able to catch inconsistencies.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CommandFlags {
-    pub(crate) skip_schema_sync: bool,
-    pub(crate) replicate_only: bool,
-    pub(crate) sync_only: bool,
-    pub(crate) auto_cutover: bool,
-    pub(crate) tables_only: bool,
-}
 
 /// A single row record for the one resharding process.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ReshardingRecord {
     pub(crate) key: ReshardingKey,
     pub(crate) command: ReshardingCommand,
-    pub(crate) command_flags: CommandFlags,
     pub(crate) slot_name: String,
     pub(crate) slot_existed: bool,
     pub(crate) stage: Stage,
     pub(crate) config: ConfigSnapshot,
     pub(crate) format_version: i32,
-}
-
-#[derive(Debug, Default)]
-pub(crate) enum ResumableState {
-    #[default]
-    No,
-    Active(Arc<ReshardingStore>),
-    Paused,
-    Finished,
-}
-
-impl ResumableState {
-    pub(crate) fn keeps_slots(&self) -> bool {
-        matches!(self, Self::Active(_) | Self::Paused)
-    }
 }

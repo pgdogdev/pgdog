@@ -401,3 +401,46 @@ verify_resharding_data() {
 
     return "${failed}"
 }
+
+pg_sql() { PGPASSWORD=pgdog psql -h 127.0.0.1 -p "$1" -U pgdog -d postgres -v ON_ERROR_STOP=1 -tAc "$2"; }
+
+admin_task_type() {
+    local target="$1"
+    psql admin -tAc 'SHOW TASKS' | while IFS='|' read -r id parent kind rest; do
+        if [ "${id}" = "${target}" ]; then
+            printf '%s' "${kind}"
+            break
+        fi
+    done
+}
+
+wait_admin_task_status() {
+    local task_id="$1"
+    local expected="$2"
+    local row
+    for _ in $(seq 1 120); do
+        row=$(admin_task_row "${task_id}")
+        if [ "${row%%|*}" = "${expected}" ]; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "task ${task_id} did not reach ${expected} within 120s"
+    psql admin -c 'SHOW TASKS'
+    return 1
+}
+
+wait_for_value() {
+    local expected="$1"
+    shift
+    local value=""
+    for _ in $(seq 1 10); do
+        value=$("$@")
+        if [ "${value}" = "${expected}" ]; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "$* returned ${value}, expected ${expected}"
+    return 1
+}

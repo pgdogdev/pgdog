@@ -91,7 +91,7 @@ pub(crate) struct SelectRow;
 
 impl Query for SelectRow {
     const SQL: &'static str = "
-        SELECT source_db, destination_db, publication, command, command_flags::text, slot_name,
+        SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, format_version::text
         FROM pgdog.resharding
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
@@ -107,7 +107,7 @@ pub(crate) struct ListRows;
 
 impl Query for ListRows {
     const SQL: &'static str = "
-        SELECT source_db, destination_db, publication, command, command_flags::text, slot_name,
+        SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, format_version::text
         FROM pgdog.resharding
         WHERE destination_db = $1
@@ -125,10 +125,10 @@ pub(crate) struct InsertRow;
 impl Query for InsertRow {
     const SQL: &'static str = "
         INSERT INTO pgdog.resharding (
-            source_db, destination_db, publication, command, command_flags, slot_name,
+            source_db, destination_db, publication, command, slot_name,
             slot_existed, stage, config, format_version
         )
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::boolean, $8, $9::jsonb, $10::integer)";
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6::boolean, $7, $8::jsonb, $9::integer)";
 
     type Params<'a> = &'a ReshardingRecord;
 
@@ -138,8 +138,7 @@ impl Query for InsertRow {
             source,
             destination,
             publication,
-            text(&row.command.to_string()),
-            text(&serde_json::to_string(&row.command_flags).expect("command flags are valid JSON")),
+            text(&serde_json::to_string(&row.command).expect("command is valid JSON")),
             text(&row.slot_name),
             text(&row.slot_existed.to_string()),
             text(&row.stage.to_string()),

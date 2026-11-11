@@ -14,8 +14,11 @@ use crate::api::replication::{CutoverMode, ReplicationTask};
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
-use crate::api::{ReshardingError, Task, run_task};
+use crate::api::{ReshardingError, Task, run_task, tasks_storage};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::resumable::{
+    ActiveRun, ReshardingCommand, ResumeState, Stage,
+};
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -61,43 +64,52 @@ impl Task for ReshardTask {
             replicate_only: self.replicate_only,
             sync_only: self.sync_only,
             auto_cutover: self.auto_cutover,
-            cleanup_on_cancel: true,
+            cleanup_on_cancel: !self.state.is_resumable(),
         }
     }
 
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), ReshardingError> {
         let cancel = ctx.cancellation_token();
         let cutover = self.cutover_mode();
+        let command = self.command();
+        let first_stage = self.first_stage();
         let mut state = self.state;
+        let resumable = ResumeState::load_or_create(&state, command, first_stage).await?;
+        let root_id = ctx.root_id();
+        let _active = ActiveRun::start(&resumable, move || {
+            tasks_storage().cancel_task(root_id);
+        });
         let schema_sync = SchemaSyncTask::builder()
             .publication_tables_only(self.tables_only)
             .databases(state.databases())
             .publication(state.publication.clone());
 
-        // Pre-data schema sync, unless skipped. It runs before any replication
-        // slots exist, so it stays outside the cleanup guard below.
-        if !self.skip_schema_sync {
-            ctx.set_status(ReshardStatus::SchemaSync);
-            ctx.run(
-                schema_sync
-                    .clone()
-                    .phase(SchemaSyncPhase::Pre)
-                    .ignore_errors(true)
-                    .build(),
-            )
-            .await?;
-
-            // The pre-data sync changed the destination's schema, so its pools
-            // reloaded. `SchemaSync::reload_destination` refreshes only its own
-            // cluster refs, so the state still holds stale ones.
-            state.reload()?;
-        }
-
         // Replicate-only continues an earlier copy.
         let mut copied = self.replicate_only;
-        let result: Result<(), ReshardingError> = Box::pin(async {
+        let mut result: Result<(), ReshardingError> = Box::pin(async {
+            // Pre-data schema sync, unless skipped. It runs inside the cleanup
+            // guard below, so a resumable run also pauses when it fails.
+            if !self.skip_schema_sync {
+                resumable.set_stage(Stage::PreData).await?;
+                ctx.set_status(ReshardStatus::SchemaSync);
+                ctx.run(
+                    schema_sync
+                        .clone()
+                        .phase(SchemaSyncPhase::Pre)
+                        .ignore_errors(true)
+                        .build(),
+                )
+                .await?;
+
+                // The pre-data sync changed the destination's schema, so its pools
+                // reloaded. `SchemaSync::reload_destination` refreshes only its own
+                // cluster refs, so the state still holds stale ones.
+                state.reload()?;
+            }
+
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
+                resumable.set_stage(Stage::Copy).await?;
                 ctx.set_status(ReshardStatus::SyncingData);
                 ctx.run(
                     CopyDataTask::builder()
@@ -114,6 +126,7 @@ impl Task for ReshardTask {
             // It reuses dump schema from the earlier schema_sync
             // calls if they were executed.
             if !self.skip_schema_sync {
+                resumable.set_stage(Stage::PostData).await?;
                 ctx.set_status(ReshardStatus::FinalizingSchema);
                 ctx.run(
                     schema_sync
@@ -126,6 +139,7 @@ impl Task for ReshardTask {
             }
 
             if !self.replicate_only {
+                resumable.set_stage(Stage::TableSync).await?;
                 ctx.set_status(ReshardStatus::SynchronizingTables);
                 ctx.run(SynchronizeTablesTask {
                     state: state.clone(),
@@ -151,6 +165,7 @@ impl Task for ReshardTask {
                         .state(state.clone())
                         .cutover(cutover)
                         .schema_sync(schema_sync.clone())
+                        .resumable(resumable.clone())
                         .validate(!self.skip_schema_sync && !self.replicate_only)
                         .build()
                         .run_inline(&ctx),
@@ -162,7 +177,18 @@ impl Task for ReshardTask {
         })
         .await;
 
-        if result.is_err() || cancel.is_cancelled() {
+        let stopped = result.is_err() || cancel.is_cancelled();
+        if resumable.keeps_slots() {
+            if stopped {
+                resumable.pause(&state);
+            } else {
+                state.detach_slots();
+                if let Err(err) = resumable.finish(&state).await {
+                    resumable.pause(&state);
+                    result = Err(err.into());
+                }
+            }
+        } else if stopped {
             // on error or cancellation make sure we drop the slots,
             // but only the slots we're actually created during this run.
             // If the slots were created outside or by calling pgdog
@@ -206,6 +232,26 @@ impl ReshardTask {
             CutoverMode::Auto
         } else {
             CutoverMode::Manual
+        }
+    }
+
+    fn first_stage(&self) -> Stage {
+        if !self.skip_schema_sync {
+            Stage::PreData
+        } else if !self.replicate_only {
+            Stage::Copy
+        } else {
+            Stage::Replication
+        }
+    }
+
+    fn command(&self) -> ReshardingCommand {
+        ReshardingCommand::Reshard {
+            skip_schema_sync: self.skip_schema_sync,
+            replicate_only: self.replicate_only,
+            sync_only: self.sync_only,
+            auto_cutover: self.auto_cutover,
+            tables_only: self.tables_only,
         }
     }
 }
