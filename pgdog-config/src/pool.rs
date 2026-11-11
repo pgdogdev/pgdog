@@ -125,6 +125,8 @@ pub struct PoolConfig {
     pub resharding_only: bool,
     /// LB weight.
     pub lb_weight: u8,
+    /// Query cancellation timeout.
+    pub cancel_timeout: Duration,
 }
 
 impl PoolConfig {
@@ -293,6 +295,7 @@ impl Default for PoolConfig {
             role_detection: false,
             resharding_only: false,
             lb_weight: 255,
+            cancel_timeout: Duration::from_secs(5),
         }
     }
 }

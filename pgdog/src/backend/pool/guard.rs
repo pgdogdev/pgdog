@@ -66,6 +66,20 @@ impl Guard {
         self.locked
     }
 
+    /// Cancel the query running on this server, if any.
+    pub(in crate::backend) async fn cancel_query(&self) -> Result<(), crate::backend::Error> {
+        if let Some(ref server) = self.server {
+            Server::cancel(
+                server.addr(),
+                server.key().clone(),
+                self.pool.config().cancel_timeout,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
     /// Rollback any unfinished transactions and check the connection
     /// back into the pool.
     fn cleanup(&mut self) {

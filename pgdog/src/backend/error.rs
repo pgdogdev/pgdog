@@ -122,6 +122,12 @@ pub(crate) enum Error {
 
     #[error("cannot switch shards in a direct-to-shard transaction")]
     DirectShardMismatch,
+
+    #[error("query cancellation timeout")]
+    QueryCancelTimeout,
+
+    #[error("query cancellation protocol mismatch")]
+    QueryCancelMismatch,
 }
 
 impl From<crate::frontend::Error> for Error {
