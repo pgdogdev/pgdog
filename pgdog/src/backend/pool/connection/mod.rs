@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::{
-    super::{Error, Server, pool::Guard},
+    super::{Error, pool::Guard},
     Address, Cluster, Request,
 };
 
@@ -495,12 +495,7 @@ impl Connection {
             _ => return Ok(()),
         };
 
-        try_join_all(
-            servers
-                .iter()
-                .map(|server| Server::cancel(server.addr(), server.key().clone())),
-        )
-        .await?;
+        try_join_all(servers.iter().map(|server| server.cancel_query())).await?;
 
         Ok(())
     }

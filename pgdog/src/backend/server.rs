@@ -8,7 +8,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     spawn,
-    time::Instant,
+    time::{Instant, timeout},
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -461,12 +461,36 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
-    pub(crate) async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
-        let mut stream = TcpStream::connect(addr.addr().await?).await?;
-        stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
-        stream.flush().await?;
+    ///
+    /// # Arguments
+    ///
+    /// - `addr`: Address of the server.
+    /// - `key`: Backend secret.
+    /// - `cancel_timeout`: Timeout the IO / wait for server to close the connection ack'ing the request.
+    ///
+    pub(in crate::backend) async fn cancel(
+        addr: &Address,
+        key: BackendKeyData,
+        cancel_timeout: Duration,
+    ) -> Result<(), Error> {
+        let fut = async {
+            let mut stream = TcpStream::connect(addr.addr().await?).await?;
+            stream
+                .write_all(&Startup::Cancel { id: key }.to_bytes())
+                .await?;
+            stream.flush().await?;
 
-        Ok(())
+            let mut buf = [0u8; 1];
+            match stream.read(&mut buf).await? {
+                0 => Ok(()), // We expect backend to close connection without saying anything.
+                _ => Err(Error::QueryCancelMismatch),
+            }
+        };
+
+        match timeout(cancel_timeout, fut).await {
+            Err(_) => Err(Error::QueryCancelTimeout),
+            Ok(result) => result,
+        }
     }
 
     /// Send messages to the server and flush the buffer.

@@ -91,6 +91,7 @@
         "prepared_statements_ttl_jitter": 30000,
         "pub_sub_channel_size": 0,
         "query_cache_limit": 1000,
+        "query_cancellation_timeout": 5000,
         "query_log": null,
         "query_log_stdout": false,
         "query_parser": "auto",
@@ -1140,6 +1141,13 @@
           "type": "integer",
           "format": "uint",
           "default": 1000,
+          "minimum": 0
+        },
+        "query_cancellation_timeout": {
+          "description": "Maximum time in milliseconds to connect, send a query cancellation request,\nand wait for Postgres to close the cancellation connection.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cancellation_timeout>",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
           "minimum": 0
         },
         "query_log": {

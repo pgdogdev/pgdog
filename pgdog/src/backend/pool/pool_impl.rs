@@ -298,7 +298,7 @@ impl Pool {
         let key = self.lock().cancel_key(id).cloned();
         if let Some(key) = key {
             let _guard = CancelGuard::new(self, key.pid());
-            Server::cancel(self.addr(), key).await?;
+            Server::cancel(self.addr(), key, self.config().cancel_timeout).await?;
         }
 
         Ok(())
@@ -374,7 +374,7 @@ impl Pool {
         let futures: Vec<_> = self
             .lock()
             .cancel_keys()
-            .map(|key| Server::cancel(&addr, key.clone()))
+            .map(|key| Server::cancel(&addr, key.clone(), self.config().cancel_timeout))
             .collect();
 
         try_join_all(futures)

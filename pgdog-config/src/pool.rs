@@ -125,6 +125,9 @@ pub struct PoolConfig {
     pub resharding_only: bool,
     /// LB weight.
     pub lb_weight: u8,
+    /// Query cancellation timeout.
+    #[serde_as(as = "DurationMilliSeconds")]
+    pub cancel_timeout: Duration,
 }
 
 impl PoolConfig {
@@ -194,6 +197,7 @@ impl PoolConfig {
             connect_attempts: general.connect_attempts,
             connect_attempt_delay: general.connect_attempt_delay(),
             query_timeout: Duration::from_millis(general.query_timeout),
+            cancel_timeout: general.query_cancellation_timeout,
             checkout_timeout: Duration::from_millis(general.checkout_timeout),
             idle_timeout: Duration::from_millis(
                 user.idle_timeout
@@ -293,6 +297,7 @@ impl Default for PoolConfig {
             role_detection: false,
             resharding_only: false,
             lb_weight: 255,
+            cancel_timeout: Duration::from_secs(5),
         }
     }
 }
@@ -344,6 +349,7 @@ mod test {
         let value = serde_json::to_value(config).unwrap();
 
         assert_eq!(value["checkout_timeout"], 5000);
+        assert_eq!(value["cancel_timeout"], 5000);
         assert_eq!(value["idle_timeout_primary"], serde_json::Value::Null);
         assert_eq!(value["statement_timeout"], serde_json::Value::Null);
         assert_eq!(
