@@ -10,6 +10,7 @@ pub(crate) struct HavingRewritePlan {
     filter_sql: String,
     operand_aliases: Vec<String>,
     hidden_aliases: Vec<String>,
+    params: Vec<usize>,
 }
 
 impl HavingRewritePlan {
@@ -17,22 +18,23 @@ impl HavingRewritePlan {
         filter_sql: String,
         operand_aliases: Vec<String>,
         hidden_aliases: Vec<String>,
+        params: Vec<usize>,
     ) -> Self {
         Self {
             filter_sql,
             operand_aliases,
             hidden_aliases,
+            params,
         }
     }
 
-    /// Query over the merged operands, with `$1..$n` bound to one array per operand.
-    #[allow(dead_code)] // Cross-shard HAVING is planned but not executed yet.
+    /// Query over the merged operands, with `$1..$n` bound to one array per
+    /// operand, followed by the client parameters from [`Self::params`].
     pub(crate) fn filter_sql(&self) -> &str {
         &self.filter_sql
     }
 
     /// Hidden columns passed to [`Self::filter_sql`], in parameter order.
-    #[allow(dead_code)] // Cross-shard HAVING is planned but not executed yet.
     pub(crate) fn operand_aliases(&self) -> &[String] {
         &self.operand_aliases
     }
@@ -40,5 +42,10 @@ impl HavingRewritePlan {
     /// Every hidden column, removed before rows reach the client.
     pub(crate) fn hidden_aliases(&self) -> &[String] {
         &self.hidden_aliases
+    }
+
+    /// 0-based client parameters bound after the operand arrays, in order.
+    pub(crate) fn params(&self) -> &[usize] {
+        &self.params
     }
 }

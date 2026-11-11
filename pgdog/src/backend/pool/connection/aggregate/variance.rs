@@ -71,7 +71,7 @@ impl Variance {
                 let (Some(sumsq), Some(sum)) = (sumsq.as_decimal(), sum.as_decimal()) else {
                     return Ok(Datum::Numeric(Numeric::nan()));
                 };
-                Ok(compute_variance(*sumsq, *sum, count, self.sample, self.sqrt).into())
+                Ok(compute_variance(*sumsq, *sum, count, self.sample, self.sqrt)?.into())
             }
             // FIXME(sage): We lose precision by using Double for sum that
             // single shard wouldn't.  If we store the expected data type from
@@ -81,9 +81,11 @@ impl Variance {
                 else {
                     return Ok(f64::NAN.into());
                 };
-                Ok(compute_variance(*sumsq, sum, count, self.sample, self.sqrt)
-                    .map(|d| d.as_f64())
-                    .into())
+                Ok(
+                    compute_variance(*sumsq, sum, count, self.sample, self.sqrt)?
+                        .map(|d| d.as_f64())
+                        .into(),
+                )
             }
             // Variance functions only return double or numeric, but sum
             // can return float and int8
@@ -92,16 +94,18 @@ impl Variance {
                     return Ok(Datum::Numeric(Numeric::nan()));
                 };
                 let sum = Decimal::from(sum);
-                Ok(compute_variance(*sumsq, sum, count, self.sample, self.sqrt).into())
+                Ok(compute_variance(*sumsq, sum, count, self.sample, self.sqrt)?.into())
             }
             (Datum::Numeric(sumsq), Datum::Float(sum)) => {
                 let (Some(sumsq), Some(sum)) = (sumsq.as_decimal(), Decimal::from_f32(sum.0))
                 else {
                     return Ok(f64::NAN.into());
                 };
-                Ok(compute_variance(*sumsq, sum, count, self.sample, self.sqrt)
-                    .map(|d| d.as_f64())
-                    .into())
+                Ok(
+                    compute_variance(*sumsq, sum, count, self.sample, self.sqrt)?
+                        .map(|d| d.as_f64())
+                        .into(),
+                )
             }
             // We're manually casting sumsq to be numeric,
             // And the only types PG returns for sum on types this function
@@ -117,22 +121,30 @@ fn compute_variance(
     count: i64,
     sample: bool,
     sqrt: bool,
-) -> Option<Decimal> {
+) -> Result<Option<Decimal>, Error> {
     if count <= 1 {
-        return (count == 1 && !sample).then_some(Decimal::ZERO);
+        return Ok((count == 1 && !sample).then_some(Decimal::ZERO));
     }
 
     let sumsq = sumsq.normalize();
     let sum = sum.normalize();
     let count = Decimal::from(count);
-    let mut result = (sumsq - sum * sum / count) / count;
+    let overflow = || Error::NumericOutOfRange(DataType::Numeric);
+    // (∑xᵢ² − (∑xᵢ)²/N) / N, with each step checked. `sum * sum` exceeds
+    // Decimal for sums around 1e16, which stddev hits on large inputs.
+    let squared = sum.checked_mul(sum).ok_or_else(overflow)?;
+    let mean_square = squared.checked_div(count).ok_or_else(overflow)?;
+    let diff = sumsq.checked_sub(mean_square).ok_or_else(overflow)?;
+    let mut result = diff.checked_div(count).ok_or_else(overflow)?;
     if sample {
-        result *= count / (count - dec!(1));
+        let denom = count.checked_sub(dec!(1)).ok_or_else(overflow)?;
+        let correction = count.checked_div(denom).ok_or_else(overflow)?;
+        result = result.checked_mul(correction).ok_or_else(overflow)?;
     }
     if sqrt {
         result = result.sqrt().unwrap_or(Decimal::ZERO);
     }
-    Some(result)
+    Ok(Some(result))
 }
 
 #[test]
@@ -157,6 +169,23 @@ fn test_var_pop() {
         .accumulate(dec!(808).into(), 40f64.into(), 2i64.into())
         .unwrap();
     assert_eq!(Datum::from(20.0f64), state.finalize().unwrap());
+}
+
+#[test]
+fn stddev_of_large_values_reports_overflow() {
+    // 1e6 rows near 1e10: sum ≈ 1e16 and sum² ≈ 1e32, past Decimal's range.
+    let mut state = Variance::new(0, 0, 0, true, true);
+    state
+        .accumulate(
+            dec!(1).into(),
+            dec!(10_000_000_000_000_000).into(),
+            1_000_000i64.into(),
+        )
+        .expect("partial aggregates fit");
+    assert!(matches!(
+        state.finalize(),
+        Err(Error::NumericOutOfRange(DataType::Numeric))
+    ));
 }
 
 #[test]

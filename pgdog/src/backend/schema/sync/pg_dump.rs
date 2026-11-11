@@ -113,6 +113,7 @@ use tokio::process::Command;
 pub(crate) struct PgDump {
     source: Cluster,
     publication: String,
+    publication_tables_only: bool,
 }
 
 fn build_pg_dump_command(
@@ -141,12 +142,60 @@ fn build_pg_dump_command(
     command
 }
 
+/// `pg_dump --table` pattern matching exactly one table.
+fn table_pattern(schema: &str, name: &str) -> String {
+    format!(
+        "\"{}\".\"{}\"",
+        crate::util::escape_identifier(schema),
+        crate::util::escape_identifier(name)
+    )
+}
+
 impl PgDump {
-    pub(crate) fn new(source: &Cluster, publication: &str) -> Self {
+    /// With `publication_tables_only`, dump just the publication's tables
+    /// (and their partition parents) instead of the whole database.
+    pub(crate) fn new(source: &Cluster, publication: &str, publication_tables_only: bool) -> Self {
         Self {
             source: source.clone(),
             publication: publication.to_string(),
+            publication_tables_only,
         }
+    }
+
+    fn table_patterns(tables: &[PublicationTable]) -> Vec<String> {
+        let mut patterns = vec![];
+        for table in tables {
+            for pattern in [
+                table_pattern(table.destination_schema(), table.destination_name()),
+                table_pattern(&table.schema, &table.name),
+            ] {
+                if !patterns.contains(&pattern) {
+                    patterns.push(pattern);
+                }
+            }
+        }
+        patterns
+    }
+
+    /// `pg_dump --table` doesn't dump the schemas the tables are in.
+    fn create_schemas(tables: &[PublicationTable]) -> String {
+        let mut schemas = vec![];
+        for table in tables {
+            for schema in [table.destination_schema(), table.schema.as_str()] {
+                if !schemas.contains(&schema) {
+                    schemas.push(schema);
+                }
+            }
+        }
+        schemas
+            .into_iter()
+            .map(|schema| {
+                format!(
+                    "CREATE SCHEMA IF NOT EXISTS \"{}\";\n",
+                    crate::util::escape_identifier(schema)
+                )
+            })
+            .collect()
     }
 
     fn clean(source: &str) -> String {
@@ -225,6 +274,11 @@ impl PgDump {
                 SchemaSyncError::PgDump("server has no configured passwords".into())
             })?,
         );
+        if self.publication_tables_only {
+            for pattern in Self::table_patterns(&comparison) {
+                command.arg("--table").arg(pattern);
+            }
+        }
         let output = command.output().await?;
 
         if !output.status.success() {
@@ -235,7 +289,10 @@ impl PgDump {
         let original = from_utf8(&output.stdout)?.to_string();
         trace!("[pg_dump (original)] {}", original);
 
-        let cleaned = Self::clean(&original);
+        let mut cleaned = Self::clean(&original);
+        if self.publication_tables_only {
+            cleaned.insert_str(0, &Self::create_schemas(&comparison));
+        }
         trace!("[pg_dump (clean)] {}", cleaned);
 
         let stmts = pg_raw_parse::parse(&cleaned)?.into_inner();
@@ -994,7 +1051,53 @@ mod test {
     #[tokio::test]
     async fn test_pg_dump_execute() {
         let cluster = Cluster::new_test_single_shard(&config());
-        let _pg_dump = PgDump::new(&cluster, "test_pg_dump_execute");
+        let _pg_dump = PgDump::new(&cluster, "test_pg_dump_execute", false);
+    }
+
+    #[test]
+    fn test_table_patterns_and_schemas_include_partition_parents() {
+        let tables = [
+            PublicationTable {
+                schema: "sales".into(),
+                name: "orders".into(),
+                ..Default::default()
+            },
+            PublicationTable {
+                schema: "sales".into(),
+                name: "events_2026".into(),
+                parent_schema: "sales".into(),
+                parent_name: "events".into(),
+                ..Default::default()
+            },
+            PublicationTable {
+                schema: "sales".into(),
+                name: "events_2027".into(),
+                parent_schema: "sales".into(),
+                parent_name: "events".into(),
+                ..Default::default()
+            },
+            PublicationTable {
+                schema: "My \"Schema\"".into(),
+                name: "T".into(),
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            PgDump::table_patterns(&tables),
+            [
+                r#""sales"."orders""#,
+                r#""sales"."events""#,
+                r#""sales"."events_2026""#,
+                r#""sales"."events_2027""#,
+                r#""My ""Schema"""."T""#,
+            ]
+        );
+        assert_eq!(
+            PgDump::create_schemas(&tables),
+            "CREATE SCHEMA IF NOT EXISTS \"sales\";\n\
+             CREATE SCHEMA IF NOT EXISTS \"My \"\"Schema\"\"\";\n"
+        );
     }
 
     #[test]

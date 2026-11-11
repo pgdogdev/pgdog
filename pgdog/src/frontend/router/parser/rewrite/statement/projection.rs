@@ -77,7 +77,6 @@ impl HavingRewriteResult {
         Self { rewrite, aggregate }
     }
 
-    #[allow(dead_code)] // Cross-shard HAVING is planned but not executed yet.
     pub(crate) fn rewrite(&self) -> &HavingRewritePlan {
         &self.rewrite
     }
@@ -256,13 +255,13 @@ fn unsupported_with_having(select: &nodes::SelectStmt, schema: &Schema) -> Optio
     if wraps_aggregate {
         return Some("expressions over aggregates in the SELECT list are unsupported");
     }
-    // Shards would drop groups before PgDog merges and filters them.
-    if !matches!(select.limit_count(), Node::None) || !matches!(select.limit_offset(), Node::None) {
-        return Some("LIMIT and OFFSET are unsupported");
+    // PgDog applies LIMIT and OFFSET to the filtered groups itself.
+    if let Some(reason) = offset::unsupported_limit(select) {
+        return Some(reason);
     }
-    // DISTINCT has to run after the merged groups are filtered.
-    if !select.distinct_clause().is_empty() {
-        return Some("DISTINCT is unsupported");
+    // Only whole-row DISTINCT is applied after the filter.
+    if !matches!(select.distinct_clause().first(), None | Some(Node::None)) {
+        return Some("DISTINCT ON is unsupported");
     }
     None
 }
@@ -273,18 +272,6 @@ pub(crate) fn pages_merged_groups(select: &nodes::SelectStmt, aggregate: &Aggreg
         && !select.group_clause().is_empty()
         && (!matches!(select.limit_count(), Node::None)
             || !matches!(select.limit_offset(), Node::None))
-}
-
-/// LIMIT forms PgDog can't apply to the merged groups itself.
-fn unsupported_group_limit(select: &nodes::SelectStmt) -> Option<&'static str> {
-    // PgDog pages the merged groups by position, without the sort keys to find ties.
-    if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
-        return Some("FETCH FIRST WITH TIES with aggregates is unsupported");
-    }
-    if !offset::is_decodable(select.limit_count()) || !offset::is_decodable(select.limit_offset()) {
-        return Some("LIMIT and OFFSET with aggregates must be integers or parameters");
-    }
-    None
 }
 
 fn build(
@@ -316,7 +303,7 @@ fn build(
     let remove_limit = aggregate
         .as_ref()
         .is_some_and(|aggregate| pages_merged_groups(select, aggregate));
-    if remove_limit && let Some(reason) = unsupported_group_limit(select) {
+    if remove_limit && let Some(reason) = offset::unsupported_limit(select) {
         return Err(Error::UnsupportedGroupBy(reason));
     }
 
@@ -338,7 +325,7 @@ fn build(
     let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
         if has_having {
-            let having = having::rewrite_select(&mut select.as_mut(), mem)?;
+            let having = having::rewrite_select(&mut select.as_mut(), mem, schema)?;
             let rewritten_aggregate = Aggregate::parse(&select, schema);
             if rewritten_aggregate.targets().is_empty() {
                 return Err(Error::UnsupportedHaving(
@@ -371,7 +358,7 @@ fn build(
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
         if remove_limit {
             offset::remove_select(&mut select.as_mut(), mem);
-        } else if rewrite_offset {
+        } else if rewrite_offset && !has_having {
             offset::rewrite_select(&mut select.as_mut(), mem);
         }
         Ok::<_, Error>(select)
@@ -778,13 +765,13 @@ mod tests {
             // An expression over aggregates would keep one shard's value.
             "SELECT customer_id, SUM(price) / COUNT(*) FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
-            // Shards would drop or deduplicate groups before they are filtered.
-            "SELECT customer_id FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*) > 2 LIMIT 1",
-            "SELECT customer_id FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*) > 2 OFFSET 1",
+            // Only whole-row DISTINCT and decodable LIMIT/OFFSET run after the filter.
             "SELECT DISTINCT ON (customer_id) customer_id FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
+            "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > 2 ORDER BY customer_id FETCH FIRST 1 ROWS WITH TIES",
+            "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > 2 LIMIT 1 + 1",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let error = build(&ast, &Schema::default(), false).unwrap_err();

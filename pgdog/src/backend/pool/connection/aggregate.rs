@@ -13,7 +13,7 @@ use crate::{
         messages::{DataRow, Datum},
     },
 };
-use pgdog_postgres_types::Error as TypeError;
+use pgdog_postgres_types::{DataType, Error as TypeError};
 
 pub(crate) use error::Error;
 
@@ -425,19 +425,38 @@ impl<'a> Aggregates<'a> {
     }
 }
 
-/// Adds rhs to self. Returns an error if self + rhs are not the same type, or
-/// if self is a type that cannot be added.
+/// Adds `rhs` to `lhs`.
+///
+/// Returns an error when the values have different types, the type does not
+/// support addition, or the sum does not fit in the type.
 ///
 /// The behavior of this function diverges from postgres when handling NULL.
 /// When calculating x + NULL, we will return x, while postgres will return NULL
+#[allow(clippy::unnecessary_lazy_evaluations)]
 fn checked_add_assign(lhs: &mut Datum, rhs: Datum) -> Result<(), TypeError> {
     use Datum::*;
     match (lhs, rhs) {
-        (Bigint(a), Bigint(b)) => *a += b,
-        (Integer(a), Integer(b)) => *a += b,
-        (SmallInt(a), SmallInt(b)) => *a += b,
+        (Bigint(a), Bigint(b)) => {
+            *a = (*a)
+                .checked_add(b)
+                .ok_or_else(|| TypeError::NumericOutOfRange(DataType::Bigint))?;
+        }
+        (Integer(a), Integer(b)) => {
+            *a = (*a)
+                .checked_add(b)
+                .ok_or_else(|| TypeError::NumericOutOfRange(DataType::Integer))?;
+        }
+        (SmallInt(a), SmallInt(b)) => {
+            *a = (*a)
+                .checked_add(b)
+                .ok_or_else(|| TypeError::NumericOutOfRange(DataType::SmallInt))?;
+        }
         (Interval(a), Interval(b)) => *a += b,
-        (Numeric(a), Numeric(b)) => *a += b,
+        (Numeric(a), Numeric(b)) => {
+            *a = (*a)
+                .checked_add(b)
+                .ok_or_else(|| TypeError::NumericOutOfRange(DataType::Numeric))?;
+        }
         (Float(a), Float(b)) => a.0 += b.0,
         (Double(a), Double(b)) => a.0 += b.0,
         (a @ Datum::Null, b) => *a = b,
@@ -470,7 +489,8 @@ mod test {
     };
     use bytes::Bytes;
     use pg_raw_parse::Node;
-    use pgdog_postgres_types::Double;
+    use pgdog_postgres_types::{Double, Numeric};
+    use rust_decimal::Decimal;
     use std::assert_matches;
     use std::collections::VecDeque;
 
@@ -864,5 +884,47 @@ mod test {
         let mut datum = Datum::Integer(1);
         let result = checked_add_assign(&mut datum, Datum::Text("1".to_owned()));
         assert_matches!(result, Err(TypeError::IncompatibleTypes(..)));
+    }
+
+    #[test]
+    fn addition_within_range_keeps_the_sum() {
+        let mut datum = Datum::Bigint(i64::MAX - 1);
+        checked_add_assign(&mut datum, Datum::Bigint(1)).expect("i64::MAX fits");
+        assert_eq!(datum, Datum::Bigint(i64::MAX));
+
+        let mut datum = Datum::Numeric(Numeric::from(Decimal::MAX));
+        checked_add_assign(&mut datum, Datum::Numeric(Numeric::from(Decimal::ZERO)))
+            .expect("adding zero keeps the value");
+        assert_eq!(datum, Datum::Numeric(Numeric::from(Decimal::MAX)));
+    }
+
+    #[test]
+    fn addition_out_of_range_is_an_error() {
+        let cases = [
+            (Datum::Bigint(i64::MAX), Datum::Bigint(1), DataType::Bigint),
+            (Datum::Bigint(i64::MIN), Datum::Bigint(-1), DataType::Bigint),
+            (
+                Datum::Integer(i32::MAX),
+                Datum::Integer(1),
+                DataType::Integer,
+            ),
+            (
+                Datum::SmallInt(i16::MAX),
+                Datum::SmallInt(1),
+                DataType::SmallInt,
+            ),
+            (
+                Datum::Numeric(Numeric::from(Decimal::MAX)),
+                Datum::Numeric(Numeric::from(Decimal::ONE)),
+                DataType::Numeric,
+            ),
+        ];
+
+        for (mut lhs, rhs, data_type) in cases {
+            assert_matches!(
+                checked_add_assign(&mut lhs, rhs),
+                Err(TypeError::NumericOutOfRange(ty)) if ty == data_type
+            );
+        }
     }
 }

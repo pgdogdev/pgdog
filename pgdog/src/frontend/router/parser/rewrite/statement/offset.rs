@@ -243,10 +243,22 @@ fn without_limit<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique
     case.uncast()
 }
 
+/// LIMIT forms PgDog can't apply itself after removing them with [`remove_select`].
+pub(super) fn unsupported_limit(select: &nodes::SelectStmt) -> Option<&'static str> {
+    // PgDog pages rows by position, without the sort keys to find ties.
+    if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
+        return Some("FETCH FIRST WITH TIES is unsupported");
+    }
+    if !is_decodable(select.limit_count()) || !is_decodable(select.limit_offset()) {
+        return Some("LIMIT and OFFSET must be integers or parameters");
+    }
+    None
+}
+
 /// Whether the route can read this LIMIT or OFFSET value, see [`LimitClause`].
 ///
 /// [`LimitClause`]: crate::frontend::router::parser::LimitClause
-pub(super) fn is_decodable(node: Node<'_>) -> bool {
+fn is_decodable(node: Node<'_>) -> bool {
     match node {
         Node::None | Node::ParamRef(_) => true,
         Node::A_Const(constant) => matches!(constant.val(), None | Some(ConstValue::Integer(_))),
@@ -256,7 +268,8 @@ pub(super) fn is_decodable(node: Node<'_>) -> bool {
 
 impl StatementRewrite<'_> {
     pub(super) fn limit_offset(&self, select: &nodes::SelectStmt, plan: &mut RewritePlan) {
-        if self.schema.shards <= 1 {
+        // Cross-shard HAVING applies LIMIT and OFFSET in its filter query.
+        if self.schema.shards <= 1 || !matches!(select.having_clause(), Node::None) {
             return;
         }
 

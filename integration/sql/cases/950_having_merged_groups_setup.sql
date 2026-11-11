@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS sql_regression_samples;
+CREATE TABLE sql_regression_samples (id BIGINT PRIMARY KEY, grp TEXT, amount INTEGER, price NUMERIC);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (1, 'a', 10, 1.5);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (2, 'a', 11, 2.5);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (101, 'a', 20, 3.0);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (3, 'b', 12, 4.0);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (102, 'b', 21, NULL);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (4, NULL, 5, 1.0);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (103, NULL, 6, 2.0);
+INSERT INTO sql_regression_samples (id, grp, amount, price) VALUES (104, 'c', 30, 10);

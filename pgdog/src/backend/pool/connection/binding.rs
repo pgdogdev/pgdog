@@ -15,6 +15,7 @@ use futures::future::join_all;
 
 use super::*;
 use crate::util::safe_sleep;
+use buffer::having::HavingInputs;
 use multi_shard::MultiBinding;
 
 /// The server(s) the client is connected to.
@@ -206,6 +207,22 @@ impl Binding {
             Binding::Direct(server) => server.has_more_messages(),
             Binding::MultiShard(servers) => servers.has_more_messages(),
             _ => false,
+        }
+    }
+
+    /// Merged `HAVING` operands of the last cross-shard request.
+    pub(crate) fn take_having_inputs(&mut self) -> Option<HavingInputs> {
+        match self {
+            Binding::MultiShard(servers) => servers.take_having_inputs(),
+            _ => None,
+        }
+    }
+
+    /// A connected shard for internal queries that don't read sharded data.
+    pub(crate) fn any_connected_shard(&self) -> Option<usize> {
+        match self {
+            Binding::MultiShard(servers) => servers.connected_shards().next(),
+            _ => None,
         }
     }
 

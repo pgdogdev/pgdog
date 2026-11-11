@@ -6,10 +6,11 @@ use pg_raw_parse::{
     transform::{self, Assignable},
 };
 
+use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{AggregateFunction, HavingRewritePlan};
 
 use super::{
-    Error,
+    Error, offset,
     projection::{HiddenAliases, column_name, is_star},
 };
 
@@ -46,10 +47,12 @@ const TABLE_ALIAS: &str = "__pgdog_having";
 /// WHERE __pgdog_having_0 > 2 AND __pgdog_having_1 < 100
 /// ```
 ///
-/// which returns the positions of the groups to keep.
+/// which returns the positions of the groups to keep. LIMIT and OFFSET are
+/// removed from the shard query, since they apply to the groups that pass.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
+    schema: &Schema,
 ) -> Result<HavingRewritePlan, Error> {
     debug_assert!(
         !matches!(select.having_clause(), Node::None),
@@ -59,8 +62,10 @@ pub(super) fn rewrite_select<'a>(
     let having = original.as_ref();
 
     let mut operands = Operands {
+        schema,
         aliases: HiddenAliases::new(ALIAS_PREFIX, select.target_list()),
         projected: Vec::new(),
+        params: Vec::new(),
         error: None,
     };
 
@@ -75,11 +80,28 @@ pub(super) fn rewrite_select<'a>(
                 "HAVING must reference an aggregate or a grouped column",
             ));
         }
+        // Client parameters follow the operand arrays in the filter query.
+        let offset = operands.projected.len();
+        transform::transform(&mut filter, |node| match &*node {
+            NodeMut::ParamRef(param) => {
+                let position = operands
+                    .params
+                    .iter()
+                    .position(|&number| number + 1 == param.number as usize)
+                    .expect("HAVING parameter recorded");
+                node.replace(
+                    filter_mem
+                        .make_param_ref((offset + position + 1) as i32)
+                        .uncast(),
+                );
+                None
+            }
+            _ => Some(node),
+        });
+
         let template = pg_raw_parse::parse(&format!(
             "SELECT {ROW_COLUMN} FROM unnest({}) WITH ORDINALITY AS {TABLE_ALIAS}({}, {ROW_COLUMN})",
-            (1..=operands.projected.len())
-                .map(|number| format!("${number}"))
-                .join(", "),
+            (1..=offset).map(|number| format!("${number}")).join(", "),
             operands.projected.iter().map(|(alias, _)| alias).join(", "),
         ))?;
         let Some(Node::SelectStmt(template)) = template.stmts().next() else {
@@ -149,10 +171,14 @@ pub(super) fn rewrite_select<'a>(
         .set_args(mem.make_list(&[original, true_value]));
     select.set_having_clause(neutralized.uncast());
 
+    // Shards return every group; PgDog applies LIMIT and OFFSET after the filter.
+    offset::remove_select(select, mem);
+
     Ok(HavingRewritePlan::new(
         filter_sql,
         operand_aliases,
         hidden_aliases,
+        operands.params,
     ))
 }
 
@@ -168,14 +194,17 @@ fn groups_by_output_alias(
         })
 }
 
-struct Operands<'a> {
+struct Operands<'a, 's> {
+    schema: &'s Schema,
     aliases: HiddenAliases,
     /// Hidden columns added to the shard query.
     projected: Vec<(String, make::Unique<'a, Node<'a>>)>,
+    /// 0-based client parameters in the filter, in first-use order.
+    params: Vec<usize>,
     error: Option<Error>,
 }
 
-impl<'a> Operands<'a> {
+impl<'a> Operands<'a, '_> {
     /// Replace an aggregate call or column with a reference to its hidden column.
     fn replace<'f, 'r>(
         &mut self,
@@ -187,7 +216,7 @@ impl<'a> Operands<'a> {
             return None;
         }
         match &*node {
-            NodeMut::FuncCall(function) if is_aggregate(function) => {
+            NodeMut::FuncCall(function) if is_aggregate(function, self.schema) => {
                 if function.agg_distinct
                     || function.agg_within_group
                     || !function.agg_order().is_empty()
@@ -209,8 +238,11 @@ impl<'a> Operands<'a> {
                 self.error = Some(Error::UnsupportedHaving("subqueries are unsupported"));
                 return None;
             }
-            NodeMut::ParamRef(_) => {
-                self.error = Some(Error::UnsupportedHaving("parameters are unsupported"));
+            NodeMut::ParamRef(param) => {
+                let param = param.number as usize - 1;
+                if !self.params.contains(&param) {
+                    self.params.push(param);
+                }
                 return None;
             }
             _ => return Some(node),
@@ -230,13 +262,15 @@ impl<'a> Operands<'a> {
     }
 }
 
-fn is_aggregate(function: &nodes::FuncCall) -> bool {
+/// Aggregates PgDog can't merge, such as `bool_or`, are still projected
+/// whole, so the merge rejects them like it does in the SELECT list.
+fn is_aggregate(function: &nodes::FuncCall, schema: &Schema) -> bool {
     function
         .funcname()
         .iter()
         .next_back()
         .and_then(Node::as_str)
-        .is_some_and(|name| AggregateFunction::from_builtin_name(name).is_some())
+        .is_some_and(|name| AggregateFunction::from_name(name, schema).is_some())
 }
 
 #[cfg(test)]
@@ -251,7 +285,11 @@ mod tests {
         let mut plan = None;
         let rewritten = make::try_owned(|mem| {
             let mut select = mem.make_unique(select);
-            plan = Some(rewrite_select(&mut select.as_mut(), mem)?);
+            plan = Some(rewrite_select(
+                &mut select.as_mut(),
+                mem,
+                &Schema::default(),
+            )?);
             Ok::<_, Error>(select)
         })?;
         Ok((
@@ -267,7 +305,7 @@ mod tests {
     fn projects_operands_and_builds_filter_query() {
         let (sql, plan) = rewrite(
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*)::numeric > 2 AND (customer_id <> 1 OR MAX(price) IS NULL)",
+             HAVING COUNT(*)::numeric > $2 AND (customer_id <> $1 OR MAX(price) IS NULL)",
         )
         .unwrap();
 
@@ -276,17 +314,41 @@ mod tests {
             "SELECT customer_id, count(*), count(*) AS __pgdog_having_0, \
              customer_id AS __pgdog_having_1, max(price) AS __pgdog_having_2, \
              customer_id AS __pgdog_having_3 FROM purchases GROUP BY customer_id \
-             HAVING (count(*)::numeric > 2 AND (customer_id <> 1 OR max(price) IS NULL)) OR true"
+             HAVING (count(*)::numeric > $2 AND (customer_id <> $1 OR max(price) IS NULL)) OR true"
         );
         assert_eq!(
             plan.filter_sql(),
             "SELECT __pgdog_row FROM unnest($1, $2, $3) WITH ORDINALITY \
              __pgdog_having(__pgdog_having_0, __pgdog_having_1, __pgdog_having_2, __pgdog_row) \
-             WHERE __pgdog_having_0::numeric > 2 \
-             AND (__pgdog_having_1 <> 1 OR __pgdog_having_2 IS NULL)"
+             WHERE __pgdog_having_0::numeric > $4 \
+             AND (__pgdog_having_1 <> $5 OR __pgdog_having_2 IS NULL)"
         );
         assert_eq!(plan.operand_aliases().len(), 3);
         assert_eq!(plan.hidden_aliases().len(), 4);
+        assert_eq!(plan.params(), &[1, 0]);
+    }
+
+    #[test]
+    fn removes_limit_and_offset_from_shard_query() {
+        let (sql, plan) = rewrite(
+            "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > $2 ORDER BY customer_id LIMIT $1 OFFSET 1",
+        )
+        .unwrap();
+
+        assert_eq!(
+            sql,
+            "SELECT customer_id, count(*), count(*) AS __pgdog_having_0, \
+             customer_id AS __pgdog_having_1 FROM purchases GROUP BY customer_id \
+             HAVING count(*) > $2 OR true ORDER BY customer_id \
+             LIMIT CASE WHEN $1::bigint < 0 THEN $1::bigint END \
+             OFFSET CASE WHEN 1::bigint < 0 THEN 1::bigint END"
+        );
+        assert_eq!(
+            plan.filter_sql(),
+            "SELECT __pgdog_row FROM unnest($1) WITH ORDINALITY \
+             __pgdog_having(__pgdog_having_0, __pgdog_row) WHERE __pgdog_having_0 > $2"
+        );
     }
 
     #[test]
@@ -301,9 +363,7 @@ mod tests {
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > (SELECT 1)",
             // References neither an aggregate nor a grouped column.
-            "SELECT customer_id FROM purchases GROUP BY customer_id HAVING true",
-            // Not implemented yet.
-            "SELECT customer_id FROM purchases GROUP BY customer_id HAVING COUNT(*) > $1",
+            "SELECT customer_id FROM purchases GROUP BY customer_id HAVING $1",
         ] {
             assert!(
                 matches!(rewrite(sql), Err(Error::UnsupportedHaving(_))),

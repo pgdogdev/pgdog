@@ -1,0 +1,324 @@
+//! Cross-shard `HAVING`, evaluated by PostgreSQL after PgDog merges the groups.
+//!
+//! The shards return every group, with the `HAVING` operands in hidden
+//! columns. Once the groups are merged, the operands are sent to one shard as
+//! arrays, and the shard returns the positions of the groups that pass.
+//! DISTINCT, OFFSET and LIMIT then apply to those groups.
+
+use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
+
+use crate::{
+    backend::{
+        Error as BackendError,
+        pool::{
+            Connection,
+            connection::{aggregate::Error as AggregateError, buffer::having::HavingInputs},
+        },
+    },
+    frontend::{
+        ClientRequest, PreparedStatements,
+        client::query_engine::{QueryEngine, QueryEngineContext},
+        router::{
+            Route,
+            parser::{
+                HavingRewritePlan, Shard, ShardWithPriority,
+                rewrite::statement::{Error as RewriteError, projection::ProjectionRewritePlan},
+            },
+        },
+    },
+    net::{
+        Bind, CommandComplete, ErrorResponse, Execute, FromBytes, Message, Parse, Protocol,
+        ProtocolMessage, ToBytes, messages::Format,
+    },
+};
+
+use super::Error;
+
+pub(in crate::frontend::client::query_engine) struct HavingMulti<'a> {
+    engine: &'a mut QueryEngine,
+    plan: Arc<ProjectionRewritePlan>,
+}
+
+impl<'a> HavingMulti<'a> {
+    pub(in crate::frontend::client::query_engine) fn new(
+        engine: &'a mut QueryEngine,
+        plan: Arc<ProjectionRewritePlan>,
+    ) -> Self {
+        Self { engine, plan }
+    }
+
+    pub(in crate::frontend::client::query_engine) async fn execute(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
+    ) -> Result<(), Error> {
+        let engine = &mut *self.engine;
+        engine
+            .backend
+            .handle_client_request(client_request, &mut engine.router, false)
+            .await?;
+
+        let mut messages = VecDeque::new();
+        while engine.backend.has_more_messages() {
+            match engine.read_server_message().await {
+                Ok(message) => messages.push_back(message),
+                Err(err) if err.is_unsupported() => {
+                    if let Some(transaction) = context.transaction.as_mut() {
+                        transaction.set_error();
+                    }
+                    return Ok(engine
+                        .error_response(context, client_request, ErrorResponse::unsupported(&err))
+                        .await?);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        let Some(inputs) = engine
+            .backend
+            .take_having_inputs()
+            .filter(|inputs| inputs.rows() > 0)
+        else {
+            // No groups to filter, or the shards returned an error.
+            for message in messages {
+                engine.process_server_message(context, message).await?;
+            }
+            return Ok(());
+        };
+
+        let rows = messages
+            .iter()
+            .filter(|message| message.code() == 'D')
+            .count();
+        if rows != inputs.rows() {
+            return Err(invalid(AggregateError::HavingRowCount {
+                expected: inputs.rows(),
+                received: rows,
+            }));
+        }
+
+        let having = self
+            .plan
+            .having
+            .as_deref()
+            .expect("HAVING execution requires a HAVING plan")
+            .rewrite();
+        let mut keep = match filter(&mut self.engine.backend, having, &inputs, client_request).await
+        {
+            Ok(keep) => keep,
+            Err(Error::Execution(error)) => {
+                return self.forward_error(context, messages, *error).await;
+            }
+            Err(Error::Rewrite(err @ RewriteError::UnsupportedHaving(_))) => {
+                return self
+                    .forward_error(context, messages, ErrorResponse::unsupported(&err))
+                    .await;
+            }
+            Err(err) => return Err(err),
+        };
+        distinct_and_limit(&mut keep, &messages, client_request.route());
+
+        let kept = keep.iter().filter(|&&keep| keep).count();
+        let mut keep = keep.into_iter();
+        let last = messages.len();
+        for (position, message) in messages.into_iter().enumerate() {
+            let message = match message.code() {
+                'D' => {
+                    if !keep.next().unwrap_or(false) {
+                        continue;
+                    }
+                    message
+                }
+                'C' => CommandComplete::from_bytes(message.to_bytes())?
+                    .rewrite(kept)
+                    .message(),
+                _ => message,
+            };
+
+            // `QueryEngine::process_server_message()` flushes whenever `has_more_messages()` is false.
+            // However, we read all of the messages from the shards before we filter the rows, so `has_more_messages()` is false while we send the rows, meaning that we'd write the rows to the client one at a time.
+            // Therefore, we set `defer_flush` to skip that flush on all messages except for the last one.
+            // This is necessary to ensure that the rows go to the client in a few large writes.
+            self.engine.defer_flush = position + 1 < last;
+            let result = self.engine.process_server_message(context, message).await;
+
+            // We clear `defer_flush` even if the call fails (before result?), as otherwise, later responses wouldn't flush.
+            self.engine.defer_flush = false;
+            result?;
+        }
+
+        Ok(())
+    }
+
+    /// Return PostgreSQL's error from the filter query after the messages
+    /// that precede the rows, so the client sees the statement fail.
+    async fn forward_error(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        messages: VecDeque<Message>,
+        error: ErrorResponse,
+    ) -> Result<(), Error> {
+        let engine = &mut *self.engine;
+        for message in messages {
+            if !matches!(message.code(), 'D' | 'C' | 'Z') {
+                engine.process_server_message(context, message).await?;
+            }
+        }
+        if let Some(transaction) = context.transaction.as_mut() {
+            transaction.set_error();
+        }
+        engine.cleanup_backend(context).await?;
+        Ok(engine.send_error_response(context, error).await?)
+    }
+}
+
+/// Run the `HAVING` filter over the merged groups and return, for each
+/// group in order, whether it passes.
+async fn filter(
+    backend: &mut Connection,
+    having: &HavingRewritePlan,
+    inputs: &HavingInputs,
+    client_request: &ClientRequest,
+) -> Result<Vec<bool>, Error> {
+    let mut data_types = Vec::with_capacity(inputs.columns().len() + having.params().len());
+    let mut bind = Bind::default();
+    for column in inputs.columns() {
+        let array_oid = column.array_oid().ok_or_else(|| {
+            RewriteError::UnsupportedHaving("operands must have common built-in types")
+        })?;
+        data_types.push(array_oid);
+        let (array, format) = column.array();
+        bind.push_param(array, format);
+    }
+
+    if !having.params().is_empty() {
+        let client_bind = client_request
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                ProtocolMessage::Bind(bind) => Some(bind),
+                _ => None,
+            })
+            .ok_or_else(|| RewriteError::MissingParameter(1))?;
+        let client_types = client_param_types(client_request, client_bind);
+        for &param in having.params() {
+            let value = client_bind
+                .parameter(param)?
+                .ok_or_else(|| RewriteError::MissingParameter(param as u16 + 1))?;
+            data_types.push(client_types.get(param).copied().unwrap_or_default());
+            bind.push_param(value.parameter().clone(), value.format());
+        }
+    }
+
+    let shard = backend
+        .any_connected_shard()
+        .ok_or_else(|| BackendError::NotConnected)?;
+    let mut request = ClientRequest::from(vec![
+        ProtocolMessage::Parse(
+            Parse::new_anonymous(having.filter_sql()).with_data_types(&data_types),
+        ),
+        ProtocolMessage::Bind(bind),
+        ProtocolMessage::Execute(Execute::new()),
+        ProtocolMessage::Sync(Default::default()),
+    ]);
+    request.route = Some(Route::read(ShardWithPriority::new_table(Shard::Direct(
+        shard,
+    ))));
+
+    let (rows, _) = super::fetch_rows(backend, &request).await?;
+    let mut keep = vec![false; inputs.rows()];
+    for row in rows {
+        let passed = row
+            .get::<i64>(0, Format::Text)
+            .and_then(|position| usize::try_from(position).ok()?.checked_sub(1))
+            .and_then(|index| keep.get_mut(index))
+            .ok_or_else(|| invalid(AggregateError::HavingRowNumber))?;
+        *passed = true;
+    }
+    Ok(keep)
+}
+
+/// Apply DISTINCT, then OFFSET and LIMIT, to the groups that passed the
+/// filter, in the order PgDog sorted them.
+fn distinct_and_limit(keep: &mut [bool], messages: &VecDeque<Message>, route: &Route) {
+    let mut seen = HashSet::new();
+    let mut skip = route.limit().offset.unwrap_or(0);
+    let mut remaining = route.limit().limit;
+    let rows = messages.iter().filter(|message| message.code() == 'D');
+    for (keep, row) in keep.iter_mut().zip(rows) {
+        if !*keep {
+            continue;
+        }
+        if route.distinct().is_some() && !seen.insert(row.payload()) {
+            *keep = false;
+        } else if skip > 0 {
+            skip -= 1;
+            *keep = false;
+        } else if remaining == Some(0) {
+            *keep = false;
+        } else {
+            remaining = remaining.map(|limit| limit - 1);
+        }
+    }
+}
+
+fn invalid(error: AggregateError) -> Error {
+    BackendError::from(error).into()
+}
+
+/// Parameter types the client declared for the statement `bind` executes.
+fn client_param_types(client_request: &ClientRequest, bind: &Bind) -> Vec<u32> {
+    let parse = client_request
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            ProtocolMessage::Parse(parse) => Some(parse.clone()),
+            _ => None,
+        })
+        .or_else(|| client_request.last_parse.clone())
+        .or_else(|| PreparedStatements::global().read().parse(bind.statement()));
+    let Some(parse) = parse else {
+        return vec![];
+    };
+    parse
+        .data_types_ref()
+        .get(2..)
+        .unwrap_or_default()
+        .chunks_exact(4)
+        .map(|oid| u32::from_be_bytes([oid[0], oid[1], oid[2], oid[3]]))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        frontend::router::parser::{DistinctBy, Limit},
+        net::DataRow,
+    };
+
+    #[test]
+    fn distinct_then_offset_then_limit_apply_to_passing_groups() {
+        let messages = [1_i64, 1, 2, 2, 3, 4]
+            .into_iter()
+            .map(|value| DataRow::from_columns(vec![value]).message())
+            .collect();
+        let route = Route::select(
+            ShardWithPriority::new_table(Shard::All),
+            vec![],
+            Default::default(),
+            Limit {
+                limit: Some(2),
+                offset: Some(1),
+            },
+            Some(DistinctBy::Row),
+        );
+        // The first 2 fails the filter, so the second one is kept.
+        let mut keep = vec![true, true, false, true, true, true];
+
+        distinct_and_limit(&mut keep, &messages, &route);
+
+        assert_eq!(keep, [false, false, false, true, true, false]);
+    }
+}

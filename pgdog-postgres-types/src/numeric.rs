@@ -1,10 +1,4 @@
-use std::{
-    cmp::Ordering,
-    fmt::Display,
-    hash::Hash,
-    ops::{Add, AddAssign, Mul},
-    str::FromStr,
-};
+use std::{cmp::Ordering, fmt::Display, hash::Hash, str::FromStr};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use postgres_types::{FromSql, ToSql, Type};
@@ -103,47 +97,6 @@ impl Ord for Numeric {
             (NumericValue::PositiveInfinity, _) | (_, NumericValue::NegativeInfinity) => {
                 Ordering::Greater
             }
-        }
-    }
-}
-
-impl Add for Numeric {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        match (self.value, rhs.value) {
-            (NumericValue::Number(a), NumericValue::Number(b)) => Self::new(a + b),
-            (NumericValue::NaN, _)
-            | (_, NumericValue::NaN)
-            | (NumericValue::PositiveInfinity, NumericValue::NegativeInfinity)
-            | (NumericValue::NegativeInfinity, NumericValue::PositiveInfinity) => Self::nan(),
-            (NumericValue::PositiveInfinity, _) | (_, NumericValue::PositiveInfinity) => {
-                Self::infinity()
-            }
-            (NumericValue::NegativeInfinity, _) | (_, NumericValue::NegativeInfinity) => {
-                Self::negative_infinity()
-            }
-        }
-    }
-}
-
-impl AddAssign for Numeric {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Mul<Decimal> for Numeric {
-    type Output = Self;
-
-    fn mul(self, rhs: Decimal) -> Self::Output {
-        match self.value {
-            NumericValue::Number(n) => Self::from(n * rhs),
-            NumericValue::NaN => self,
-            _ if rhs.is_zero() => Self::nan(),
-            NumericValue::PositiveInfinity if rhs.is_sign_negative() => Self::negative_infinity(),
-            NumericValue::NegativeInfinity if rhs.is_sign_negative() => Self::infinity(),
-            _ => self,
         }
     }
 }
@@ -365,6 +318,44 @@ impl Numeric {
         matches!(self.value, NumericValue::NaN)
     }
 
+    /// Adds `rhs`.
+    ///
+    /// Returns `None` when two finite values overflow [`Decimal`]. Non-finite
+    /// values follow PostgreSQL: `NaN` and opposite infinities add to `NaN`,
+    /// and infinity absorbs a finite value.
+    pub fn checked_add(self, rhs: Self) -> Option<Self> {
+        match (self.value, rhs.value) {
+            (NumericValue::Number(a), NumericValue::Number(b)) => a.checked_add(b).map(Self::new),
+            (NumericValue::NaN, _)
+            | (_, NumericValue::NaN)
+            | (NumericValue::PositiveInfinity, NumericValue::NegativeInfinity)
+            | (NumericValue::NegativeInfinity, NumericValue::PositiveInfinity) => Some(Self::nan()),
+            (NumericValue::PositiveInfinity, _) | (_, NumericValue::PositiveInfinity) => {
+                Some(Self::infinity())
+            }
+            (NumericValue::NegativeInfinity, _) | (_, NumericValue::NegativeInfinity) => {
+                Some(Self::negative_infinity())
+            }
+        }
+    }
+
+    /// Multiplies by a finite decimal.
+    ///
+    /// Returns `None` when a finite product does not fit in [`Decimal`].
+    /// Non-finite values follow PostgreSQL numeric multiplication.
+    pub fn checked_mul(self, rhs: Decimal) -> Option<Self> {
+        match self.value {
+            NumericValue::Number(n) => n.checked_mul(rhs).map(Self::from),
+            NumericValue::NaN => Some(self),
+            _ if rhs.is_zero() => Some(Self::nan()),
+            NumericValue::PositiveInfinity if rhs.is_sign_negative() => {
+                Some(Self::negative_infinity())
+            }
+            NumericValue::NegativeInfinity if rhs.is_sign_negative() => Some(Self::infinity()),
+            _ => Some(self),
+        }
+    }
+
     /// Get the underlying Decimal value if finite.
     pub fn as_decimal(&self) -> Option<&Decimal> {
         match &self.value {
@@ -422,9 +413,20 @@ mod tests {
     fn test_numeric_precision() {
         let a = Numeric::from(Decimal::from_str("0.1").unwrap());
         let b = Numeric::from(Decimal::from_str("0.2").unwrap());
-        let c = a + b;
+        let c = a.checked_add(b).expect("0.1 + 0.2 fits in Decimal");
 
         assert_eq!(c.to_string(), "0.3");
+    }
+
+    #[test]
+    fn checked_arithmetic_reports_overflow() {
+        let max = Numeric::from(Decimal::MAX);
+        let min = Numeric::from(Decimal::MIN);
+        assert_eq!(max.checked_add(Numeric::from(Decimal::ZERO)), Some(max));
+        assert!(max.checked_add(Numeric::from(Decimal::ONE)).is_none());
+        assert!(min.checked_add(Numeric::from(-1)).is_none());
+        assert_eq!(max.checked_mul(Decimal::ONE), Some(max));
+        assert!(max.checked_mul(Decimal::from(2)).is_none());
     }
 
     #[test]
@@ -723,13 +725,13 @@ mod tests {
         let num = Numeric::from(42);
 
         // Any operation with NaN yields NaN
-        let result = nan + num;
+        let result = nan.checked_add(num).expect("NaN addition is defined");
         assert!(result.is_nan());
 
-        let result = num + nan;
+        let result = num.checked_add(nan).expect("NaN addition is defined");
         assert!(result.is_nan());
 
-        let result = nan + nan;
+        let result = nan.checked_add(nan).expect("NaN addition is defined");
         assert!(result.is_nan());
     }
 
