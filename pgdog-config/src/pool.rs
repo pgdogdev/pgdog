@@ -126,6 +126,7 @@ pub struct PoolConfig {
     /// LB weight.
     pub lb_weight: u8,
     /// Query cancellation timeout.
+    #[serde_as(as = "DurationMilliSeconds")]
     pub cancel_timeout: Duration,
 }
 
@@ -196,6 +197,7 @@ impl PoolConfig {
             connect_attempts: general.connect_attempts,
             connect_attempt_delay: general.connect_attempt_delay(),
             query_timeout: Duration::from_millis(general.query_timeout),
+            cancel_timeout: general.query_cancellation_timeout,
             checkout_timeout: Duration::from_millis(general.checkout_timeout),
             idle_timeout: Duration::from_millis(
                 user.idle_timeout
@@ -347,6 +349,7 @@ mod test {
         let value = serde_json::to_value(config).unwrap();
 
         assert_eq!(value["checkout_timeout"], 5000);
+        assert_eq!(value["cancel_timeout"], 5000);
         assert_eq!(value["idle_timeout_primary"], serde_json::Value::Null);
         assert_eq!(value["statement_timeout"], serde_json::Value::Null);
         assert_eq!(
@@ -384,6 +387,17 @@ mod test {
         ];
 
         PoolConfig::resolve(general, &ShardNodes::new(&entries), database, user)
+    }
+
+    #[test]
+    fn query_cancellation_timeout_comes_from_general() {
+        let general: General = toml::from_str("query_cancellation_timeout = 1234")
+            .expect("valid general configuration");
+        let config = resolve(&general, &database(Role::Primary), &User::default());
+
+        assert_eq!(config.cancel_timeout, Duration::from_millis(1234));
+        let value = serde_json::to_value(&general).expect("serializable general configuration");
+        assert_eq!(value["query_cancellation_timeout"], 1234);
     }
 
     #[test]

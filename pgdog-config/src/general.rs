@@ -1,6 +1,7 @@
 use derive_more::FromStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_with::{DurationMilliSeconds, serde_as};
 use std::env;
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -72,6 +73,7 @@ pub enum QuerySizeLimitAction {
 /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/>
+#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct General {
@@ -490,6 +492,16 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout>
     #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
+
+    /// Maximum time in milliseconds to connect, send a query cancellation request,
+    /// and wait for Postgres to close the cancellation connection.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cancellation_timeout>
+    #[serde_as(as = "DurationMilliSeconds")]
+    #[serde(default = "General::default_query_cancellation_timeout")]
+    pub query_cancellation_timeout: Duration,
 
     /// Maximum amount of time a client is allowed to wait for a connection from the pool.
     ///
@@ -970,6 +982,7 @@ impl Default for General {
             connect_attempt_delay: Self::default_connect_attempt_delay(),
             connect_attempts: Self::connect_attempts(),
             query_timeout: Self::default_query_timeout(),
+            query_cancellation_timeout: Self::default_query_cancellation_timeout(),
             checkout_timeout: Self::checkout_timeout(),
             client_login_timeout: Self::client_login_timeout(),
             dry_run: Self::dry_run(),
@@ -1223,6 +1236,13 @@ impl General {
             "PGDOG_QUERY_TIMEOUT",
             crate::MAX_DURATION.as_millis() as u64,
         )
+    }
+
+    fn default_query_cancellation_timeout() -> Duration {
+        Duration::from_millis(Self::env_or_default(
+            "PGDOG_QUERY_CANCELLATION_TIMEOUT",
+            5_000,
+        ))
     }
 
     pub fn query_timeout(&self) -> Duration {
@@ -1961,6 +1981,7 @@ mod tests {
         let _guard = set_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT", "15000");
         let _guard = set_env_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
         let _guard = set_env_var("PGDOG_QUERY_TIMEOUT", "30000");
+        let _guard = set_env_var("PGDOG_QUERY_CANCELLATION_TIMEOUT", "12000");
         let _guard = set_env_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
 
         assert_eq!(General::idle_healthcheck_interval(), 45000);
@@ -1974,6 +1995,10 @@ mod tests {
         );
         assert_eq!(General::default_connect_attempt_delay(), 1000);
         assert_eq!(General::default_query_timeout(), 30000);
+        assert_eq!(
+            General::default_query_cancellation_timeout(),
+            Duration::from_millis(12000)
+        );
         assert_eq!(General::default_client_idle_timeout(), 3600000);
 
         let _guard = remove_env_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
@@ -1984,6 +2009,7 @@ mod tests {
         let _guard = remove_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT");
         let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPT_DELAY");
         let _guard = remove_env_var("PGDOG_QUERY_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_QUERY_CANCELLATION_TIMEOUT");
         let _guard = remove_env_var("PGDOG_CLIENT_IDLE_TIMEOUT");
 
         assert_eq!(General::idle_healthcheck_interval(), 30000);
@@ -1993,6 +2019,10 @@ mod tests {
         assert_eq!(General::default_shutdown_timeout(), 60000);
         assert_eq!(General::default_shutdown_termination_timeout(), None);
         assert_eq!(General::default_connect_attempt_delay(), 0);
+        assert_eq!(
+            General::default_query_cancellation_timeout(),
+            Duration::from_millis(5000)
+        );
     }
 
     #[test]
