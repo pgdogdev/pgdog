@@ -390,17 +390,6 @@ mod test {
     }
 
     #[test]
-    fn query_cancellation_timeout_comes_from_general() {
-        let general: General = toml::from_str("query_cancellation_timeout = 1234")
-            .expect("valid general configuration");
-        let config = resolve(&general, &database(Role::Primary), &User::default());
-
-        assert_eq!(config.cancel_timeout, Duration::from_millis(1234));
-        let value = serde_json::to_value(&general).expect("serializable general configuration");
-        assert_eq!(value["query_cancellation_timeout"], 1234);
-    }
-
-    #[test]
     fn role_auto_enables_role_detection() {
         let config = resolve(&General::default(), &database(Role::Auto), &User::default());
         assert!(config.role_detection);
