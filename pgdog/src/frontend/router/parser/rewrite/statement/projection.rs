@@ -47,8 +47,8 @@ pub(crate) enum OrderBySource {
 impl OrderByHelper {
     fn matches(&self, order_by: &OrderBy) -> bool {
         match (&self.source, order_by) {
-            (OrderBySource::Column(source), OrderBy::AscColumn(column))
-            | (OrderBySource::Column(source), OrderBy::DescColumn(column))
+            (OrderBySource::Column(source), OrderBy::AscColumn(column, _))
+            | (OrderBySource::Column(source), OrderBy::DescColumn(column, _))
             | (OrderBySource::Vector(source), OrderBy::AscVectorL2Column(column, _)) => {
                 source == column
             }
@@ -228,10 +228,11 @@ pub(crate) fn finalize_after_route(
             let Some(sort) = position.and_then(|position| order_by.get_mut(position)) else {
                 continue;
             };
+            let nulls = sort.nulls();
             *sort = if sort.asc() {
-                OrderBy::AscColumn(helper.alias.clone())
+                OrderBy::AscColumn(helper.alias.clone(), nulls)
             } else {
-                OrderBy::DescColumn(helper.alias.clone())
+                OrderBy::DescColumn(helper.alias.clone(), nulls)
             };
         }
         route.set_order_by(order_by);
