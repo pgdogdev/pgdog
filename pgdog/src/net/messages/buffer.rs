@@ -51,10 +51,10 @@ impl MessageBuffer {
         self.buffer.capacity()
     }
 
-    async fn read_internal(
+    async fn read_until_message_complete(
         &mut self,
         stream: &mut (impl Unpin + AsyncReadExt),
-    ) -> Result<Message, Error> {
+    ) -> Result<usize, Error> {
         loop {
             if let Some(size) = self.message_size()? {
                 if let Some(limit) = self.size_limit_block
@@ -76,7 +76,7 @@ impl MessageBuffer {
                 }
 
                 if self.buffer.len() >= size {
-                    return Ok(Message::new(self.buffer.split_to(size).freeze()));
+                    return Ok(size);
                 }
 
                 self.ensure_capacity(size); // Reserve at least enough space for the whole message.
@@ -190,7 +190,9 @@ impl MessageBuffer {
         &mut self,
         stream: &mut (impl Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {
-        self.read_internal(stream).await
+        let size = self.read_until_message_complete(stream).await?;
+
+        Ok(Message::new(self.buffer.split_to(size).freeze()))
     }
 }
 

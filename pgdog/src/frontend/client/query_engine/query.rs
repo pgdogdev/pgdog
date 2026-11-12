@@ -260,85 +260,9 @@ impl QueryEngine {
             }
 
             'Z' => {
-                self.pending_explain = None;
-                self.stats.query();
-
-                let mut two_pc_auto = false;
                 let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
-
-                match state {
-                    TransactionState::Error => {
-                        if let Some(transaction) = context.transaction.as_mut() {
-                            transaction.set_error();
-                        }
-                        if self.two_pc.auto() {
-                            self.end_two_pc(true).await?;
-                            // TODO: this records a 2pc transaction in client
-                            // stats anyway but not on the servers. Is this what we want?
-                            two_pc_auto = true;
-                        }
-                    }
-
-                    TransactionState::Idle => {
-                        context.transaction = None;
-                        self.backend.end_transaction();
-                    }
-
-                    TransactionState::InTransaction => {
-                        if self.two_pc.auto() {
-                            self.end_two_pc(false).await?;
-                            two_pc_auto = true;
-                        }
-                        match context.transaction.map(|t| t.transaction_type()) {
-                            // Query parser is disabled, so the server is responsible for telling us
-                            // we started a transaction.
-                            None => {
-                                context.transaction = Some(Transaction::started_at(
-                                    TransactionType::ReadWrite,
-                                    context.statement_start,
-                                ));
-                            }
-
-                            // Restore transaction state after rollback to savepoint.
-                            Some(TransactionType::ErrorReadOnly) => {
-                                context.transaction = Some(Transaction::started_at(
-                                    TransactionType::ReadOnly,
-                                    context.statement_start,
-                                ));
-                            }
-
-                            Some(TransactionType::ErrorReadWrite) => {
-                                context.transaction = Some(Transaction::started_at(
-                                    TransactionType::ReadWrite,
-                                    context.statement_start,
-                                ));
-                            }
-
-                            _ => (),
-                        }
-                    }
-                }
-
-                if two_pc_auto {
-                    // In auto mode, 2pc transaction was started automatically
-                    // without the client's knowledge. We need to return a regular RFQ
-                    // message and close the transaction.
-                    context.transaction = None;
-                    message = ReadyForQuery::in_transaction(false).message();
-                }
-
-                self.stats.idle(context.in_transaction());
-
-                if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
-                    self.temp_tables.update(change, context.in_transaction());
-                }
-
-                // In case the advisory lock was inside a INSERT/UPDATE CTE which didn't return a row.
-                self.handle_advisory_locks(&message);
-
-                if !context.in_transaction() {
-                    self.stats.transaction(two_pc_auto);
-                }
+                self.handle_ready_for_query(context, state, &mut message)
+                    .await?;
             }
 
             _ => (),
@@ -383,6 +307,94 @@ impl QueryEngine {
         }
 
         self.hooks.on_server_message(context, &message)?;
+
+        Ok(())
+    }
+
+    async fn handle_ready_for_query(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        state: TransactionState,
+        message: &mut Message,
+    ) -> Result<(), Error> {
+        self.pending_explain = None;
+        self.stats.query();
+
+        let mut two_pc_auto = false;
+
+        match state {
+            TransactionState::Error => {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                if self.two_pc.auto() {
+                    self.end_two_pc(true).await?;
+                    // TODO: this records a 2pc transaction in client
+                    // stats anyway but not on the servers. Is this what we want?
+                    two_pc_auto = true;
+                }
+            }
+
+            TransactionState::Idle => {
+                context.transaction = None;
+                self.backend.end_transaction();
+            }
+
+            TransactionState::InTransaction => {
+                if self.two_pc.auto() {
+                    self.end_two_pc(false).await?;
+                    two_pc_auto = true;
+                }
+                match context.transaction.map(|t| t.transaction_type()) {
+                    // Query parser is disabled, so the server is responsible for telling us
+                    // we started a transaction.
+                    None => {
+                        context.transaction = Some(Transaction::started_at(
+                            TransactionType::ReadWrite,
+                            context.statement_start,
+                        ));
+                    }
+
+                    // Restore transaction state after rollback to savepoint.
+                    Some(TransactionType::ErrorReadOnly) => {
+                        context.transaction = Some(Transaction::started_at(
+                            TransactionType::ReadOnly,
+                            context.statement_start,
+                        ));
+                    }
+
+                    Some(TransactionType::ErrorReadWrite) => {
+                        context.transaction = Some(Transaction::started_at(
+                            TransactionType::ReadWrite,
+                            context.statement_start,
+                        ));
+                    }
+
+                    _ => (),
+                }
+            }
+        }
+
+        if two_pc_auto {
+            // In auto mode, 2pc transaction was started automatically
+            // without the client's knowledge. We need to return a regular RFQ
+            // message and close the transaction.
+            *message = ReadyForQuery::in_transaction(false).message();
+            context.transaction = None;
+        }
+
+        self.stats.idle(context.in_transaction());
+
+        if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
+            self.temp_tables.update(change, context.in_transaction());
+        }
+
+        // In case the advisory lock was inside a INSERT/UPDATE CTE which didn't return a row.
+        self.handle_advisory_locks(message);
+
+        if !context.in_transaction() {
+            self.stats.transaction(two_pc_auto);
+        }
 
         Ok(())
     }

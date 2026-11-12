@@ -652,30 +652,8 @@ impl Server {
 
         match message.code() {
             'Z' => {
-                let now = Instant::now();
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
-
-                self.stats.query(now, rfq.status == 'T');
-                self.stats.memory_used(self.memory_stats());
-
-                match rfq.status {
-                    'I' => {
-                        self.in_transaction = false;
-                        self.stats.transaction(now);
-                    }
-                    'T' => {
-                        self.in_transaction = true;
-                        self.stats.state(State::IdleInTransaction);
-                    }
-                    'E' => self.stats.transaction_error(now),
-                    status => {
-                        self.stats.state(State::Error);
-                        return Err(Error::UnexpectedTransactionStatus(status));
-                    }
-                }
-                self.stream_buffer.shrink_to_fit();
-                self.streaming = false;
-                self.statement_executed = false;
+                self.handle_ready_for_query(&rfq)?;
             }
             'E' => {
                 let error = ErrorResponse::from_bytes(message.to_bytes())?;
@@ -705,18 +683,7 @@ impl Server {
             }
             'C' => {
                 let cmd = CommandComplete::from_bytes(message.to_bytes())?;
-                match cmd.command() {
-                    "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
-                    "DEALLOCATE ALL" => self.prepared_statements.clear(),
-                    "DISCARD ALL" => {
-                        self.prepared_statements.clear();
-                        self.client_params.server_reset();
-                    }
-                    "RESET" => self.client_params.server_reset(), // Someone reset params, we're gonna need to re-sync.
-                    _ => (),
-                }
-                self.stats.rows_affected(&cmd);
-                self.statement_executed = true;
+                self.handle_command_complete(&cmd);
             }
             's' => self.statement_executed = true,
             'G' => self.stats.copy_mode(),
@@ -731,6 +698,49 @@ impl Server {
         trace!("{:#?} <<< [{}]", message, self.addr());
 
         Ok(message)
+    }
+
+    fn handle_ready_for_query(&mut self, rfq: &ReadyForQuery) -> Result<(), Error> {
+        let now = Instant::now();
+
+        self.stats.query(now, rfq.status == 'T');
+        self.stats.memory_used(self.memory_stats());
+
+        match rfq.status {
+            'I' => {
+                self.in_transaction = false;
+                self.stats.transaction(now);
+            }
+            'T' => {
+                self.in_transaction = true;
+                self.stats.state(State::IdleInTransaction);
+            }
+            'E' => self.stats.transaction_error(now),
+            status => {
+                self.stats.state(State::Error);
+                return Err(Error::UnexpectedTransactionStatus(status));
+            }
+        }
+        self.stream_buffer.shrink_to_fit();
+        self.streaming = false;
+        self.statement_executed = false;
+
+        Ok(())
+    }
+
+    fn handle_command_complete(&mut self, cmd: &CommandComplete) {
+        match cmd.command() {
+            "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
+            "DEALLOCATE ALL" => self.prepared_statements.clear(),
+            "DISCARD ALL" => {
+                self.prepared_statements.clear();
+                self.client_params.server_reset();
+            }
+            "RESET" => self.client_params.server_reset(), // Someone reset params, we're gonna need to re-sync.
+            _ => (),
+        }
+        self.stats.rows_affected(cmd);
+        self.statement_executed = true;
     }
 
     /// Synchronize parameters between client and server.
