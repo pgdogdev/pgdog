@@ -3,6 +3,25 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-11-12
+
+**OS version**: [v0.1.65](CHANGELOG.md#v0165)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-12`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-12` |
+
+#### Features
+
+- Add MCP server with tools to fetch instance status, metrics, logs and configuration
+- Add support for starting resharding from the control plane UI
+- Add support for cutting over traffic during resharding from the control plane UI
+
+#### Bug fixes
+
+- Make Aurora autodiscovery ignore instances from other regions (other region than specified in the seed `[[databases]]` entries). It wasn't possible to construct correct URLs since regions use hashes and not names, so it would previously create unroutable database entries in the config.
+
 ### v2026-11-05
 
 **OS version**: [v0.1.64](CHANGELOG.md#v0164)
