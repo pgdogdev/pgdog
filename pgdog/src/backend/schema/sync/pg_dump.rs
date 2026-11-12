@@ -19,7 +19,7 @@ use regex::Regex;
 use tracing::{info, trace, warn};
 
 use super::SchemaSyncError;
-use crate::backend::replication::logical::resumable::RESHARDING_TABLE;
+use crate::backend::replication::logical::run::RESHARDING_TABLE;
 use crate::{
     backend::{self, Cluster, pool::Request, replication::publisher::PublicationTable},
     config::config,

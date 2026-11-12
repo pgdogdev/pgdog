@@ -152,21 +152,23 @@ SM2 can be revisited if resumable resharding becomes an enterprise-only feature,
 erDiagram
   RESHARDING ||--o{ PART_MARKER : "one per destination shard"
   RESHARDING {
-    text source_db PK
-    text destination_db PK
+    uuid id PK
+    text source_db UK
+    text destination_db UK
+    text publication UK
     jsonb command
-    text publication PK
     text slot_name
     bool slot_existed
     text stage
     text cutover_step "Stage 5"
     jsonb config
+    text instance_id
+    uuid run_id
+    bigint task_id
     int format_version
   }
   PART_MARKER {
-    text source_db PK
-    text destination_db PK
-    text publication PK
+    uuid resharding_id PK
     text table_schema PK
     text table_name PK
     int source_shard PK
@@ -174,7 +176,9 @@ erDiagram
   }
 ```
 
-Stage 3 records which table parts are copied in table `PART_MARKER`, one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `RESHARDING`.
+Stage 3 records which table parts are copied in table `PART_MARKER`, one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `RESHARDING`. It refers to the run by `resharding_id`. A marker from an earlier run with the same key has another id, so a new run never reads it as its own.
+
+The primary key of `RESHARDING` is `id`, a UUID v7 that pgdog generates when it creates the row. A resume keeps the id. The key (source, destination, publication) is `UNIQUE`: lookup and the advisory lock use it, and it allows one unfinished run per key. The owner columns (`instance_id`, `run_id`, `task_id`) name the root task of the attempt that wrote the row.
 
 `RESHARDING` is the table `pgdog.resharding`. It has one row per unfinished resharding, on destination shard 0. The row describes the resharding and every object it keeps.
 
@@ -221,7 +225,7 @@ No new layer wraps the tasks. The resumable state lives in the shared run state 
 flowchart LR
   OP[Operator] --> CMD[Start command with cleanup_on_cancel false or WITH resume]
   CMD --> V[Resume validator]
-  CMD --> RS[Shared run state: resumable state, state store, lock]
+  CMD --> RS[Shared resharding state: clusters, slots, origins, state store, lock]
   RS --- ST[(State table)]
   RS --> PH[Phase tasks]
   PH --> S[(Source: slots)]
@@ -275,7 +279,7 @@ For each side effect, the state records what resume needs before the effect, or 
 |RESHARD, COPY_DATA, REPLICATE `WITH (cleanup_on_cancel false)`. CLI `data-sync --cleanup-on-cancel false`.|Starts a resumable run. The reply does not change. Fails if the key (source, destination, publication) has an unfinished resharding. Each other publication on the same pair has its own resharding.|1|
 |STOP_TASK|Pauses. Slots and origins stay. Traffic resumes if it was stopped.|1|
 |RESHARD, COPY_DATA, REPLICATE `WITH (abort)`. CLI `data-sync --abort`.|The key is (source, destination, publication). The command must match the stored row. The slot must match when it is given. The config snapshot is not checked. The abort runs as a registered task, `abort <command> <source> -> <destination>` in `SHOW TASKS`. It stops the run if it is active. It drops the slots the run created, all its origins and the row. Destination data stays. Admin returns the task id. The CLI waits for the task.|1, reverse in 5|
-|`SHOW TASKS`|Existing command. The type of a resumable root task ends with ` (resumable)`.|1|
+|`SHOW TASKS`|Existing command. No change.|1|
 |`SHOW RESHARDING`|New command. It lists every unfinished resharding from the state tables. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. Stage 6 adds slot WAL status and retained bytes.|1|
 |RESHARD, COPY_DATA, REPLICATE `WITH (resume)`. CLI `data-sync --resume`.|Continues the unfinished resharding with the same key (source, destination, publication). The command and its arguments must match the stored row, or it refuses. It refuses on a critical config mismatch. Takes the lock, validates, reconciles, continues. No new command.|2|
 |CUTOVER|No change.|5|
@@ -285,7 +289,7 @@ After cutover the names point to swapped hosts. The commands search shard 0 of b
 ## Known limits
 
 - Sharding changes during a pause are detected through the config snapshot. DDL changes are not detected.
-- Runs with the default `cleanup_on_cancel true` lose progress on crash, as today.
+- Runs with the default `cleanup_on_cancel true` cannot resume. After a crash, their row stays, and abort drops their slots and origins.
 
 # Part 3. Stages
 
@@ -297,18 +301,18 @@ In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Canc
 
 ### Approach
 
-1. Parse `cleanup_on_cancel`. The default is `true`. With `true`, nothing changes: no row, no lock, and slots and origins are dropped on stop or error.
-2. With `false`: open a dedicated state connection to destination shard 0. Create `pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication). Fail if the key has a row.
+1. Parse `cleanup_on_cancel`. The default is `true`. The flag decides only what happens on stop or error. Every run is recorded.
+2. Open a dedicated state connection to destination shard 0. Create `pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication). Fail if the key has a row.
 3. Probe the slots before the insert. If all slots exist, the row records "slot existed". If no slot exists, it records "slot did not exist". If only some slots exist, refuse.
 4. Capture the config snapshot: the shard counts and sharding rules of both clusters.
-5. Insert the row before the first slot exists: command with its options, publication, slot name, "existed" flag, stage, config snapshot, format version.
+5. Insert the row before the first slot exists: command with its options, publication, slot name, "existed" flag, stage, config snapshot, owner task (instance id, run id, task id), format version.
 6. Write the stage at each phase start.
-7. Every 5 s the owner checks its state connection (lock watchdog). If the connection is lost, the run pauses.
-8. On stop, error, shutdown or lock loss: stop tasks, keep slots and origins, release the lock. After a crash, Postgres frees the lock.
+7. Every 5 s the owner checks its state connection (lock watchdog). If the connection is lost, the run stops.
+8. On stop, error, shutdown or lock loss, with `cleanup_on_cancel false`: stop tasks, keep slots and origins, release the lock. With `true`: drop the slots that the run created and all its origins, then delete the row and release the lock. If the drop fails, the row stays, so abort can finish the cleanup. After a crash, Postgres frees the lock and the row stays.
 9. At cutover start, delete the row. Cutover and reverse replication then work as today.
 10. At the end of a run with no cutover, delete the row.
 
-Every automatic cleanup path skips resumable runs. Only abort and the normal run end drop objects.
+Every automatic cleanup path skips runs with `cleanup_on_cancel false`. For them, only abort and the normal run end drop objects.
 
 Abort runs as the registered task `AbortReshardingTask`. Admin and CLI use the same task. `SHOW TASKS` lists it, and `STOP_TASK` can stop it. The command finds the row by its key (source, destination, publication). Before the task starts, the command checks the row: the command, and the slot when it is given. A mismatch is an error at once. The task stops the run if it is active in this process. Then it drops the slots that the run created, all its origins and the row. A slot that existed before the run stays. Each phase skips missing objects, so a failed abort can run again. Abort does not check the config snapshot.
 
@@ -324,13 +328,14 @@ Exclude the state table from the schema dump. A later run can use this destinati
 - RESHARD and REPLICATE now accept `WITH (...)` options, as COPY_DATA does. The replies do not change.
 - RESHARD, COPY_DATA and REPLICATE accept `WITH (abort)`, forward direction only. It aborts the unfinished resharding with the key (source, destination, publication) of the command. The reply is one column `task_id`, the abort task. `abort` together with `cleanup_on_cancel` is refused. COPY_DATA refuses `abort` with `tables_only`.
 - CLI `data-sync --cleanup-on-cancel <true|false>` (default `true`) and `data-sync --abort`. `--abort` conflicts with `--cleanup-on-cancel`, `--replicate-only`, `--tables-only`, `--sync-only` and `--skip-schema-sync`.
-- `SHOW TASKS` has no new columns. The type of a resumable root task ends with ` (resumable)`, for example `reshard source -> destination (resumable)`. The abort task shows as `abort <command> <source> -> <destination>`.
-- New `SHOW RESHARDING`. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. `config` is `ok`, the error that names the first changed setting, or `unknown: <reason>`.
+- `SHOW TASKS` does not change for reshard and replication tasks. The abort task shows as `abort <command> <source> -> <destination>`.
+- New `SHOW RESHARDING`. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `owner`, `last_task`, `replication_slot`, `slot_existed`, `slots`, `origins`, `config`. `config` is `ok`, the error that names the first changed setting, or `unknown: <reason>`.
 - A startup warning for each unfinished resharding.
 - Control plane: a new field `cleanup_on_cancel` on the reshard and replication definitions. A missing field reads as `true`. A new definition kind and status kind `abort_resharding`. All changes are additive.
 - New table `pgdog.resharding` on destination shard 0. `pg_dump` in schema sync excludes it.
 - The state connection uses `application_name` `pgdog_resharding:<instance_id>`. It holds the advisory lock `(hashtext('pgdog.resharding'), hashtext('<source>/<destination>/<publication>'))`. The first half is the namespace of all resharding locks.
-- STOP_TASK on a resumable run pauses it and keeps its slots and origins.
+- STOP_TASK on a resumable run pauses it and keeps its slots and origins. STOP_TASK on a run with `cleanup_on_cancel true` drops its slots and origins as today, then deletes its row.
+- Every run, also with the default `cleanup_on_cancel true`, writes a row and takes the lock. A second run with the same key is refused while the first one runs or has a row.
 
 ### Tests
 
@@ -338,7 +343,7 @@ Exclude the state table from the schema dump. A later run can use this destinati
 |---|---|---|
 |1|COPY_DATA `WITH (cleanup_on_cancel false)`. STOP_TASK during replication.|Paused in `SHOW RESHARDING`. Forward slots and origins still exist. `config` is `ok`, also after a restart.|
 |2|`WITH (abort)` after 1.|Row gone. Run slots and origins gone. A slot that existed before the run stays.|
-|3|REPLICATE with the default `cleanup_on_cancel true`. STOP_TASK.|Today's cleanup. No state row.|
+|3|REPLICATE with the default `cleanup_on_cancel true`. STOP_TASK.|A row while it runs. On stop, today's cleanup, then the row is deleted.|
 
 Unit tests on a real Postgres: idempotent DDL, lock conflict with the owner name, write failure after the lock connection is lost. Unit tests for the config validator. An integration test proves that the row is deleted at cutover start.
 
@@ -423,7 +428,7 @@ Facts:
 
 Needs:
 
-- Link all attempts of one run. The link must not depend on the instance, the token or the task id. The run key (source, destination, publication) in the state table, or a run id stored in the run row, can be this link.
+- Link all attempts of one run. The link must not depend on the instance, the token or the task id. The run `id` in the state table is this link: every attempt of the run keeps it.
 - Show that a task is resumed, and which attempt it continues.
 - End the old attempt in the UI (for example "interrupted") when the run is resumed or aborted.
 - Show done parts as done, not as zero progress.

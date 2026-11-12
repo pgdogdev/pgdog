@@ -1,4 +1,8 @@
-use pgdog_stats::Databases;
+use std::fmt::Display;
+use std::str::FromStr;
+
+use pgdog_stats::{Databases, InstanceId};
+use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
 use super::super::{Error, subscriber::connect_address};
@@ -7,10 +11,10 @@ use super::queries::{
     StageUpdate, TableExists, TryLock, Unlock, UpdateStage,
 };
 use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage, TaskOwner};
+use crate::backend::server::ServerRequest;
 use crate::backend::{Server, pool::Address};
 use crate::net::{DataRow, Format};
 use crate::util::instance_id;
-use pgdog_stats::InstanceId;
 
 const APPLICATION_NAME_PREFIX: &str = "pgdog_resharding:";
 
@@ -56,42 +60,37 @@ impl ReshardingStore {
             .await
             .fetch_all::<DataRow>(SelectRow::request(&self.key))
             .await?;
-        rows.first().map(parse_row).transpose()
+        rows.first()
+            .map(|row| parse_record(row, self.key.clone()))
+            .transpose()
     }
 
     pub(crate) async fn insert(&self, row: &ReshardingRecord) -> Result<(), Error> {
-        self.server
-            .lock()
-            .await
-            .execute_checked(InsertRow::request(row))
-            .await?;
-        Ok(())
+        self.execute(InsertRow::request(row)).await
     }
 
     pub(crate) async fn set_stage(&self, stage: Stage) -> Result<(), Error> {
-        let update = StageUpdate {
+        self.execute(UpdateStage::request(StageUpdate {
             key: &self.key,
             stage,
-        };
-        self.server
-            .lock()
-            .await
-            .execute_checked(UpdateStage::request(update))
-            .await?;
-        Ok(())
+        }))
+        .await
     }
 
     pub(crate) async fn delete(&self) -> Result<(), Error> {
-        self.server
-            .lock()
-            .await
-            .execute_checked(DeleteRow::request(&self.key))
-            .await?;
-        Ok(())
+        self.execute(DeleteRow::request(&self.key)).await
     }
 
     pub(crate) async fn ping(&self) -> Result<(), Error> {
-        self.server.lock().await.execute_checked("SELECT 1").await?;
+        self.execute("SELECT 1").await
+    }
+
+    pub(crate) async fn unlock(&self) -> Result<(), Error> {
+        self.execute(Unlock::request(&self.key)).await
+    }
+
+    async fn execute(&self, request: impl Into<ServerRequest>) -> Result<(), Error> {
+        self.server.lock().await.execute_checked(request).await?;
         Ok(())
     }
 
@@ -111,7 +110,7 @@ impl ReshardingStore {
             .iter()
             .map(|row| {
                 let key = parse_key(row)?;
-                Ok(parse_body(row, key.clone()).map_err(|error| UnreadableRecord { key, error }))
+                Ok(parse_record(row, key.clone()).map_err(|error| UnreadableRecord { key, error }))
             })
             .collect()
     }
@@ -156,8 +155,19 @@ fn text(row: &DataRow, index: usize) -> Result<String, Error> {
         .ok_or_else(|| Error::MissingData)
 }
 
-fn parse_row(row: &DataRow) -> Result<ReshardingRecord, Error> {
-    parse_body(row, parse_key(row)?)
+fn parsed<T>(row: &DataRow, index: usize, field: &str) -> Result<T, Error>
+where
+    T: FromStr,
+    T::Err: Display,
+{
+    text(row, index)?
+        .parse()
+        .map_err(|err| Error::ReshardingFormat(format!("{field}: {err}")))
+}
+
+fn json<T: DeserializeOwned>(row: &DataRow, index: usize, field: &str) -> Result<T, Error> {
+    serde_json::from_str(&text(row, index)?)
+        .map_err(|err| Error::ReshardingFormat(format!("{field}: {err}")))
 }
 
 fn parse_key(row: &DataRow) -> Result<ReshardingKey, Error> {
@@ -170,33 +180,26 @@ fn parse_key(row: &DataRow) -> Result<ReshardingKey, Error> {
     })
 }
 
-fn parse_body(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Error> {
-    let format_version = text(row, 11)?
-        .parse::<i32>()
-        .map_err(|err| Error::ResumableFormat(format!("format_version: {err}")))?;
+fn parse_record(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Error> {
+    let format_version: i32 = parsed(row, 11, "format_version")?;
     if format_version > FORMAT_VERSION {
-        return Err(Error::ResumableFormat(format!(
+        return Err(Error::ReshardingFormat(format!(
             "format version {format_version} is newer than {FORMAT_VERSION}"
         )));
     }
 
     Ok(ReshardingRecord {
+        id: parsed(row, 12, "id")?,
         key,
-        command: serde_json::from_str(&text(row, 3)?)
-            .map_err(|err| Error::ResumableFormat(format!("command: {err}")))?,
+        command: json(row, 3, "command")?,
         slot_name: text(row, 4)?,
-        slot_existed: text(row, 5)? == "true",
+        slot_existed: parsed(row, 5, "slot_existed")?,
         stage: text(row, 6)?.parse()?,
-        config: serde_json::from_str(&text(row, 7)?)
-            .map_err(|err| Error::ResumableFormat(format!("config: {err}")))?,
+        config: json(row, 7, "config")?,
         owner: TaskOwner {
             instance_id: InstanceId::from(text(row, 8)?),
-            run_id: text(row, 9)?
-                .parse()
-                .map_err(|err| Error::ResumableFormat(format!("run_id: {err}")))?,
-            task_id: text(row, 10)?
-                .parse()
-                .map_err(|err| Error::ResumableFormat(format!("task_id: {err}")))?,
+            run_id: parsed(row, 9, "run_id")?,
+            task_id: parsed(row, 10, "task_id")?,
         },
         format_version,
     })
@@ -204,7 +207,7 @@ fn parse_body(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Err
 
 #[cfg(test)]
 mod test {
-    use super::super::{ConfigSnapshot, ReshardingCommand};
+    use super::super::{ConfigSnapshot, ReshardingCommand, ReshardingId};
     use super::*;
     use crate::backend::server::test::test_server;
 
@@ -235,6 +238,7 @@ mod test {
         )
         .unwrap();
         ReshardingRecord {
+            id: ReshardingId::generate(),
             key,
             command: ReshardingCommand::Reshard {
                 skip_schema_sync: false,
@@ -320,7 +324,7 @@ mod test {
         .await
         .unwrap();
 
-        assert!(matches!(new.load().await, Err(Error::ResumableFormat(_))));
+        assert!(matches!(new.load().await, Err(Error::ReshardingFormat(_))));
 
         let mut server = test_server().await;
         let listed = ReshardingStore::list(&mut server, &old_key.databases.destination)
@@ -328,7 +332,7 @@ mod test {
             .unwrap();
         assert_eq!(listed.len(), 2);
         assert!(
-            matches!(&listed[0], Err(UnreadableRecord { key, error: Error::ResumableFormat(_) }) if *key == new_key)
+            matches!(&listed[0], Err(UnreadableRecord { key, error: Error::ReshardingFormat(_) }) if *key == new_key)
         );
         assert_eq!(listed[1].as_ref().unwrap().key, old_key);
 

@@ -70,7 +70,7 @@ pub enum ReplicationCutoverReason {
 /// The migration one replication task drives, including every cutover it
 /// performs.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("replication {databases}{}", if *cleanup_on_cancel { "" } else { " (resumable)" })]
+#[display("replication {databases}")]
 pub struct ReplicationDefinition {
     pub databases: Databases,
     pub auto_cutover: bool,

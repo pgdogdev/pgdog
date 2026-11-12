@@ -135,7 +135,7 @@ impl ConfigSnapshot {
 fn sorted_rules<T: Serialize>(items: impl Iterator<Item = T>) -> Result<Vec<Value>, Error> {
     let mut rules = items
         .map(|item| {
-            serde_json::to_value(item).map_err(|err| Error::ResumableFormat(err.to_string()))
+            serde_json::to_value(item).map_err(|err| Error::ReshardingFormat(err.to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     rules.sort_by_cached_key(|rule| rule.to_string());

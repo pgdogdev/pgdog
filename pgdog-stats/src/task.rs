@@ -534,18 +534,6 @@ mod test {
             "reshard prod -> prod_sharded"
         );
 
-        assert_eq!(
-            TaskDefinition::from(ReshardDefinition {
-                databases: databases(),
-                skip_schema_sync: false,
-                replicate_only: false,
-                sync_only: false,
-                auto_cutover: true,
-                cleanup_on_cancel: false,
-            })
-            .to_string(),
-            "reshard prod -> prod_sharded (resumable)"
-        );
 
         assert_eq!(
             TaskDefinition::from(CopyDataDefinition {
@@ -844,24 +832,32 @@ mod test {
             .to_string(),
             "schema_sync(unknown) prod -> prod_sharded"
         );
-        for (json, expected) in [
-            (
-                r#"{"name":"reshard","kind":"reshard","databases":{"source":"prod","destination":"prod_sharded"},"skip_schema_sync":false,"replicate_only":false,"sync_only":false,"auto_cutover":true}"#,
-                "reshard prod -> prod_sharded",
-            ),
-            (
-                r#"{"name":"replication","kind":"replication","databases":{"source":"prod","destination":"prod_sharded"},"auto_cutover":true}"#,
-                "replication prod -> prod_sharded",
-            ),
-        ] {
-            assert_eq!(
-                serde_json::from_str::<TaskDefinition>(json)
-                    .unwrap()
-                    .to_string(),
-                expected,
-                "{json}"
-            );
-        }
+
+        assert_eq!(
+            serde_json::from_str::<TaskDefinition>(
+                r#"{"name":"reshard","kind":"reshard","databases":{"source":"prod","destination":"prod_sharded"},"skip_schema_sync":false,"replicate_only":false,"sync_only":false,"auto_cutover":true}"#
+            )
+            .unwrap(),
+            TaskDefinition::from(ReshardDefinition {
+                databases: databases(),
+                skip_schema_sync: false,
+                replicate_only: false,
+                sync_only: false,
+                auto_cutover: true,
+                cleanup_on_cancel: true,
+            })
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskDefinition>(
+                r#"{"name":"replication","kind":"replication","databases":{"source":"prod","destination":"prod_sharded"},"auto_cutover":true}"#
+            )
+            .unwrap(),
+            TaskDefinition::from(ReplicationDefinition {
+                databases: databases(),
+                auto_cutover: true,
+                cleanup_on_cancel: true,
+            })
+        );
 
         assert_eq!(
             serde_json::from_str::<Vec<TaskStatus>>(

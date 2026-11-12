@@ -93,7 +93,7 @@ impl Query for SelectRow {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, instance_id, run_id::text,
-               task_id::text, format_version::text
+               task_id::text, format_version::text, id::text
         FROM pgdog.resharding
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
@@ -110,7 +110,7 @@ impl Query for ListRows {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, instance_id, run_id::text,
-               task_id::text, format_version::text
+               task_id::text, format_version::text, id::text
         FROM pgdog.resharding
         WHERE destination_db = $1
         ORDER BY source_db, publication";
@@ -128,10 +128,10 @@ impl Query for InsertRow {
     const SQL: &'static str = "
         INSERT INTO pgdog.resharding (
             source_db, destination_db, publication, command, slot_name,
-            slot_existed, stage, config, instance_id, run_id, task_id, format_version
+            slot_existed, stage, config, instance_id, run_id, task_id, format_version, id
         )
         VALUES ($1, $2, $3, $4::jsonb, $5, $6::boolean, $7, $8::jsonb, $9, $10::uuid,
-                $11::bigint, $12::integer)";
+                $11::bigint, $12::integer, $13::uuid)";
 
     type Params<'a> = &'a ReshardingRecord;
 
@@ -150,6 +150,7 @@ impl Query for InsertRow {
             text(&row.owner.run_id.to_string()),
             text(&row.owner.task_id.to_string()),
             text(&row.format_version.to_string()),
+            text(&row.id.to_string()),
         ]
     }
 }

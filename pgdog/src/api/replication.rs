@@ -24,9 +24,7 @@ use crate::backend::replication::logical::publisher::replication_stream::{
 };
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::resumable::{
-    ActiveRun, ReshardingCommand, ResumeState, Stage,
-};
+use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand, Stage};
 use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
@@ -64,7 +62,6 @@ pub(crate) struct ReplicationTask {
     cutover: CutoverMode,
     schema_sync: SchemaSyncBuilder,
     validate: bool,
-    resumable: Option<ResumeState>,
 }
 
 /// Executes the whole replication process. It runs a replication until a cutover,
@@ -91,7 +88,7 @@ impl Task for ReplicationTask {
         ReplicationDefinition {
             databases: self.state.databases(),
             auto_cutover: self.cutover == CutoverMode::Auto,
-            cleanup_on_cancel: !self.state.is_resumable(),
+            cleanup_on_cancel: self.state.cleanup_on_cancel(),
         }
     }
 
@@ -135,7 +132,6 @@ impl ReplicationTask {
 /// between forward and reverse replication until stopped.
 struct Replication<T> {
     state: ReshardingState,
-    resumable: Option<ResumeState>,
     schema_sync: SchemaSyncBuilder,
     cutover: CutoverMode,
     validation_stage: PostDataValidationStage,
@@ -150,7 +146,6 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             cutover,
             schema_sync,
             validate,
-            resumable,
         } = task;
         let validation_stage = if validate {
             config().config.resharding.post_data_validation
@@ -160,7 +155,6 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
 
         Self {
             state,
-            resumable,
             schema_sync,
             cutover,
             validation_stage,
@@ -176,21 +170,19 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
     /// and the operator ended the rollback window. The same signal during a
     /// forward phase returns [`Error::ReplicationAborted`].
     async fn run(mut self, ctx: &TaskContext<T>) -> Result<(), Error> {
-        let _active = match self.resumable {
+        let _active = match self.state.run_store() {
             Some(_) => None,
             None => {
                 let command = ReshardingCommand::Replicate {
                     auto_cutover: self.cutover == CutoverMode::Auto,
                 };
                 let root_id = ctx.root_id();
-                let resumable =
-                    ResumeState::load_or_create(&self.state, command, Stage::Replication, root_id)
-                        .await?;
-                let active = ActiveRun::start(&resumable, move || {
+                self.state
+                    .start_run(command, Stage::Replication, root_id)
+                    .await?;
+                Some(ActiveRun::start(&self.state, move || {
                     tasks_storage().cancel_task(root_id);
-                });
-                self.resumable = Some(resumable);
-                Some(active)
+                }))
             }
         };
         let state = self.state.clone();
@@ -203,14 +195,10 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             && matches!(result, Err(Error::ReplicationAborted));
         let completed = result.is_ok() || stopped_in_rollback_window;
 
-        let resumable = self.resumable();
         let cleanup = if completed {
             state.drop_slots().await
-        } else if resumable.keeps_slots() {
-            resumable.pause(&state);
-            Ok(())
         } else {
-            state.drop_slots_if_owned().await
+            state.cancel_run().await
         };
 
         if let Err(err) = cleanup {
@@ -231,10 +219,6 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         result
     }
 
-    fn resumable(&self) -> ResumeState {
-        self.resumable.clone().unwrap_or_default()
-    }
-
     async fn replicate_loop(
         &mut self,
         ctx: &TaskContext<T>,
@@ -245,7 +229,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             self.state.databases(),
             self.validation_stage
         );
-        self.resumable().set_stage(Stage::Replication).await?;
+        self.state.set_stage(Stage::Replication).await?;
         self.replicate_until_cutover(ctx, cutover, PostDataValidationStage::DuringReplication)
             .await?;
         self.sync_schema(
@@ -496,7 +480,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         warn!("cutting over");
         ctx.set_status(ReplicationStatus::PreparingReverseReplication.into());
 
-        self.resumable().finish(&self.state).await?;
+        self.state.finish_run().await?;
         // remove slots on the current source
         Box::pin(self.state.drop_slots()).await?;
         // create replication slots on the destination to allow rollback

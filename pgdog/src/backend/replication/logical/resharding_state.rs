@@ -1,14 +1,23 @@
 use futures::future::try_join_all;
 use futures::prelude::future::join_all;
 use parking_lot::Mutex;
-use pgdog_stats::{Databases, ReshardingDirection};
-use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
+use pgdog_stats::{Databases, ReshardingDirection, TaskId};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::publisher::{Permanent, ReplicationSlot, Table};
 use super::subscriber::replication_origin::ReplicationOrigin;
+use super::run::{
+    ConfigSnapshot, FORMAT_VERSION, ReshardingCommand, ReshardingId, ReshardingKey,
+    ReshardingRecord, ReshardingStore, Stage, TaskOwner, existing_slots,
+};
 use super::tables_sync::tables_sync;
 use super::*;
 use crate::backend::pool::Request;
@@ -32,7 +41,6 @@ pub(crate) struct ReshardingState {
     inner: Arc<Mutex<ReshardingStateInner>>,
     /// Slot name actually used: the supplied one or a generated one.
     slot_name: String,
-    cleanup_on_cancel: bool,
 }
 
 #[derive(Debug, bon::Builder)]
@@ -52,8 +60,10 @@ struct ReshardingStateInner {
     slot_name: String,
     #[builder(skip)]
     direction: ReshardingDirection,
+    #[builder(default = true)]
+    cleanup_on_cancel: bool,
     #[builder(skip)]
-    keep_slots: bool,
+    store: Option<Arc<ReshardingStore>>,
 }
 
 type Slots = HashMap<usize, ReplicationSlot<Permanent>>;
@@ -77,11 +87,15 @@ impl ReshardingStateInner {
     fn take_origins(&mut self) -> Origins {
         std::mem::take(&mut self.origins)
     }
+
+    fn keeps_slots(&self) -> bool {
+        !self.cleanup_on_cancel && self.store.is_some()
+    }
 }
 
 impl Drop for ReshardingStateInner {
     fn drop(&mut self) {
-        if self.keep_slots {
+        if self.keeps_slots() {
             return;
         }
         remove_slots(self.take_owned_slots());
@@ -105,6 +119,7 @@ impl ReshardingState {
         let inner = ReshardingStateInner::builder()
             .publication(publication)
             .slot_name(slot_name.clone())
+            .cleanup_on_cancel(cleanup_on_cancel)
             .build();
 
         Ok(Self {
@@ -113,7 +128,6 @@ impl ReshardingState {
             publication: publication.to_owned(),
             inner: Arc::new(Mutex::new(inner)),
             slot_name,
-            cleanup_on_cancel,
         })
     }
 }
@@ -359,20 +373,134 @@ impl ReshardingState {
         remove_origins(origins);
     }
 
-    pub(crate) fn is_resumable(&self) -> bool {
-        !self.cleanup_on_cancel
+    pub(crate) fn cleanup_on_cancel(&self) -> bool {
+        self.inner.lock().cleanup_on_cancel
     }
 
-    pub(crate) fn set_keep_slots(&self, keep: bool) {
-        self.inner.lock().keep_slots = keep;
-    }
+    pub(crate) async fn start_run(
+        &self,
+        command: ReshardingCommand,
+        stage: Stage,
+        task_id: TaskId,
+    ) -> Result<(), Error> {
+        let key = ReshardingKey::new(self.databases(), &self.publication);
+        let addr = self
+            .destination
+            .shards()
+            .first()
+            .ok_or_else(|| Error::NoPrimary)?
+            .primary(&Request::default())
+            .await?
+            .addr()
+            .clone();
 
-    pub(crate) fn forget_slots(&self) {
-        let forgotten = {
-            let mut inner = self.inner.lock();
-            (inner.take_slots(), inner.take_origins())
+        let store = ReshardingStore::open(&addr, key.clone()).await?;
+        if let Some(record) = store.load().await? {
+            return Err(Error::ReshardingExists {
+                key: key.to_string(),
+                stage: record.stage.to_string(),
+            });
+        }
+
+        let existing = existing_slots(&self.source, &self.publication, &self.slot_name)
+            .await?
+            .len();
+        let slot_existed = if existing == 0 {
+            false
+        } else if existing == self.source.shards().len() {
+            true
+        } else {
+            return Err(Error::ReshardingSlotsPartial(self.slot_name.clone()));
         };
-        drop(forgotten);
+
+        store
+            .insert(&ReshardingRecord {
+                id: ReshardingId::generate(),
+                key,
+                command,
+                slot_name: self.slot_name.clone(),
+                slot_existed,
+                stage,
+                config: ConfigSnapshot::capture(
+                    &self.source,
+                    &self.destination,
+                    &crate::config::config().config,
+                )?,
+                owner: TaskOwner::current(task_id),
+                format_version: FORMAT_VERSION,
+            })
+            .await?;
+
+        self.inner.lock().store = Some(Arc::new(store));
+        Ok(())
+    }
+
+    pub(crate) fn keeps_slots(&self) -> bool {
+        self.inner.lock().keeps_slots()
+    }
+
+    pub(crate) fn run_store(&self) -> Option<Weak<ReshardingStore>> {
+        self.inner.lock().store.as_ref().map(Arc::downgrade)
+    }
+
+    pub(crate) async fn set_stage(&self, stage: Stage) -> Result<(), Error> {
+        let store = self.inner.lock().store.clone();
+        match store {
+            Some(store) => store.set_stage(stage).await,
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) async fn cancel_run(&self) -> Result<(), Error> {
+        if self.keeps_slots() {
+            let paused = {
+                let mut inner = self.inner.lock();
+                drop((inner.take_slots(), inner.take_origins()));
+                inner.store.take()
+            };
+            if let Some(store) = paused {
+                unlock(&store).await;
+                info!(
+                    "resharding {} paused, replication slots and origins kept",
+                    store.key()
+                );
+            }
+            return Ok(());
+        }
+        let cleanup = match self.drop_slots_if_owned().await {
+            Ok(()) => self.finish_run().await,
+            Err(err) => Err(err),
+        };
+        if cleanup.is_err() {
+            self.release_run().await;
+        }
+        cleanup
+    }
+
+    pub(crate) async fn release_run(&self) {
+        let store = self.inner.lock().store.take();
+        if let Some(store) = store {
+            unlock(&store).await;
+        }
+    }
+
+    pub(crate) async fn finish_run(&self) -> Result<(), Error> {
+        let store = self.inner.lock().store.clone();
+        let Some(store) = store else {
+            return Ok(());
+        };
+        store.delete().await?;
+        self.release_run().await;
+        Ok(())
+    }
+}
+
+async fn unlock(store: &ReshardingStore) {
+    if let Err(err) = store.unlock().await {
+        warn!(
+            "resharding {}: failed to release the lock: {err}",
+            store.key()
+        );
     }
 }
 
@@ -423,8 +551,7 @@ impl Display for ReshardingState {
 
 #[cfg(test)]
 mod test {
-    use super::super::publisher::test::setup_publication;
-    use super::super::resumable::{ReshardingCommand, ResumeState, Stage};
+    use super::super::publisher::test::{setup_publication, setup_publication_tables};
     use super::*;
     use crate::backend::Server;
     use crate::config::config;
@@ -490,7 +617,6 @@ mod test {
             publication: "publication_test".into(),
             inner: Arc::new(Mutex::new(inner)),
             slot_name: slot_name.to_owned(),
-            cleanup_on_cancel: true,
         }
     }
 
@@ -730,29 +856,19 @@ mod test {
         let shards = source.shards().len() as i64;
         remove_resumable(&mut publication.server, name).await;
 
-        let mut state = state_for(&source, name);
-        state.cleanup_on_cancel = false;
-        let resumable = ResumeState::load_or_create(
-            &state,
-            ReshardingCommand::Replicate {
-                auto_cutover: false,
-            },
-            Stage::Replication,
-            TaskId::new(1),
-        )
-        .await
-        .unwrap();
-        assert!(resumable.keeps_slots());
+        let state = state_for(&source, name);
+        state.inner.lock().cleanup_on_cancel = false;
+        start(&state, 1).await.unwrap();
+        assert!(state.keeps_slots());
         assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
 
         state
             .prepare_replication(&CancellationToken::new())
             .await
             .unwrap();
-        resumable.pause(&state);
-        assert!(!resumable.keeps_slots());
-        assert!(resumable.run_store().is_none());
-        drop(resumable);
+        state.cancel_run().await.unwrap();
+        assert!(!state.keeps_slots());
+        assert!(state.run_store().is_none());
         drop(state);
         tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -772,25 +888,17 @@ mod test {
         auto_cutover: false,
     };
 
-    fn resumable_state(source: &Cluster, name: &str) -> ReshardingState {
+    fn keyed_state(source: &Cluster, name: &str, cleanup_on_cancel: bool) -> ReshardingState {
         let mut state = state_for(source, name);
         state.publication = format!("{name}_pub");
-        state.cleanup_on_cancel = false;
+        state.inner.lock().cleanup_on_cancel = cleanup_on_cancel;
         state
     }
 
-    async fn load_when_unlocked(state: &ReshardingState) -> Result<ResumeState, Error> {
-        for _ in 0..50 {
-            match ResumeState::load_or_create(state, REPLICATE, Stage::Replication, TaskId::new(1))
-                .await
-            {
-                Err(Error::ReshardingLocked { .. }) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await
-                }
-                other => return other,
-            }
-        }
-        panic!("the resharding lock was not released");
+    async fn start(state: &ReshardingState, task_id: u64) -> Result<(), Error> {
+        state
+            .start_run(REPLICATE, Stage::Replication, TaskId::new(task_id))
+            .await
     }
 
     #[tokio::test]
@@ -801,23 +909,18 @@ mod test {
         let source = Cluster::new_test(&config());
         source.launch();
         remove_resumable(&mut publication.server, name).await;
-        let state = resumable_state(&source, name);
+        let state = keyed_state(&source, name, false);
 
-        let running =
-            ResumeState::load_or_create(&state, REPLICATE, Stage::Replication, TaskId::new(1))
-                .await
-                .unwrap();
+        start(&state, 1).await.unwrap();
 
-        let parallel =
-            ResumeState::load_or_create(&state, REPLICATE, Stage::Replication, TaskId::new(2))
-                .await;
+        let parallel = start(&keyed_state(&source, name, false), 2).await;
         assert!(
             matches!(parallel, Err(Error::ReshardingLocked { .. })),
             "{parallel:?}"
         );
 
-        running.pause(&state);
-        let unfinished = load_when_unlocked(&state).await;
+        state.cancel_run().await.unwrap();
+        let unfinished = start(&keyed_state(&source, name, false), 3).await;
         assert!(
             matches!(unfinished, Err(Error::ReshardingExists { .. })),
             "{unfinished:?}"
@@ -837,22 +940,58 @@ mod test {
         let source = Cluster::new_test(&config());
         source.launch();
         remove_resumable(&mut publication.server, name).await;
-        let state = resumable_state(&source, name);
+        let state = keyed_state(&source, name, false);
 
-        let first =
-            ResumeState::load_or_create(&state, REPLICATE, Stage::Replication, TaskId::new(1))
-                .await
-                .unwrap();
-        assert!(state.inner.lock().keep_slots);
+        start(&state, 1).await.unwrap();
+        assert!(state.keeps_slots());
 
-        first.finish(&state).await.unwrap();
-        assert!(!first.keeps_slots());
-        assert!(!state.inner.lock().keep_slots);
+        state.finish_run().await.unwrap();
+        assert!(!state.keeps_slots());
+        assert!(state.run_store().is_none());
         assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
 
-        let second = load_when_unlocked(&state).await.unwrap();
-        assert!(second.keeps_slots());
-        second.finish(&state).await.unwrap();
+        start(&state, 2).await.unwrap();
+        assert!(state.keeps_slots());
+        state.finish_run().await.unwrap();
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_plain_run_drops_owned_slots_and_record() {
+        crate::logger();
+        let name = "state_plain_cancel";
+        let mut publication =
+            setup_publication_tables(&format!("{name}_pub"), &["state_plain_cancel_one"]).await;
+        let source = Cluster::new_test(&config());
+        source.launch();
+        remove_resumable(&mut publication.server, name).await;
+        let state = keyed_state(&source, name, true);
+
+        start(&state, 1).await.unwrap();
+        assert!(!state.keeps_slots());
+        assert!(state.run_store().is_some());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        assert!(matches!(
+            start(&keyed_state(&source, name, true), 2).await,
+            Err(Error::ReshardingLocked { .. })
+        ));
+
+        state
+            .prepare_replication(&CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(slot_count(&mut publication.server, name).await > 0);
+
+        state.cancel_run().await.unwrap();
+        assert_eq!(slot_count(&mut publication.server, name).await, 0);
+        assert_eq!(origin_count(&mut publication.server, name).await, 0);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+
+        start(&state, 3).await.unwrap();
+        state.finish_run().await.unwrap();
 
         remove_resumable(&mut publication.server, name).await;
         source.shutdown();

@@ -278,20 +278,20 @@ pub(crate) enum Error {
     ReshardingLocked { key: String, owner: String },
 
     #[error("unsupported resharding state: {0}")]
-    ResumableFormat(String),
+    ReshardingFormat(String),
 
     #[error("resharding {key} is unfinished at stage {stage}; abort it with WITH (abort)")]
     ReshardingExists { key: String, stage: String },
 
     #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
-    ResumableSlotsPartial(String),
+    ReshardingSlotsPartial(String),
 
     #[allow(dead_code)]
     #[error(
         "sharding config changed since the resharding started: {}",
         .0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
-    ConfigChanged(Vec<super::resumable::snapshot::ConfigMismatch>),
+    ConfigChanged(Vec<super::run::snapshot::ConfigMismatch>),
 }
 
 impl From<ErrorResponse> for Error {

@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::warn;
 
-use super::ResumeState;
+use super::super::resharding_state::ReshardingState;
 use crate::tasks;
 use crate::util::safe_timeout;
 
@@ -15,8 +15,8 @@ pub(crate) struct ActiveRun {
 }
 
 impl ActiveRun {
-    pub(crate) fn start(resumable: &ResumeState, on_lost: impl FnOnce() + Send + 'static) -> Self {
-        let watchdog = resumable.run_store().map(|store| {
+    pub(crate) fn start(state: &ReshardingState, on_lost: impl FnOnce() + Send + 'static) -> Self {
+        let watchdog = state.run_store().map(|store| {
             AbortOnDropHandle::new(tasks::spawn("resharding lock watchdog", async move {
                 loop {
                     tokio::time::sleep(LOCK_CHECK_INTERVAL).await;
@@ -27,7 +27,10 @@ impl ActiveRun {
                         safe_timeout(LOCK_CHECK_TIMEOUT, store.ping()).await,
                         Ok(Ok(()))
                     ) {
-                        warn!("resharding {}: state connection lost, pausing", store.key());
+                        warn!(
+                            "resharding {}: state connection lost, stopping",
+                            store.key()
+                        );
                         on_lost();
                         return;
                     }

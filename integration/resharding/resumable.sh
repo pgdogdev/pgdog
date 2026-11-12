@@ -35,7 +35,7 @@ COPY_RESULT=$(psql admin -tAc 'COPY_DATA source destination pgdog WITH (cleanup_
 COPY_TASK_ID=${COPY_RESULT%%|*}
 SLOT=${COPY_RESULT#*|}
 test -n "${SLOT}"
-test "$(admin_task_type "${COPY_TASK_ID}")" = 'reshard source -> destination (resumable)'
+test "$(admin_task_type "${COPY_TASK_ID}")" = 'reshard source -> destination'
 wait_admin_task_inner_status "${COPY_TASK_ID}" 'replicating'
 test "$(resharding_record "${SLOT}")" = 'reshard|pgdog|replication|false|2'
 test "$(lock_holders)" = 1
@@ -48,16 +48,21 @@ test "$(slot_count 15432 "${SLOT}_0")" = 1
 test "$(slot_count 15433 "${SLOT}_1")" = 1
 test "$(origin_count 15434 "${SLOT}")" = 2
 test "$(origin_count 15435 "${SLOT}")" = 2
-# The lock is released when Postgres sees the closed connection, a moment later.
+# The lock is released during the cleanup.
 wait_for_value 0 lock_holders
 
-# A plain run writes no record and drops its slots when stopped.
+# A plain run also records itself and holds the lock while it runs.
 PLAIN_TASK_ID=$(psql admin -tAc 'REPLICATE source destination pgdog plain_slot WITH (cleanup_on_cancel true)')
 # The slots are created after the reply, and dropped in the background.
 wait_for_value 1 slot_count 15432 plain_slot
 wait_for_value 1 slot_count 15433 plain_slot
+test "$(resharding_record plain_slot)" = 'replicate|pgdog|replication|false|2'
+test "$(lock_holders)" = 1
+
+# STOP_TASK drops its slots and origins, deletes the record and releases the lock.
 psql admin -c "STOP_TASK ${PLAIN_TASK_ID}"
 wait_admin_task_status "${PLAIN_TASK_ID}" 'cancelled'
 test "$(resharding_rows plain_slot)" = 0
+wait_for_value 0 lock_holders
 wait_for_value 0 slot_count 15432 plain_slot
 wait_for_value 0 slot_count 15433 plain_slot

@@ -16,9 +16,7 @@ use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
 use crate::api::{ReshardingError, Task, run_task, tasks_storage};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::resumable::{
-    ActiveRun, ReshardingCommand, ResumeState, Stage,
-};
+use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand, Stage};
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -64,7 +62,7 @@ impl Task for ReshardTask {
             replicate_only: self.replicate_only,
             sync_only: self.sync_only,
             auto_cutover: self.auto_cutover,
-            cleanup_on_cancel: !self.state.is_resumable(),
+            cleanup_on_cancel: self.state.cleanup_on_cancel(),
         }
     }
 
@@ -75,8 +73,8 @@ impl Task for ReshardTask {
         let first_stage = self.first_stage();
         let mut state = self.state;
         let root_id = ctx.root_id();
-        let resumable = ResumeState::load_or_create(&state, command, first_stage, root_id).await?;
-        let _active = ActiveRun::start(&resumable, move || {
+        state.start_run(command, first_stage, root_id).await?;
+        let _active = ActiveRun::start(&state, move || {
             tasks_storage().cancel_task(root_id);
         });
         let schema_sync = SchemaSyncTask::builder()
@@ -88,9 +86,9 @@ impl Task for ReshardTask {
         let mut copied = self.replicate_only;
         let mut result: Result<(), ReshardingError> = Box::pin(async {
             // Pre-data schema sync, unless skipped. It runs inside the cleanup
-            // guard below, so a resumable run also pauses when it fails.
+            // guard below, so a failure here also reaches the cleanup.
             if !self.skip_schema_sync {
-                resumable.set_stage(Stage::PreData).await?;
+                state.set_stage(Stage::PreData).await?;
                 ctx.set_status(ReshardStatus::SchemaSync);
                 ctx.run(
                     schema_sync
@@ -109,7 +107,7 @@ impl Task for ReshardTask {
 
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
-                resumable.set_stage(Stage::Copy).await?;
+                state.set_stage(Stage::Copy).await?;
                 ctx.set_status(ReshardStatus::SyncingData);
                 ctx.run(
                     CopyDataTask::builder()
@@ -126,7 +124,7 @@ impl Task for ReshardTask {
             // It reuses dump schema from the earlier schema_sync
             // calls if they were executed.
             if !self.skip_schema_sync {
-                resumable.set_stage(Stage::PostData).await?;
+                state.set_stage(Stage::PostData).await?;
                 ctx.set_status(ReshardStatus::FinalizingSchema);
                 ctx.run(
                     schema_sync
@@ -139,7 +137,7 @@ impl Task for ReshardTask {
             }
 
             if !self.replicate_only {
-                resumable.set_stage(Stage::TableSync).await?;
+                state.set_stage(Stage::TableSync).await?;
                 ctx.set_status(ReshardStatus::SynchronizingTables);
                 ctx.run(SynchronizeTablesTask {
                     state: state.clone(),
@@ -165,7 +163,6 @@ impl Task for ReshardTask {
                         .state(state.clone())
                         .cutover(cutover)
                         .schema_sync(schema_sync.clone())
-                        .resumable(resumable.clone())
                         .validate(!self.skip_schema_sync && !self.replicate_only)
                         .build()
                         .run_inline(&ctx),
@@ -178,29 +175,23 @@ impl Task for ReshardTask {
         .await;
 
         let stopped = result.is_err() || cancel.is_cancelled();
-        if resumable.keeps_slots() {
-            if stopped {
-                resumable.pause(&state);
-            } else {
-                state.detach_slots();
-                if let Err(err) = resumable.finish(&state).await {
-                    resumable.pause(&state);
-                    result = Err(err.into());
-                }
-            }
-        } else if stopped {
+        if stopped {
             // on error or cancellation make sure we drop the slots,
             // but only the slots we're actually created during this run.
             // If the slots were created outside or by calling pgdog
             // separate runs, we leave the slots.
-            if let Err(err) = state.drop_slots_if_owned().await {
-                warn!("failed to clean up replication slots after migration: {err}");
+            if let Err(err) = state.cancel_run().await {
+                warn!("failed to clean up replication slots after resharding: {err}");
             }
         } else {
             // on success we either already removed slots on replication,
             // or replication was not called and we should leave the
             // slots for the future calls
             state.detach_slots();
+            if let Err(err) = state.finish_run().await {
+                state.release_run().await;
+                result = Err(err.into());
+            }
         }
 
         if self.tables_only && copied {

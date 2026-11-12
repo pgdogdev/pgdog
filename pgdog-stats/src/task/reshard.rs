@@ -9,7 +9,7 @@ use crate::{Databases, ReplicationStatus};
 /// The full migration one reshard task runs, and which phases it was asked
 /// to skip.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("reshard {databases}{}", if *cleanup_on_cancel { "" } else { " (resumable)" })]
+#[display("reshard {databases}")]
 pub struct ReshardDefinition {
     pub databases: Databases,
     pub skip_schema_sync: bool,
