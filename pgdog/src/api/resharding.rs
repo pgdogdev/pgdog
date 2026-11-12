@@ -107,7 +107,6 @@ impl Task for ReshardTask {
 
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
-                state.set_stage(Stage::Copy).await?;
                 ctx.set_status(ReshardStatus::SyncingData);
                 ctx.run(
                     CopyDataTask::builder()
@@ -137,7 +136,6 @@ impl Task for ReshardTask {
             }
 
             if !self.replicate_only {
-                state.set_stage(Stage::TableSync).await?;
                 ctx.set_status(ReshardStatus::SynchronizingTables);
                 ctx.run(SynchronizeTablesTask {
                     state: state.clone(),

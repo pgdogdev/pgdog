@@ -7,8 +7,8 @@ use tokio::sync::Mutex;
 
 use super::super::{Error, subscriber::connect_address};
 use super::queries::{
-    CREATE_TABLE, DeleteRow, InsertRow, ListRows, LockHolder, Query, SelectRow, SetApplicationName,
-    StageUpdate, TableExists, TryLock, Unlock, UpdateStage,
+    CREATE_TABLE, DeleteRow, InsertRow, ListRows, LockHolder, OwnerUpdate, Query, SelectRow,
+    SetApplicationName, StageUpdate, TableExists, TryLock, Unlock, UpdateOwner, UpdateStage,
 };
 use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
@@ -77,6 +77,14 @@ impl ReshardingStore {
         .await
     }
 
+    pub(crate) async fn set_owner(&self, owner: &TaskOwner) -> Result<(), Error> {
+        self.execute(UpdateOwner::request(OwnerUpdate {
+            key: &self.key,
+            owner,
+        }))
+        .await
+    }
+
     pub(crate) async fn delete(&self) -> Result<(), Error> {
         self.execute(DeleteRow::request(&self.key)).await
     }
@@ -94,9 +102,24 @@ impl ReshardingStore {
         Ok(())
     }
 
+    pub(crate) async fn read(
+        server: &mut Server,
+        key: &ReshardingKey,
+    ) -> Result<Option<ReshardingRecord>, Error> {
+        let exists = server.fetch_all::<i32>(TableExists::request(())).await?;
+        if exists.first() != Some(&1) {
+            return Ok(None);
+        }
+
+        let rows = server.fetch_all::<DataRow>(SelectRow::request(key)).await?;
+        rows.first()
+            .map(|row| parse_record(row, key.clone()))
+            .transpose()
+    }
+
+    #[allow(dead_code)]
     pub(crate) async fn list(
         server: &mut Server,
-        destination_db: &str,
     ) -> Result<Vec<Result<ReshardingRecord, UnreadableRecord>>, Error> {
         let exists = server.fetch_all::<i32>(TableExists::request(())).await?;
         if exists.first() != Some(&1) {
@@ -104,7 +127,7 @@ impl ReshardingStore {
         }
 
         server
-            .fetch_all::<DataRow>(ListRows::request(destination_db))
+            .fetch_all::<DataRow>(ListRows::request(()))
             .await?
             .iter()
             .map(|row| {
@@ -142,6 +165,7 @@ async fn try_lock(server: &mut Server, key: &ReshardingKey) -> Result<bool, Erro
     Ok(locked.first() == Some(&1))
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct UnreadableRecord {
     pub(crate) key: ReshardingKey,
@@ -229,6 +253,19 @@ mod test {
         }
     }
 
+    async fn listed_for(key: &ReshardingKey) -> Vec<Result<ReshardingRecord, UnreadableRecord>> {
+        let mut server = test_server().await;
+        ReshardingStore::list(&mut server)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| match row {
+                Ok(record) => record.key.databases == key.databases,
+                Err(unreadable) => unreadable.key.databases == key.databases,
+            })
+            .collect()
+    }
+
     fn row(key: ReshardingKey) -> ReshardingRecord {
         let config: ConfigSnapshot = serde_json::from_str(
             r#"{"source":{"shards":1,"sharded_tables":[],"sharded_mappings":[],"omnisharded_tables":[],"sharded_schemas":[]},
@@ -287,10 +324,8 @@ mod test {
         first.insert(&row(first_key.clone())).await.unwrap();
         second.insert(&row(second_key.clone())).await.unwrap();
 
-        let mut server = test_server().await;
-        let listed = ReshardingStore::list(&mut server, &first_key.databases.destination)
+        let listed = listed_for(&first_key)
             .await
-            .unwrap()
             .into_iter()
             .map(|row| row.unwrap().key)
             .collect::<Vec<_>>();
@@ -324,10 +359,7 @@ mod test {
 
         assert!(matches!(new.load().await, Err(Error::ReshardingFormat(_))));
 
-        let mut server = test_server().await;
-        let listed = ReshardingStore::list(&mut server, &old_key.databases.destination)
-            .await
-            .unwrap();
+        let listed = listed_for(&old_key).await;
         assert_eq!(listed.len(), 2);
         assert!(
             matches!(&listed[0], Err(UnreadableRecord { key, error: Error::ReshardingFormat(_) }) if *key == new_key)
@@ -390,9 +422,7 @@ mod test {
         );
 
         let mut server = test_server().await;
-        let listed = ReshardingStore::list(&mut server, &key.databases.destination)
-            .await
-            .unwrap();
+        let listed = listed_for(&key).await;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].as_ref().unwrap().key, key);
         assert_eq!(

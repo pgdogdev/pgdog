@@ -144,6 +144,9 @@ pub(crate) enum Error {
     #[error("replication slot \"{0}\" doesn't exist, but it should")]
     MissingReplicationSlot(String),
 
+    #[error("replication origin {0} doesn't exist, but it should")]
+    MissingReplicationOrigin(String),
+
     #[error("parse int")]
     ParseInt(#[from] ParseIntError),
 
@@ -299,7 +302,6 @@ pub(crate) enum Error {
     #[error("resharding {0} did not stop in time")]
     ReshardingBusy(String),
 
-    #[allow(dead_code)]
     #[error(
         "sharding config changed since the resharding started: {}",
         .0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")

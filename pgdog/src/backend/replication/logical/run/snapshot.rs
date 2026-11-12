@@ -106,7 +106,6 @@ impl ConfigSnapshot {
         })
     }
 
-    #[allow(dead_code)]
     pub(crate) fn validate_equal(
         &self,
         current: &ConfigSnapshot,

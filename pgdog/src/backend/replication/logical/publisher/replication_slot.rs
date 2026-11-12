@@ -429,6 +429,10 @@ impl ReplicationSlotInner {
         self.existing.store(true, Ordering::Release);
     }
 
+    pub(crate) fn mark_owned(&self) {
+        self.existing.store(false, Ordering::Release);
+    }
+
     fn status_key(&self) -> String {
         format!("{}@{}", self.name, self.address)
     }

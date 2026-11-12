@@ -1,4 +1,4 @@
-use super::{ReshardingKey, ReshardingRecord, Stage};
+use super::{ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
 use crate::net::bind::Parameter;
 
@@ -112,13 +112,12 @@ impl Query for ListRows {
                slot_existed::text, stage, config::text, instance_id, run_id::text,
                task_id::text, format_version::text, id::text
         FROM pgdog.resharding
-        WHERE destination_db = $1
-        ORDER BY source_db, publication";
+        ORDER BY source_db, destination_db, publication";
 
-    type Params<'a> = &'a str;
+    type Params<'a> = ();
 
-    fn params(destination_db: &str) -> Vec<Parameter> {
-        vec![text(destination_db)]
+    fn params(_: ()) -> Vec<Parameter> {
+        vec![]
     }
 }
 
@@ -177,6 +176,34 @@ impl Query for UpdateStage {
             destination,
             publication,
             text(&update.stage.to_string()),
+        ]
+    }
+}
+
+pub(crate) struct UpdateOwner;
+
+pub(crate) struct OwnerUpdate<'a> {
+    pub(crate) key: &'a ReshardingKey,
+    pub(crate) owner: &'a TaskOwner,
+}
+
+impl Query for UpdateOwner {
+    const SQL: &'static str = "
+        UPDATE pgdog.resharding
+        SET instance_id = $4, run_id = $5::uuid, task_id = $6::bigint
+        WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
+
+    type Params<'a> = OwnerUpdate<'a>;
+
+    fn params(update: OwnerUpdate<'_>) -> Vec<Parameter> {
+        let [source, destination, publication] = key_params(update.key);
+        vec![
+            source,
+            destination,
+            publication,
+            text(update.owner.instance_id.as_str()),
+            text(&update.owner.run_id.to_string()),
+            text(&update.owner.task_id.to_string()),
         ]
     }
 }

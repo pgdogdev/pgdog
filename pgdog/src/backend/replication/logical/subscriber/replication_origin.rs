@@ -97,6 +97,20 @@ impl ReplicationOrigin {
         self.create_origin().await
     }
 
+    pub(crate) async fn verify_exists(&self) -> Result<(), Error> {
+        let mut server = connect_address(&self.address).await?;
+        let name = &self.name;
+        let found: Vec<String> = server
+            .fetch_all(format!(
+                "SELECT 'true' WHERE pg_replication_origin_oid({name}) IS NOT NULL"
+            ))
+            .await?;
+        if found.is_empty() {
+            return Err(Error::MissingReplicationOrigin(name.clone()));
+        }
+        Ok(())
+    }
+
     /// Drop the origin. Waits for a short time while a closing session
     /// still holds it. Warns when the origin was already gone.
     pub(crate) async fn drop_origin(&self) -> Result<(), Error> {

@@ -7,6 +7,7 @@ use crate::api::task::TaskContext;
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::run::Stage;
 use crate::util::safe_interval;
 use pgdog_stats::{SynchronizeTablesDefinition, SynchronizeTablesStatus, TaskDefinition};
 use tokio::select;
@@ -34,6 +35,7 @@ impl Task for SynchronizeTablesTask {
         ctx.set_status(SynchronizeTablesStatus::InitializingReplicationStreams);
         let mut state = self.state;
         state.reload()?;
+        state.set_stage(Stage::TableSync).await?;
         let mut tables = state.tables();
 
         // collect the max lsn for the tables grouping by shard
