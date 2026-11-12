@@ -121,6 +121,31 @@ impl Query for ListRows {
     }
 }
 
+pub(crate) struct CountSlots;
+
+impl Query for CountSlots {
+    const SQL: &'static str = "SELECT count(*) FROM pg_replication_slots WHERE slot_name = $1";
+
+    type Params<'a> = &'a str;
+
+    fn params(slot_name: &str) -> Vec<Parameter> {
+        vec![text(slot_name)]
+    }
+}
+
+pub(crate) struct CountOrigins;
+
+impl Query for CountOrigins {
+    const SQL: &'static str =
+        "SELECT count(*) FROM pg_replication_origin WHERE roname = ANY(string_to_array($1, ','))";
+
+    type Params<'a> = &'a [String];
+
+    fn params(names: &[String]) -> Vec<Parameter> {
+        vec![text(&names.join(","))]
+    }
+}
+
 pub(crate) struct InsertRow;
 
 impl Query for InsertRow {

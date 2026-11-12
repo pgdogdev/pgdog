@@ -598,15 +598,7 @@ impl ReshardingState {
     }
 
     async fn state_address(&self) -> Result<Address, Error> {
-        Ok(self
-            .destination
-            .shards()
-            .first()
-            .ok_or_else(|| Error::NoPrimary)?
-            .primary(&Request::default())
-            .await?
-            .addr()
-            .clone())
+        run::state_address(&self.destination).await
     }
 
     pub(crate) async fn check_record(

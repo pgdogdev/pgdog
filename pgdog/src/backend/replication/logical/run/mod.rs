@@ -8,9 +8,13 @@ use uuid::Uuid;
 
 use super::Error;
 use super::publisher::{Permanent, ReplicationSlot};
-use crate::backend::{Cluster, pool::Request};
+use crate::backend::{
+    Cluster,
+    pool::{Address, Request},
+};
 
 mod queries;
+pub(crate) mod scan;
 pub(crate) mod snapshot;
 pub(crate) mod store;
 pub(crate) mod watchdog;
@@ -18,6 +22,17 @@ pub(crate) mod watchdog;
 pub(crate) use snapshot::ConfigSnapshot;
 pub(crate) use store::ReshardingStore;
 pub(crate) use watchdog::ActiveRun;
+
+pub(crate) async fn state_address(destination: &Cluster) -> Result<Address, Error> {
+    Ok(destination
+        .shards()
+        .first()
+        .ok_or_else(|| Error::NoPrimary)?
+        .primary(&Request::default())
+        .await?
+        .addr()
+        .clone())
+}
 
 pub(crate) const RESHARDING_TABLE: &str = "resharding";
 

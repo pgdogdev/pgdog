@@ -148,6 +148,16 @@ initialize_resharding() {
     sleep 10
 }
 
+restart_pgdog() {
+    kill -TERM "${PGDOG_PID}"
+    wait "${PGDOG_PID}" || true
+    "${PGDOG_BIN}" &
+    PGDOG_PID="$!"
+    until psql admin -c 'SHOW TASKS' > /dev/null 2>&1; do
+        sleep 1
+    done
+}
+
 replace_copy_with_replicate() {
     local table="$1"
     local column="$2"

@@ -36,6 +36,7 @@ pub(crate) enum ParseResult {
     ShowClientMemory(ShowClientMemory),
     ShowTableCopies(ShowTableCopies),
     ShowReplicationSlots(ShowReplicationSlots),
+    ShowResharding(ShowResharding),
     ShowSchemaSync(ShowSchemaSync),
     Set(Set),
     Ban(Ban),
@@ -87,6 +88,7 @@ impl ParseResult {
             ShowClientMemory(show_client_memory) => show_client_memory.execute().await,
             ShowTableCopies(show_table_copies) => show_table_copies.execute().await,
             ShowReplicationSlots(cmd) => cmd.execute().await,
+            ShowResharding(cmd) => cmd.execute().await,
             ShowSchemaSync(cmd) => cmd.execute().await,
             Set(set) => set.execute().await,
             Ban(ban) => ban.execute().await,
@@ -138,6 +140,7 @@ impl ParseResult {
             ShowClientMemory(show_client_memory) => show_client_memory.name(),
             ShowTableCopies(show_table_copies) => show_table_copies.name(),
             ShowReplicationSlots(cmd) => cmd.name(),
+            ShowResharding(cmd) => cmd.name(),
             ShowSchemaSync(cmd) => cmd.name(),
             Set(set) => set.name(),
             Ban(ban) => ban.name(),
@@ -194,6 +197,7 @@ impl Parser {
                 "replication_slots" => {
                     ParseResult::ShowReplicationSlots(ShowReplicationSlots::parse(sql)?)
                 }
+                "resharding" => ParseResult::ShowResharding(ShowResharding::parse(sql)?),
                 "schema_sync" => ParseResult::ShowSchemaSync(ShowSchemaSync::parse(sql)?),
                 "table_copies" => ParseResult::ShowTableCopies(ShowTableCopies::parse(sql)?),
                 "tasks" => ParseResult::ShowTasks(ShowTasks::parse(sql)?),
@@ -328,6 +332,7 @@ mod tests {
             "SHOW REPLICATION_SLOTS",
             ParseResult::ShowReplicationSlots(_)
         );
+        assert_parses!("SHOW RESHARDING", ParseResult::ShowResharding(_));
         assert_parses!("SHOW SCHEMA_SYNC", ParseResult::ShowSchemaSync(_));
         assert_parses!("SHOW TABLE_COPIES", ParseResult::ShowTableCopies(_));
         assert_parses!("SHOW TASKS", ParseResult::ShowTasks(_));

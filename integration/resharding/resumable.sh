@@ -28,6 +28,15 @@ lock_holders() {
     pg_sql 15434 "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE l.locktype = 'advisory' AND l.granted AND a.application_name LIKE 'pgdog_resharding:%'"
 }
 
+resharding_row() {
+    psql admin -tAc 'SHOW RESHARDING' | grep '^source|destination|' || true
+}
+
+# SHOW RESHARDING without owner and last_task, which change between runs.
+resharding_status() {
+    resharding_row | cut -d'|' -f1-6,9-13
+}
+
 initialize_resharding
 
 # A resumable run records itself and holds the lock while it runs.
@@ -39,6 +48,7 @@ test "$(admin_task_type "${COPY_TASK_ID}")" = 'reshard source -> destination'
 wait_admin_task_inner_status "${COPY_TASK_ID}" 'replicating'
 test "$(resharding_record "${SLOT}")" = 'reshard|pgdog|replication|false|2'
 test "$(lock_holders)" = 1
+test "$(resharding_row | cut -d'|' -f6,7)" = "running|$(psql admin -tAc 'SHOW INSTANCE_ID')"
 
 # STOP_TASK pauses it: the record, slots and origins stay, the lock is released.
 psql admin -c "STOP_TASK ${COPY_TASK_ID}"
@@ -50,6 +60,14 @@ test "$(origin_count 15434 "${SLOT}")" = 2
 test "$(origin_count 15435 "${SLOT}")" = 2
 # The lock is released during the cleanup.
 wait_for_value 0 lock_holders
+PAUSED="source|destination|reshard|pgdog|replication|paused|${SLOT}|f|2/2|4/4|ok"
+test "$(resharding_status)" = "${PAUSED}"
+
+# The pause survives a restart: SHOW RESHARDING reads the database, not memory.
+kill -TERM "${PGBENCH_PID}"
+wait "${PGBENCH_PID}" || true
+restart_pgdog
+test "$(resharding_status)" = "${PAUSED}"
 
 # Abort checks the stored command at once.
 if MISMATCH=$(psql admin -tAc 'REPLICATE source destination pgdog WITH (abort)' 2>&1); then
@@ -66,6 +84,7 @@ test "$(slot_count 15432 "${SLOT}_0")" = 0
 test "$(slot_count 15433 "${SLOT}_1")" = 0
 test "$(origin_count 15434 "${SLOT}")" = 0
 test "$(origin_count 15435 "${SLOT}")" = 0
+test -z "$(resharding_row)"
 
 # A slot that existed before the run stays after abort.
 pg_sql 15432 "SELECT pg_create_logical_replication_slot('resumable_keep_0', 'pgoutput')"

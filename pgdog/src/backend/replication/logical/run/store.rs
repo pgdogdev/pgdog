@@ -117,7 +117,6 @@ impl ReshardingStore {
             .transpose()
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn list(
         server: &mut Server,
     ) -> Result<Vec<Result<ReshardingRecord, UnreadableRecord>>, Error> {
@@ -165,7 +164,6 @@ async fn try_lock(server: &mut Server, key: &ReshardingKey) -> Result<bool, Erro
     Ok(locked.first() == Some(&1))
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct UnreadableRecord {
     pub(crate) key: ReshardingKey,
