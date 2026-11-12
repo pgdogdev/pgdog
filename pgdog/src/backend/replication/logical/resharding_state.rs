@@ -428,6 +428,7 @@ mod test {
     use super::*;
     use crate::backend::Server;
     use crate::config::config;
+    use pgdog_stats::TaskId;
 
     async fn slot_count(server: &mut Server, name: &str) -> i64 {
         let rows: Vec<i64> = server
@@ -737,6 +738,7 @@ mod test {
                 auto_cutover: false,
             },
             Stage::Replication,
+            TaskId::new(1),
         )
         .await
         .unwrap();
@@ -779,7 +781,9 @@ mod test {
 
     async fn load_when_unlocked(state: &ReshardingState) -> Result<ResumeState, Error> {
         for _ in 0..50 {
-            match ResumeState::load_or_create(state, REPLICATE, Stage::Replication).await {
+            match ResumeState::load_or_create(state, REPLICATE, Stage::Replication, TaskId::new(1))
+                .await
+            {
                 Err(Error::ReshardingLocked { .. }) => {
                     tokio::time::sleep(Duration::from_millis(100)).await
                 }
@@ -799,11 +803,14 @@ mod test {
         remove_resumable(&mut publication.server, name).await;
         let state = resumable_state(&source, name);
 
-        let running = ResumeState::load_or_create(&state, REPLICATE, Stage::Replication)
-            .await
-            .unwrap();
+        let running =
+            ResumeState::load_or_create(&state, REPLICATE, Stage::Replication, TaskId::new(1))
+                .await
+                .unwrap();
 
-        let parallel = ResumeState::load_or_create(&state, REPLICATE, Stage::Replication).await;
+        let parallel =
+            ResumeState::load_or_create(&state, REPLICATE, Stage::Replication, TaskId::new(2))
+                .await;
         assert!(
             matches!(parallel, Err(Error::ReshardingLocked { .. })),
             "{parallel:?}"
@@ -832,9 +839,10 @@ mod test {
         remove_resumable(&mut publication.server, name).await;
         let state = resumable_state(&source, name);
 
-        let first = ResumeState::load_or_create(&state, REPLICATE, Stage::Replication)
-            .await
-            .unwrap();
+        let first =
+            ResumeState::load_or_create(&state, REPLICATE, Stage::Replication, TaskId::new(1))
+                .await
+                .unwrap();
         assert!(state.inner.lock().keep_slots);
 
         first.finish(&state).await.unwrap();

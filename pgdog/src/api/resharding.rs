@@ -74,8 +74,8 @@ impl Task for ReshardTask {
         let command = self.command();
         let first_stage = self.first_stage();
         let mut state = self.state;
-        let resumable = ResumeState::load_or_create(&state, command, first_stage).await?;
         let root_id = ctx.root_id();
+        let resumable = ResumeState::load_or_create(&state, command, first_stage, root_id).await?;
         let _active = ActiveRun::start(&resumable, move || {
             tasks_storage().cancel_task(root_id);
         });

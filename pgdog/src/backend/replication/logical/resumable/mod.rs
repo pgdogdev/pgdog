@@ -1,6 +1,6 @@
 use derive_more::{Display, FromStr, FromStrError};
 
-use pgdog_stats::Databases;
+use pgdog_stats::{Databases, InstanceId, RunId, TaskId, run_id};
 use serde::{Deserialize, Serialize};
 
 use super::Error;
@@ -72,7 +72,23 @@ pub(crate) enum Stage {
 fn format_error(err: FromStrError) -> Error {
     Error::ResumableFormat(err.to_string())
 }
+#[derive(Clone, Debug, PartialEq, Eq, Display)]
+#[display("task {task_id} on {instance_id} (run {run_id})")]
+pub(crate) struct TaskOwner {
+    pub(crate) instance_id: InstanceId,
+    pub(crate) run_id: RunId,
+    pub(crate) task_id: TaskId,
+}
 
+impl TaskOwner {
+    pub(crate) fn current(task_id: TaskId) -> Self {
+        Self {
+            instance_id: InstanceId::from(crate::util::instance_id().to_owned()),
+            run_id: run_id(),
+            task_id,
+        }
+    }
+}
 
 /// A single row record for the one resharding process.
 #[derive(Clone, Debug, PartialEq)]
@@ -83,5 +99,6 @@ pub(crate) struct ReshardingRecord {
     pub(crate) slot_existed: bool,
     pub(crate) stage: Stage,
     pub(crate) config: ConfigSnapshot,
+    pub(crate) owner: TaskOwner,
     pub(crate) format_version: i32,
 }

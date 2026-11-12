@@ -182,9 +182,10 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
                 let command = ReshardingCommand::Replicate {
                     auto_cutover: self.cutover == CutoverMode::Auto,
                 };
-                let resumable =
-                    ResumeState::load_or_create(&self.state, command, Stage::Replication).await?;
                 let root_id = ctx.root_id();
+                let resumable =
+                    ResumeState::load_or_create(&self.state, command, Stage::Replication, root_id)
+                        .await?;
                 let active = ActiveRun::start(&resumable, move || {
                     tasks_storage().cancel_task(root_id);
                 });

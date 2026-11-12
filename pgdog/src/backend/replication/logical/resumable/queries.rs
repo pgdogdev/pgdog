@@ -92,7 +92,8 @@ pub(crate) struct SelectRow;
 impl Query for SelectRow {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
-               slot_existed::text, stage, config::text, format_version::text
+               slot_existed::text, stage, config::text, instance_id, run_id::text,
+               task_id::text, format_version::text
         FROM pgdog.resharding
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
@@ -108,7 +109,8 @@ pub(crate) struct ListRows;
 impl Query for ListRows {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
-               slot_existed::text, stage, config::text, format_version::text
+               slot_existed::text, stage, config::text, instance_id, run_id::text,
+               task_id::text, format_version::text
         FROM pgdog.resharding
         WHERE destination_db = $1
         ORDER BY source_db, publication";
@@ -126,9 +128,10 @@ impl Query for InsertRow {
     const SQL: &'static str = "
         INSERT INTO pgdog.resharding (
             source_db, destination_db, publication, command, slot_name,
-            slot_existed, stage, config, format_version
+            slot_existed, stage, config, instance_id, run_id, task_id, format_version
         )
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6::boolean, $7, $8::jsonb, $9::integer)";
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6::boolean, $7, $8::jsonb, $9, $10::uuid,
+                $11::bigint, $12::integer)";
 
     type Params<'a> = &'a ReshardingRecord;
 
@@ -143,6 +146,9 @@ impl Query for InsertRow {
             text(&row.slot_existed.to_string()),
             text(&row.stage.to_string()),
             text(&serde_json::to_string(&row.config).expect("config snapshot is valid JSON")),
+            text(row.owner.instance_id.as_str()),
+            text(&row.owner.run_id.to_string()),
+            text(&row.owner.task_id.to_string()),
             text(&row.format_version.to_string()),
         ]
     }

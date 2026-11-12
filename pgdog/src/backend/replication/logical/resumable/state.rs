@@ -9,10 +9,11 @@ use super::super::publisher::{Permanent, ReplicationSlot};
 use super::super::resharding_state::ReshardingState;
 use super::{
     ConfigSnapshot, FORMAT_VERSION, ReshardingCommand, ReshardingKey, ReshardingRecord,
-    ReshardingStore, Stage,
+    ReshardingStore, Stage, TaskOwner,
 };
 use crate::backend::{Cluster, pool::Request};
 use crate::config::config;
+use pgdog_stats::TaskId;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResumeState {
@@ -24,6 +25,7 @@ impl ResumeState {
         state: &ReshardingState,
         command: ReshardingCommand,
         stage: Stage,
+        task_id: TaskId,
     ) -> Result<Self, Error> {
         if !state.is_resumable() {
             return Ok(Self::default());
@@ -72,6 +74,7 @@ impl ResumeState {
                     &state.destination,
                     &config().config,
                 )?,
+                owner: TaskOwner::current(task_id),
                 format_version: FORMAT_VERSION,
             })
             .await?;

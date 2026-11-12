@@ -6,10 +6,11 @@ use super::queries::{
     CREATE_TABLE, DeleteRow, InsertRow, ListRows, LockHolder, Query, SelectRow, SetApplicationName,
     StageUpdate, TableExists, TryLock, Unlock, UpdateStage,
 };
-use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage};
+use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::{Server, pool::Address};
 use crate::net::{DataRow, Format};
 use crate::util::instance_id;
+use pgdog_stats::InstanceId;
 
 const APPLICATION_NAME_PREFIX: &str = "pgdog_resharding:";
 
@@ -170,7 +171,7 @@ fn parse_key(row: &DataRow) -> Result<ReshardingKey, Error> {
 }
 
 fn parse_body(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Error> {
-    let format_version = text(row, 8)?
+    let format_version = text(row, 11)?
         .parse::<i32>()
         .map_err(|err| Error::ResumableFormat(format!("format_version: {err}")))?;
     if format_version > FORMAT_VERSION {
@@ -188,6 +189,15 @@ fn parse_body(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Err
         stage: text(row, 6)?.parse()?,
         config: serde_json::from_str(&text(row, 7)?)
             .map_err(|err| Error::ResumableFormat(format!("config: {err}")))?,
+        owner: TaskOwner {
+            instance_id: InstanceId::from(text(row, 8)?),
+            run_id: text(row, 9)?
+                .parse()
+                .map_err(|err| Error::ResumableFormat(format!("run_id: {err}")))?,
+            task_id: text(row, 10)?
+                .parse()
+                .map_err(|err| Error::ResumableFormat(format!("task_id: {err}")))?,
+        },
         format_version,
     })
 }
@@ -237,6 +247,7 @@ mod test {
             slot_existed: false,
             stage: Stage::Copy,
             config,
+            owner: TaskOwner::current(pgdog_stats::TaskId::new(7)),
             format_version: FORMAT_VERSION,
         }
     }

@@ -1,4 +1,5 @@
 pub mod client;
+pub mod identity;
 pub mod memory;
 pub mod pool;
 pub mod replication;
@@ -8,6 +9,7 @@ pub mod state;
 pub mod task;
 pub mod user;
 
+pub use identity::*;
 pub use memory::*;
 pub use pool::*;
 pub use replication::*;
