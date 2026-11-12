@@ -178,10 +178,7 @@ fn extract_limit_value(node: Node<'_>) -> Option<LimitValueInfo> {
 
 /// `$1 + $2` is ambiguous to Postgres when both sides are untyped parameters,
 /// so spell out the type both operands would have had as LIMIT/OFFSET.
-pub(super) fn to_bigint<'a>(
-    node: Node<'_>,
-    mem: make::MemoryToken<'a>,
-) -> make::Unique<'a, Node<'a>> {
+fn to_bigint<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
     mem.make_type_cast(
         mem.make_unique(node).uncast(),
         mem.make_list(&[
@@ -211,6 +208,62 @@ pub(super) fn rewrite_select<'a>(
     );
     select.set_limit_count(combined.uncast());
     select.set_limit_offset(mem.none());
+}
+
+/// Remove LIMIT and OFFSET from the shard query, so shards return every row
+/// and PgDog applies both after the merge.
+pub(super) fn remove_select<'a>(
+    select: &mut nodes::SelectStmtMut<'a, '_>,
+    mem: make::MemoryToken<'a>,
+) {
+    let limit = without_limit(select.limit_count(), mem);
+    let offset = without_limit(select.limit_offset(), mem);
+    select.set_limit_count(limit);
+    select.set_limit_offset(offset);
+}
+
+/// `CASE WHEN (x)::bigint < 0 THEN (x)::bigint END` is NULL (no limit) unless
+/// the value is negative, where Postgres returns its own error. It also keeps
+/// `$n` in the query, so Postgres infers the same parameter types.
+fn without_limit<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
+    if matches!(node, Node::None) {
+        return mem.none();
+    }
+    let negative = mem.make_a_expr(
+        nodes::A_Expr_Kind::AEXPR_OP,
+        mem.make_list(&[mem.make_string(Some("<")).uncast()]),
+        to_bigint(node, mem),
+        mem.make_a_const(ConstValue::Integer(0)).uncast(),
+    );
+    let mut when = mem.make_node::<nodes::CaseWhen>();
+    when.as_mut().set_expr(negative.uncast());
+    when.as_mut().set_result(to_bigint(node, mem));
+    let mut case = mem.make_node::<nodes::CaseExpr>();
+    case.as_mut().set_args(mem.make_list(&[when.uncast()]));
+    case.uncast()
+}
+
+/// LIMIT forms PgDog can't apply itself after removing them with [`remove_select`].
+pub(super) fn unsupported_limit(select: &nodes::SelectStmt) -> Option<&'static str> {
+    // PgDog pages rows by position, without the sort keys to find ties.
+    if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
+        return Some("FETCH FIRST WITH TIES is unsupported");
+    }
+    if !is_decodable(select.limit_count()) || !is_decodable(select.limit_offset()) {
+        return Some("LIMIT and OFFSET must be integers or parameters");
+    }
+    None
+}
+
+/// Whether the route can read this LIMIT or OFFSET value, see [`LimitClause`].
+///
+/// [`LimitClause`]: crate::frontend::router::parser::LimitClause
+fn is_decodable(node: Node<'_>) -> bool {
+    match node {
+        Node::None | Node::ParamRef(_) => true,
+        Node::A_Const(constant) => matches!(constant.val(), None | Some(ConstValue::Integer(_))),
+        _ => false,
+    }
 }
 
 impl StatementRewrite<'_> {

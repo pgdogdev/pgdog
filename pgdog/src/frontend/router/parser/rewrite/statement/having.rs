@@ -172,10 +172,7 @@ pub(super) fn rewrite_select<'a>(
     select.set_having_clause(neutralized.uncast());
 
     // Shards return every group; PgDog applies LIMIT and OFFSET after the filter.
-    let limit = without_limit(select.limit_count(), mem);
-    let offset = without_limit(select.limit_offset(), mem);
-    select.set_limit_count(limit);
-    select.set_limit_offset(offset);
+    offset::remove_select(select, mem);
 
     Ok(HavingRewritePlan::new(
         filter_sql,
@@ -183,28 +180,6 @@ pub(super) fn rewrite_select<'a>(
         hidden_aliases,
         operands.params,
     ))
-}
-
-/// Remove LIMIT or OFFSET from the shard query, keeping it as
-/// `CASE WHEN (x)::bigint < 0 THEN (x)::bigint END`. That is NULL (no limit)
-/// unless the value is negative, where Postgres returns its own error. It also
-/// keeps `$n` in the query, so Postgres infers the same parameter types.
-fn without_limit<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
-    if matches!(node, Node::None) {
-        return mem.none();
-    }
-    let negative = mem.make_a_expr(
-        nodes::A_Expr_Kind::AEXPR_OP,
-        mem.make_list(&[mem.make_string(Some("<")).uncast()]),
-        offset::to_bigint(node, mem),
-        mem.make_a_const(ConstValue::Integer(0)).uncast(),
-    );
-    let mut when = mem.make_node::<nodes::CaseWhen>();
-    when.as_mut().set_expr(negative.uncast());
-    when.as_mut().set_result(offset::to_bigint(node, mem));
-    let mut case = mem.make_node::<nodes::CaseExpr>();
-    case.as_mut().set_args(mem.make_list(&[when.uncast()]));
-    case.uncast()
 }
 
 fn groups_by_output_alias(

@@ -221,7 +221,7 @@ impl QueryEngine {
                 return Ok(false);
             }
             Err(RouterError::Parser(ParserError::Rewrite(
-                err @ RewriteError::UnsupportedHaving(_),
+                err @ (RewriteError::UnsupportedHaving(_) | RewriteError::UnsupportedGroupBy(_)),
             ))) => {
                 if let Some(transaction) = context.transaction.as_mut() {
                     transaction.set_error();

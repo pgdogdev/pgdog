@@ -16,7 +16,7 @@ use crate::frontend::router::parser::{
 };
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
-use pg_raw_parse::{ConstValue, Node, StmtList, make, nodes};
+use pg_raw_parse::{Node, StmtList, make, nodes};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -255,26 +255,23 @@ fn unsupported_with_having(select: &nodes::SelectStmt, schema: &Schema) -> Optio
     if wraps_aggregate {
         return Some("expressions over aggregates in the SELECT list are unsupported");
     }
-    // PgDog pages the filtered groups by position, without the sort keys to find ties.
-    if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
-        return Some("FETCH FIRST WITH TIES is unsupported");
-    }
-    // PgDog applies LIMIT and OFFSET itself, so it has to read their values.
-    let decodable = |node: Node<'_>| match node {
-        Node::None | Node::ParamRef(_) => true,
-        Node::A_Const(constant) => {
-            matches!(constant.val(), None | Some(ConstValue::Integer(_)))
-        }
-        _ => false,
-    };
-    if !decodable(select.limit_count()) || !decodable(select.limit_offset()) {
-        return Some("LIMIT and OFFSET must be integers or parameters");
+    // PgDog applies LIMIT and OFFSET to the filtered groups itself.
+    if let Some(reason) = offset::unsupported_limit(select) {
+        return Some(reason);
     }
     // Only whole-row DISTINCT is applied after the filter.
     if !matches!(select.distinct_clause().first(), None | Some(Node::None)) {
         return Some("DISTINCT ON is unsupported");
     }
     None
+}
+
+/// Whether shards would page their own partial groups, which keeps the wrong ones.
+pub(crate) fn pages_merged_groups(select: &nodes::SelectStmt, aggregate: &Aggregate) -> bool {
+    !aggregate.targets().is_empty()
+        && !select.group_clause().is_empty()
+        && (!matches!(select.limit_count(), Node::None)
+            || !matches!(select.limit_offset(), Node::None))
 }
 
 fn build(
@@ -302,6 +299,13 @@ fn build(
         }
         Some(aggregate)
     };
+    // Shards return every group; PgDog applies LIMIT and OFFSET after the merge.
+    let remove_limit = aggregate
+        .as_ref()
+        .is_some_and(|aggregate| pages_merged_groups(select, aggregate));
+    if remove_limit && let Some(reason) = offset::unsupported_limit(select) {
+        return Err(Error::UnsupportedGroupBy(reason));
+    }
 
     // We can't sort by an expression with an aggregate in it, e.g., `ORDER BY count(*)`.
     // Each shard runs the aggregate ONLY on the rows stored directly on it, e.g., Shard A counts 2 'free' rows and Shard B counts 3.
@@ -352,12 +356,14 @@ fn build(
             plan.aggregate_helpers = aggregate_plan.aggregate_helpers;
         }
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
-        if rewrite_offset && !has_having {
+        if remove_limit {
+            offset::remove_select(&mut select.as_mut(), mem);
+        } else if rewrite_offset && !has_having {
             offset::rewrite_select(&mut select.as_mut(), mem);
         }
         Ok::<_, Error>(select)
     })?;
-    if plan.is_noop() && !rewrite_offset {
+    if plan.is_noop() && !rewrite_offset && !remove_limit {
         return Ok(None);
     }
     let sql: Arc<str> = pg_raw_parse::deparse(&*rewritten)?.as_str().into();
@@ -537,6 +543,97 @@ mod tests {
             "SELECT * FROM items GROUP BY id",
             "SELECT category FROM items GROUP BY ROLLUP (category)",
             "SELECT category, count(*) FROM items GROUP BY GROUPING SETS ((category), ())",
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let error = build(&ast, &Schema::default(), false).unwrap_err();
+            assert!(matches!(error, Error::UnsupportedGroupBy(_)), "{sql}");
+        }
+    }
+
+    fn shard_sql(sql: &str, rewrite_offset: bool) -> Option<String> {
+        let ast = pg_raw_parse::parse(sql).unwrap();
+        build(&ast, &Schema::default(), rewrite_offset)
+            .unwrap()
+            .map(|rewrite| rewrite.sql.to_string())
+    }
+
+    #[test]
+    fn group_by_limit_is_applied_after_merge() {
+        // (query, rewrite OFFSET, shard query)
+        for (sql, rewrite_offset, expected) in [
+            (
+                "SELECT category, COUNT(*) FROM items GROUP BY category ORDER BY 2 DESC LIMIT 1",
+                false,
+                "SELECT category, count(*) FROM items GROUP BY category ORDER BY 2 DESC \
+                 LIMIT CASE WHEN 1::bigint < 0 THEN 1::bigint END",
+            ),
+            (
+                "SELECT category, COUNT(*) FROM items GROUP BY category OFFSET 1",
+                false,
+                "SELECT category, count(*) FROM items GROUP BY category \
+                 OFFSET CASE WHEN 1::bigint < 0 THEN 1::bigint END",
+            ),
+            // The combined `LIMIT limit + offset` would still page the shards.
+            (
+                "SELECT category, AVG(price) FROM items GROUP BY category LIMIT $1 OFFSET $2",
+                true,
+                "SELECT category, avg(price), count(price) AS __pgdog_count_col1 \
+                 FROM items GROUP BY category \
+                 LIMIT CASE WHEN $1::bigint < 0 THEN $1::bigint END \
+                 OFFSET CASE WHEN $2::bigint < 0 THEN $2::bigint END",
+            ),
+            (
+                "SELECT category, SUM(price) FROM items GROUP BY 1 FETCH FIRST 2 ROWS ONLY",
+                false,
+                "SELECT category, sum(price) FROM items GROUP BY 1 \
+                 LIMIT CASE WHEN 2::bigint < 0 THEN 2::bigint END",
+            ),
+            (
+                "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT ALL",
+                false,
+                "SELECT category, count(*) FROM items GROUP BY category \
+                 LIMIT CASE WHEN NULL::bigint < 0 THEN NULL::bigint END",
+            ),
+        ] {
+            assert_eq!(
+                shard_sql(sql, rewrite_offset).as_deref(),
+                Some(expected),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn limit_without_merged_groups_is_pushed_down() {
+        // Each shard's first rows or groups are enough to find the overall ones.
+        for (sql, rewrite_offset, expected) in [
+            (
+                "SELECT category FROM items GROUP BY category ORDER BY 1 LIMIT 1",
+                false,
+                None,
+            ),
+            ("SELECT COUNT(*) FROM items LIMIT 1", false, None),
+            (
+                "SELECT category FROM items GROUP BY category ORDER BY 1 LIMIT 1 OFFSET 2",
+                true,
+                Some(
+                    "SELECT category FROM items GROUP BY category ORDER BY 1 \
+                     LIMIT 1::bigint + 2::bigint",
+                ),
+            ),
+        ] {
+            assert_eq!(shard_sql(sql, rewrite_offset).as_deref(), expected, "{sql}");
+        }
+    }
+
+    #[test]
+    fn group_by_limit_that_cannot_be_applied_is_rejected() {
+        for sql in [
+            "SELECT category, COUNT(*) FROM items GROUP BY category \
+             ORDER BY 2 FETCH FIRST 1 ROWS WITH TIES",
+            "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT 1 + 1",
+            "SELECT category, COUNT(*) FROM items GROUP BY category OFFSET '1'",
+            "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT $1::int",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let error = build(&ast, &Schema::default(), false).unwrap_err();
