@@ -286,6 +286,19 @@ pub(crate) enum Error {
     #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
     ReshardingSlotsPartial(String),
 
+    #[error("no unfinished resharding {0}")]
+    NoResharding(String),
+
+    #[error("resharding {field} is \"{stored}\", not \"{given}\"")]
+    ReshardingMismatch {
+        field: &'static str,
+        stored: String,
+        given: String,
+    },
+
+    #[error("resharding {0} did not stop in time")]
+    ReshardingBusy(String),
+
     #[allow(dead_code)]
     #[error(
         "sharding config changed since the resharding started: {}",

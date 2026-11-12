@@ -10,6 +10,7 @@ use crate::backend::replication::logical::Error;
 use crate::backend::schema::sync::SchemaSyncError;
 use task::{TaskError, TaskStorage, TaskWaiter};
 
+pub(crate) mod abort_resharding;
 pub(crate) mod copy_data;
 pub(crate) mod ee;
 pub(crate) mod replication;

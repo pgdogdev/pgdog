@@ -4,10 +4,12 @@ use tracing::info;
 
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
+use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::options::{Options, RunMode};
 use super::prelude::*;
+use super::reshard::abort;
 
 pub(crate) struct CopyData {
     pub(crate) from_database: String,
@@ -69,14 +71,6 @@ impl Command for CopyData {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        if self.mode == RunMode::Abort {
-            return Err(Error::InvalidOption("abort".into()));
-        }
-        info!(
-            r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
-            self.from_database, self.to_database, self.publication, self.tables_only
-        );
-
         let state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
@@ -84,6 +78,13 @@ impl Command for CopyData {
             .maybe_replication_slot(self.replication_slot.clone())
             .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
             .build()?;
+        if self.mode == RunMode::Abort {
+            return abort(state, CommandKind::Reshard, self.replication_slot.clone()).await;
+        }
+        info!(
+            r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
+            self.from_database, self.to_database, self.publication, self.tables_only
+        );
 
         let slot_name = state.replication_slot().to_owned();
 

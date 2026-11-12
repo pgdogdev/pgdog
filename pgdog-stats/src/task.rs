@@ -12,12 +12,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{TimestampMilliSeconds, serde_as, skip_serializing_none};
 
+pub mod abort_resharding;
 pub mod copy_data;
 pub mod replication;
 pub mod reshard;
 pub mod schema_sync;
 pub mod synchronize_tables;
 
+pub use abort_resharding::*;
 pub use copy_data::*;
 pub use replication::*;
 pub use reshard::*;
@@ -360,6 +362,7 @@ pub enum TaskDefinitionKind {
     ReplicationCluster(ReplicationClusterDefinition),
     ReplicationShard(ReplicationShardDefinition),
     Reshard(ReshardDefinition),
+    AbortResharding(AbortReshardingDefinition),
     /// No detail beyond the name, or a `kind` this build does not know.
     #[default]
     #[display("")]
@@ -372,6 +375,7 @@ impl TaskDefinitionKind {
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::Reshard(_) => "reshard",
+            Self::AbortResharding(_) => "abort_resharding",
             Self::CopyData(_) => "copy_data",
             Self::TableCopy(_) => "table_copy",
             Self::SynchronizeTables(_) => "synchronize_tables",
@@ -426,7 +430,7 @@ mod test {
 
     /// One definition per kind. The exhaustive `match` in
     /// [`test_definition_round_trip`] forces a new kind into this list.
-    fn definitions() -> [TaskDefinition; 10] {
+    fn definitions() -> [TaskDefinition; 11] {
         [
             "test task".into(),
             ReshardDefinition {
@@ -484,6 +488,11 @@ mod test {
                 sync_state: SyncState::PostData,
             }
             .into(),
+            AbortReshardingDefinition {
+                databases: databases(),
+                command: "reshard".into(),
+            }
+            .into(),
         ]
     }
 
@@ -502,6 +511,7 @@ mod test {
 
             match back.kind {
                 TaskDefinitionKind::Reshard(_)
+                | TaskDefinitionKind::AbortResharding(_)
                 | TaskDefinitionKind::CopyData(_)
                 | TaskDefinitionKind::TableCopy(_)
                 | TaskDefinitionKind::SynchronizeTables(_)
@@ -533,7 +543,6 @@ mod test {
             .to_string(),
             "reshard prod -> prod_sharded"
         );
-
 
         assert_eq!(
             TaskDefinition::from(CopyDataDefinition {

@@ -94,7 +94,6 @@ impl ReshardingStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn list(
         server: &mut Server,
         destination_db: &str,
@@ -143,7 +142,6 @@ async fn try_lock(server: &mut Server, key: &ReshardingKey) -> Result<bool, Erro
     Ok(locked.first() == Some(&1))
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct UnreadableRecord {
     pub(crate) key: ReshardingKey,

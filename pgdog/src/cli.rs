@@ -3,12 +3,14 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing::info;
 
+use crate::api::abort_resharding::AbortReshardingTask;
 use crate::api::resharding::ReshardTask;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::TaskError;
 use crate::api::{ReshardingError, run_task};
 use crate::backend::databases::databases;
 use crate::backend::replication::logical::Error::ReplicationAborted;
+use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::comms::comms;
@@ -258,16 +260,29 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         abort,
     } = commands
     {
-        if abort {
-            return Err("--abort is not available yet".into());
-        }
         let state = ReshardingState::builder()
             .source(&from_database)
             .destination(&to_database)
             .publication(&publication)
-            .maybe_replication_slot(replication_slot)
+            .maybe_replication_slot(replication_slot.clone())
             .cleanup_on_cancel(cleanup_on_cancel)
             .build()?;
+
+        if abort {
+            state
+                .check_record(CommandKind::Reshard, replication_slot.as_deref())
+                .await?;
+            run_task(
+                AbortReshardingTask::builder()
+                    .state(state)
+                    .command(CommandKind::Reshard)
+                    .maybe_slot(replication_slot)
+                    .build(),
+            )
+            .await?;
+            info!("resharding aborted");
+            return Ok(());
+        }
 
         let result = run_task(
             ReshardTask::builder()

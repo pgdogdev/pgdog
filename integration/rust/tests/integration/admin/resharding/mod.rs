@@ -1,3 +1,4 @@
+pub mod abort;
 pub mod copy_data;
 pub mod replication;
 pub mod replication_slots;
@@ -131,6 +132,10 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
     sleep(Duration::from_millis(500)).await;
 
     drop_all_test_slots(direct).await;
+    let _ = connection_sqlx_direct_db("shard_0")
+        .await
+        .execute("DROP TABLE IF EXISTS pgdog.resharding")
+        .await;
 
     let _ = direct
         .execute(format!("DROP PUBLICATION IF EXISTS {TEST_PUB}").as_str())

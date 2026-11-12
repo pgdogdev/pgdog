@@ -5,10 +5,12 @@ use tracing::info;
 use crate::api::replication::ReplicationTask;
 use crate::api::run_task;
 use crate::api::schema_sync::SchemaSyncTask;
+use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::options::{Options, RunMode};
 use super::prelude::*;
+use super::reshard::abort;
 
 pub(crate) struct Replicate {
     pub(crate) from_database: String,
@@ -58,14 +60,6 @@ impl Command for Replicate {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        if self.mode == RunMode::Abort {
-            return Err(Error::InvalidOption("abort".into()));
-        }
-        info!(
-            r#"replicate "{}" to "{}", publication="{}""#,
-            self.from_database, self.to_database, self.publication
-        );
-
         let state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
@@ -73,6 +67,13 @@ impl Command for Replicate {
             .maybe_replication_slot(self.replication_slot.clone())
             .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
             .build()?;
+        if self.mode == RunMode::Abort {
+            return abort(state, CommandKind::Replicate, self.replication_slot.clone()).await;
+        }
+        info!(
+            r#"replicate "{}" to "{}", publication="{}""#,
+            self.from_database, self.to_database, self.publication
+        );
 
         let schema_sync = SchemaSyncTask::builder()
             .publication_tables_only(false)

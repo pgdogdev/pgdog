@@ -57,6 +57,22 @@ pub(crate) enum ReshardingCommand {
     Replicate { auto_cutover: bool },
 }
 
+impl ReshardingCommand {
+    pub(crate) fn kind(&self) -> CommandKind {
+        match self {
+            Self::Reshard { .. } => CommandKind::Reshard,
+            Self::Replicate { .. } => CommandKind::Replicate,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
+#[display(rename_all = "snake_case")]
+pub(crate) enum CommandKind {
+    Reshard,
+    Replicate,
+}
+
 /// Specified the last known stage of the resharding execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display, FromStr)]
 #[display(rename_all = "snake_case")]
@@ -100,6 +116,10 @@ impl TaskOwner {
             run_id: run_id(),
             task_id,
         }
+    }
+
+    pub(crate) fn is_current_process(&self) -> bool {
+        self.instance_id.as_str() == crate::util::instance_id() && self.run_id == run_id()
     }
 }
 

@@ -2,8 +2,10 @@
 
 use tracing::info;
 
+use crate::api::abort_resharding::AbortReshardingTask;
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
+use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::options::{Options, RunMode};
@@ -57,13 +59,6 @@ impl Command for Reshard {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        if self.mode == RunMode::Abort {
-            return Err(Error::InvalidOption("abort".into()));
-        }
-        info!(
-            r#"resharding "{}" to "{}", publication="{}""#,
-            self.from_database, self.to_database, self.publication
-        );
         let state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
@@ -71,6 +66,13 @@ impl Command for Reshard {
             .maybe_replication_slot(self.replication_slot.clone())
             .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
             .build()?;
+        if self.mode == RunMode::Abort {
+            return abort(state, CommandKind::Reshard, self.replication_slot.clone()).await;
+        }
+        info!(
+            r#"resharding "{}" to "{}", publication="{}""#,
+            self.from_database, self.to_database, self.publication
+        );
 
         let task_id = run_task(
             ReshardTask::builder()
@@ -88,6 +90,30 @@ impl Command for Reshard {
             dr.message(),
         ])
     }
+}
+
+pub(super) async fn abort(
+    state: ReshardingState,
+    command: CommandKind,
+    slot: Option<String>,
+) -> Result<Vec<Message>, Error> {
+    state.check_record(command, slot.as_deref()).await?;
+    let task_id = run_task(
+        AbortReshardingTask::builder()
+            .state(state)
+            .command(command)
+            .maybe_slot(slot)
+            .build(),
+    )
+    .id();
+
+    let mut dr = DataRow::new();
+    dr.add(task_id.to_string());
+
+    Ok(vec![
+        RowDescription::new(&[Field::text("task_id")]).message(),
+        dr.message(),
+    ])
 }
 
 #[cfg(test)]

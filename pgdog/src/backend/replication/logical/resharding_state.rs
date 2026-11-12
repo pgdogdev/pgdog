@@ -13,14 +13,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::publisher::{Permanent, ReplicationSlot, Table};
-use super::subscriber::replication_origin::ReplicationOrigin;
 use super::run::{
-    ConfigSnapshot, FORMAT_VERSION, ReshardingCommand, ReshardingId, ReshardingKey,
+    CommandKind, ConfigSnapshot, FORMAT_VERSION, ReshardingCommand, ReshardingId, ReshardingKey,
     ReshardingRecord, ReshardingStore, Stage, TaskOwner, existing_slots,
 };
+use super::subscriber::connect_address;
+use super::subscriber::replication_origin::ReplicationOrigin;
 use super::tables_sync::tables_sync;
 use super::*;
-use crate::backend::pool::Request;
+use crate::backend::pool::{Address, Request};
 use crate::tasks;
 use crate::util::safe_timeout;
 use crate::{backend::Cluster, util::random_string};
@@ -288,29 +289,37 @@ impl ReshardingState {
             .map(|(number, slot)| (*number, slot.name().to_owned()))
             .collect();
 
+        for (number, origins) in self.origins_for(slots).await? {
+            self.inner.lock().origins.insert(number, origins.clone());
+            try_join_all(origins.iter().map(ReplicationOrigin::recreate_origin)).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn origins_for(&self, slots: Vec<(usize, String)>) -> Result<Origins, Error> {
         let mut addresses = vec![];
         for shard in self.destination.shards() {
             addresses.push(shard.primary(&Request::default()).await?.addr().clone());
         }
 
-        for (number, slot_name) in slots {
-            let origins: Vec<ReplicationOrigin> = addresses
-                .iter()
-                .enumerate()
-                .map(|(shard, address)| {
-                    ReplicationOrigin::builder()
-                        .name(&slot_name)
-                        .address(address)
-                        .shard(shard)
-                        .build()
-                })
-                .collect();
-            self.inner.lock().origins.insert(number, origins.clone());
-
-            try_join_all(origins.iter().map(ReplicationOrigin::recreate_origin)).await?;
-        }
-
-        Ok(())
+        Ok(slots
+            .into_iter()
+            .map(|(number, slot_name)| {
+                let origins = addresses
+                    .iter()
+                    .enumerate()
+                    .map(|(shard, address)| {
+                        ReplicationOrigin::builder()
+                            .name(&slot_name)
+                            .address(address)
+                            .shard(shard)
+                            .build()
+                    })
+                    .collect();
+                (number, origins)
+            })
+            .collect())
     }
 
     pub(crate) async fn prepare_replication(
@@ -383,18 +392,8 @@ impl ReshardingState {
         stage: Stage,
         task_id: TaskId,
     ) -> Result<(), Error> {
-        let key = ReshardingKey::new(self.databases(), &self.publication);
-        let addr = self
-            .destination
-            .shards()
-            .first()
-            .ok_or_else(|| Error::NoPrimary)?
-            .primary(&Request::default())
-            .await?
-            .addr()
-            .clone();
-
-        let store = ReshardingStore::open(&addr, key.clone()).await?;
+        let key = self.run_key();
+        let store = ReshardingStore::open(&self.state_address().await?, key.clone()).await?;
         if let Some(record) = store.load().await? {
             return Err(Error::ReshardingExists {
                 key: key.to_string(),
@@ -492,6 +491,96 @@ impl ReshardingState {
         store.delete().await?;
         self.release_run().await;
         Ok(())
+    }
+
+    pub(crate) fn run_key(&self) -> ReshardingKey {
+        ReshardingKey::new(self.databases(), &self.publication)
+    }
+
+    async fn state_address(&self) -> Result<Address, Error> {
+        Ok(self
+            .destination
+            .shards()
+            .first()
+            .ok_or_else(|| Error::NoPrimary)?
+            .primary(&Request::default())
+            .await?
+            .addr()
+            .clone())
+    }
+
+    pub(crate) async fn check_record(
+        &self,
+        command: CommandKind,
+        slot: Option<&str>,
+    ) -> Result<ReshardingRecord, Error> {
+        let key = self.run_key();
+        let mut server = connect_address(&self.state_address().await?).await?;
+        let record = ReshardingStore::list(&mut server, &key.databases.destination)
+            .await?
+            .into_iter()
+            .find_map(|row| match row {
+                Ok(record) if record.key == key => Some(Ok(record)),
+                Err(unreadable) if unreadable.key == key => Some(Err(unreadable.error)),
+                _ => None,
+            })
+            .ok_or_else(|| Error::NoResharding(key.to_string()))??;
+        record_matches(&record, command, slot)?;
+        Ok(record)
+    }
+
+    pub(crate) async fn open_for_abort(
+        &self,
+        command: CommandKind,
+        slot: Option<&str>,
+    ) -> Result<(ReshardingStore, ReshardingRecord), Error> {
+        let key = self.run_key();
+        let store = ReshardingStore::open(&self.state_address().await?, key.clone()).await?;
+        let record = store
+            .load()
+            .await?
+            .ok_or_else(|| Error::NoResharding(key.to_string()))?;
+        record_matches(&record, command, slot)?;
+        Ok((store, record))
+    }
+
+    pub(crate) async fn adopt_run(&self, record: &ReshardingRecord) -> Result<(), Error> {
+        let slots = if record.slot_existed {
+            Slots::new()
+        } else {
+            existing_slots(&self.source, &self.publication, &record.slot_name).await?
+        };
+        let names = (0..self.source.shards().len())
+            .map(|number| (number, format!("{}_{number}", record.slot_name)))
+            .collect();
+        let origins = self.origins_for(names).await?;
+
+        let mut inner = self.inner.lock();
+        inner.slots = slots;
+        inner.origins = origins;
+        Ok(())
+    }
+}
+
+fn record_matches(
+    record: &ReshardingRecord,
+    command: CommandKind,
+    slot: Option<&str>,
+) -> Result<(), Error> {
+    if record.command.kind() != command {
+        return Err(Error::ReshardingMismatch {
+            field: "command",
+            stored: record.command.to_string(),
+            given: command.to_string(),
+        });
+    }
+    match slot {
+        Some(slot) if slot != record.slot_name => Err(Error::ReshardingMismatch {
+            field: "slot",
+            stored: record.slot_name.clone(),
+            given: slot.to_owned(),
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -899,6 +988,81 @@ mod test {
         state
             .start_run(REPLICATE, Stage::Replication, TaskId::new(task_id))
             .await
+    }
+
+    async fn pause_after_replication(state: &ReshardingState) {
+        start(state, 1).await.unwrap();
+        state
+            .prepare_replication(&CancellationToken::new())
+            .await
+            .unwrap();
+        state.cancel_run().await.unwrap();
+    }
+
+    async fn abort(state: &ReshardingState) -> ReshardingRecord {
+        let (store, record) = state
+            .open_for_abort(CommandKind::Replicate, Some(state.replication_slot()))
+            .await
+            .unwrap();
+        state.adopt_run(&record).await.unwrap();
+        state.drop_slots().await.unwrap();
+        store.delete().await.unwrap();
+        record
+    }
+
+    #[tokio::test]
+    async fn abort_drops_only_what_the_run_created() {
+        crate::logger();
+        let name = "state_abort";
+        let mut publication =
+            setup_publication_tables(&format!("{name}_pub"), &["state_abort_one"]).await;
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let shards = source.shards().len() as i64;
+        remove_resumable(&mut publication.server, name).await;
+
+        let state = keyed_state(&source, name, false);
+        pause_after_replication(&state).await;
+        assert_eq!(slot_count(&mut publication.server, name).await, shards);
+
+        for (command, slot) in [
+            (CommandKind::Reshard, None),
+            (CommandKind::Replicate, Some("other")),
+        ] {
+            let mismatch = state.check_record(command, slot).await;
+            assert!(
+                matches!(mismatch, Err(Error::ReshardingMismatch { .. })),
+                "{mismatch:?}"
+            );
+        }
+        state
+            .check_record(CommandKind::Replicate, None)
+            .await
+            .unwrap();
+
+        assert!(!abort(&state).await.slot_existed);
+        wait_until_removed(&mut publication.server, name).await;
+        assert_eq!(origin_count(&mut publication.server, name).await, 0);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+        assert!(matches!(
+            state.check_record(CommandKind::Replicate, None).await,
+            Err(Error::NoResharding(_))
+        ));
+
+        let owner = keyed_state(&source, name, true);
+        owner.create_slots(&CancellationToken::new()).await.unwrap();
+        owner.detach_slots();
+
+        let state = keyed_state(&source, name, false);
+        pause_after_replication(&state).await;
+        assert!(abort(&state).await.slot_existed);
+        assert_eq!(slot_count(&mut publication.server, name).await, shards);
+        assert_eq!(origin_count(&mut publication.server, name).await, 0);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
     }
 
     #[tokio::test]
