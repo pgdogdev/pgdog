@@ -7,6 +7,7 @@ use pg_raw_parse::{
     ConstValue, Node, Owned, deparse,
     make::{MemoryToken, Unique, owned},
     nodes::{CommonTableExpr, RawStmt, SelectStmt},
+    raw::SubLinkType,
 };
 use pgdog_postgres_types::Datum;
 use rust_decimal::prelude::ToPrimitive;
@@ -26,8 +27,10 @@ use crate::{
         router::parser::rewrite::statement::{
             insert::Subquery,
             subquery::{
-                from_clause::parse_from_clause, insert_select::parse_insert_select,
-                where_clause::parse_where_clause, with_clause::parse_with_clause,
+                from_clause::parse_from_clause,
+                insert_select::parse_insert_select,
+                where_clause::{has_sub_link_in_where, parse_where_clause},
+                with_clause::parse_with_clause,
             },
         },
     },
@@ -361,7 +364,20 @@ impl<'ast> SubqueryMulti<'ast> {
         for (subquery, (_, row_description)) in
             self.subqueries.iter().zip(self.subquery_results.iter())
         {
-            if matches!(subquery, Subquery::WhereClause) {
+            // If we have an EXISTS_SUBLINK in WHERE, we don't send data back in the next round trip; instead, we replace the whole
+            // query with a boolean result.
+            let sends_rows_as_unnest_arrays = match subquery {
+                Subquery::WhereClause => has_sub_link_in_where(self.top_level_statement)
+                    .is_some_and(|(sublink, _)| {
+                        sublink.sub_link_type != SubLinkType::EXISTS_SUBLINK
+                    }),
+                Subquery::FromClause
+                | Subquery::InsertSelect
+                | Subquery::Cte(_)
+                | Subquery::WhereClauseCte(_) => true,
+            };
+
+            if !sends_rows_as_unnest_arrays {
                 continue;
             }
 

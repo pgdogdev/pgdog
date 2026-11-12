@@ -7,12 +7,10 @@ use pg_raw_parse::{
     raw::SubLinkType,
     transform,
 };
-use pgdog_postgres_types::Datum;
-use tracing::debug;
 
 use crate::{
     frontend::{client::query_engine::multi_step::SubqueryMulti, router::parser::rewrite},
-    net::{Bind, DataRow, Decoder, RowDescription},
+    net::{Bind, DataRow, RowDescription},
 };
 
 impl<'a> SubqueryMulti<'a> {
@@ -22,9 +20,9 @@ impl<'a> SubqueryMulti<'a> {
         mut statement: Unique<'mem, Node<'mem>>,
         row_description: Option<&RowDescription>,
         data_rows: &[DataRow],
-        _new_bind: &Bind,
+        new_bind: &mut Bind,
     ) -> Unique<'mem, Node<'mem>> {
-        let Some((sublink, lexpr)) =
+        let Some((sublink, _)) =
             rewrite::statement::subquery::where_clause::has_sub_link_in_where(statement.as_ref())
         else {
             return statement;
@@ -41,12 +39,12 @@ impl<'a> SubqueryMulti<'a> {
         // Replace the SubLink node present with our own re-written version.
         transform::transform(&mut where_clause, |node| match &*node {
             NodeMut::SubLink(_) => {
-                let sublink_replacement = self.rewrite_sublink_in_where_clause(
+                let sublink_replacement = Self::rewrite_sublink_in_where_clause(
                     sublink,
                     data_rows,
                     row_description.as_ref().unwrap(),
                     mem,
-                    lexpr,
+                    new_bind,
                 );
 
                 node.replace(sublink_replacement);
@@ -69,73 +67,29 @@ impl<'a> SubqueryMulti<'a> {
         statement
     }
 
-    // TODO: can use unnest() here too
     fn rewrite_sublink_in_where_clause<'mem>(
-        &self,
         sublink: &SubLink,
         data_rows: &[DataRow],
         row_description: &RowDescription,
         mem: MemoryToken<'mem>,
-        lexpr: Node<'_>,
-    ) -> Unique<'mem, Node<'_>> {
-        let mut decoder = Decoder::default();
-        decoder.set_row_description(row_description.clone());
-
-        // Aggregate all DataRows into a list of A_Const nodes; relevant
-        // for cases where we have something like IN (1, 2, ...)
-        //
-        // TODO(jkaczman): it would be better to explicitly state the SubLinkTypes this is relevant for
-        // to clearly separate the code (includie this strictly for the relevant branches)
-        let mut elems: Vec<Unique<'mem, Node>> = Vec::new();
-        for row in data_rows {
-            let datum: Datum = row
-                .get_column(0, &decoder)
-                .expect("get_column never returns an Error")
-                .unwrap()
-                .value;
-
-            elems.push(Self::convert_datum_to_a_const(datum, mem).uncast());
-        }
-
-        if sublink.sub_link_type == SubLinkType::ANY_SUBLINK && data_rows.is_empty() {
-            elems.push(mem.make_null().uncast());
-        } else if sublink.sub_link_type == SubLinkType::EXISTS_SUBLINK {
+        new_bind: &mut Bind,
+    ) -> Unique<'mem, Node<'mem>> {
+        if sublink.sub_link_type == SubLinkType::EXISTS_SUBLINK {
             // If there's an EXISTS clause within the WHERE, we can replace the
             // ENTIRE subquery with the boolean result
             return mem
                 .make_a_const(ConstValue::Boolean(!data_rows.is_empty()))
                 .uncast();
-        } else if sublink.sub_link_type == SubLinkType::EXPR_SUBLINK {
-            if elems.is_empty() {
-                return mem.make_null().uncast();
-            } else if elems.len() == 1 {
-                return elems.remove(0).uncast();
-            }
-
-            // We only expect at MOST a singular element to be returned when we have an "=" expression
-            // e.g., SELECT WHERE id = <X>
-            //
-            // Postgres will actually error if more than one is returned within a subquery.
-            // However, it doesn't know that there was a subquery, as we're executing it separately.
-            //
-            // TODO(jkaczman): This should emit a friendly client-facing error, matching Postgres.
-            //       "21000, more than one row returned by a subquery used as an expression"
-            unreachable!("Subqueries: EXPR_SUBLINK should only return a singular element");
-        } else {
-            // TODO(jkaczman): Likely, not all cases are handled here. We should make sure that every single case
-            // in the parser is handled with **match** statements.
-            debug!(
-                "Subqueries: handling other sublink type: {}",
-                sublink.sub_link_type
-            );
         }
 
-        mem.make_a_expr(
-            6,
-            mem.make_list(&[mem.make_string(Some("=")).uncast()]),
-            mem.make_unique(lexpr).uncast(),
-            mem.make_list(elems.as_ref()).uncast(),
-        )
-        .uncast()
+        let unnest_select =
+            Self::new_select_with_unnest(new_bind, mem, Node::None, data_rows, row_description);
+
+        let mut rewritten_sublink = mem.make_unique(sublink);
+        rewritten_sublink
+            .as_mut()
+            .set_subselect(unnest_select.uncast());
+
+        rewritten_sublink.uncast()
     }
 }
