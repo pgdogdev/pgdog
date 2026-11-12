@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     backend::pool::connection::aggregate::Error as AggregateError,
     frontend::router::parser::{
-        Aggregate, DistinctBy, HavingRewritePlan, OrderBy, Shard, ShardWithPriority,
+        Aggregate, DistinctBy, HavingRewritePlan, Nulls, OrderBy, Shard, ShardWithPriority,
         rewrite::statement::{
             group_by::GroupByRewrite,
             projection::{
@@ -82,7 +82,10 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
     });
     let mut route = Route::select(
         ShardWithPriority::new_default_unset(Shard::All),
-        vec![OrderBy::AscColumn("__pgdog_order_col0".into())],
+        vec![OrderBy::AscColumn(
+            "__pgdog_order_col0".into(),
+            Nulls::Default,
+        )],
         Default::default(),
         Default::default(),
         None,

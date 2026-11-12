@@ -2,10 +2,34 @@ use std::collections::HashSet;
 use std::ops::Deref;
 
 use crate::config::{self, config};
-use crate::frontend::router::parser::{DistinctBy, DistinctColumn, Shard};
+use crate::frontend::router::parser::{DistinctBy, DistinctColumn, Nulls, OrderBy, Shard};
 use crate::net::messages::bind::Parameter;
 
 use super::setup::*;
+
+#[test]
+fn test_order_by_nulls() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new(
+            "SELECT id, email FROM sharded ORDER BY id ASC NULLS FIRST, email DESC NULLS LAST, id, email DESC, 1 NULLS LAST, 2 DESC NULLS FIRST",
+        )
+        .into(),
+    ]);
+
+    assert_eq!(
+        command.route().order_by(),
+        [
+            OrderBy::AscColumn("id".into(), Nulls::First),
+            OrderBy::DescColumn("email".into(), Nulls::Last),
+            OrderBy::AscColumn("id".into(), Nulls::Default),
+            OrderBy::DescColumn("email".into(), Nulls::Default),
+            OrderBy::Asc(1, Nulls::Last),
+            OrderBy::Desc(2, Nulls::First),
+        ]
+    );
+}
 
 #[test]
 fn test_order_by_vector_simple() {

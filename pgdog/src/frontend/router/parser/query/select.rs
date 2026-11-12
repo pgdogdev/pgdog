@@ -341,16 +341,21 @@ impl QueryParser {
             .filter_map(|(sort_key_position, sort_by)| {
                 use pg_raw_parse::{
                     ConstValue,
-                    raw::{A_Expr_Kind::*, SortByDir::*},
+                    raw::{A_Expr_Kind::*, SortByDir::*, SortByNulls},
                 };
 
                 let asc = matches!(sort_by.sortby_dir, SORTBY_DEFAULT | SORTBY_ASC);
+                let nulls = match sort_by.sortby_nulls {
+                    SortByNulls::SORTBY_NULLS_FIRST => Nulls::First,
+                    SortByNulls::SORTBY_NULLS_LAST => Nulls::Last,
+                    _ => Nulls::Default,
+                };
                 match sort_by.node() {
                     Node::A_Const(c) if let Some(ConstValue::Integer(i)) = c.val() => {
                         if asc {
-                            Some(OrderBy::Asc(i as _))
+                            Some(OrderBy::Asc(i as _, nulls))
                         } else {
-                            Some(OrderBy::Desc(i as _))
+                            Some(OrderBy::Desc(i as _, nulls))
                         }
                     }
 
@@ -359,9 +364,9 @@ impl QueryParser {
                         // when reading data with RowDescription as context.
                         let col_name = c.fields().into_iter().next_back()?.as_str()?;
                         if asc {
-                            Some(OrderBy::AscColumn(col_name.into()))
+                            Some(OrderBy::AscColumn(col_name.into(), nulls))
                         } else {
-                            Some(OrderBy::DescColumn(col_name.into()))
+                            Some(OrderBy::DescColumn(col_name.into(), nulls))
                         }
                     }
 
@@ -400,9 +405,9 @@ impl QueryParser {
                         let helper_column_alias = OrderBy::helper_column_name(sort_key_position);
 
                         if asc {
-                            Some(OrderBy::AscColumn(helper_column_alias))
+                            Some(OrderBy::AscColumn(helper_column_alias, nulls))
                         } else {
-                            Some(OrderBy::DescColumn(helper_column_alias))
+                            Some(OrderBy::DescColumn(helper_column_alias, nulls))
                         }
                     }
                 }

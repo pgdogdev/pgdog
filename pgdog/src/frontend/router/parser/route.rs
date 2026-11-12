@@ -704,6 +704,7 @@ impl ShardsWithPriority {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::frontend::router::parser::Nulls;
 
     #[test]
     fn test_shard_ord() {
@@ -759,7 +760,7 @@ mod test {
     fn test_should_buffer_order_by() {
         let route = Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![OrderBy::Asc(0)],
+            vec![OrderBy::Asc(0, Nulls::Default)],
             Default::default(),
             Limit::default(),
             None,

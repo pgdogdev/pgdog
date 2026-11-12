@@ -49,7 +49,7 @@ use function::Function;
 pub(crate) use having::HavingRewritePlan;
 pub(crate) use key::Key;
 pub(crate) use limit::{Limit, LimitClause};
-pub(crate) use order_by::OrderBy;
+pub(crate) use order_by::{Nulls, OrderBy};
 pub(crate) use params::*;
 pub(crate) use query::QueryParser;
 pub(crate) use rewrite::{StatementRewrite, StatementRewriteContext};
