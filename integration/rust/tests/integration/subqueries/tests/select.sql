@@ -73,6 +73,22 @@ SELECT * FROM suborders WHERE id IN (
 ) ORDER BY id;
 
 -- case
+-- what: .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c), where c returns no rows
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id IN (
+    WITH c AS (SELECT id FROM subusers WHERE status = 'some random status which doesnt exist') SELECT id FROM c
+) ORDER BY id;
+
+-- case
+-- what: .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c), c returns timestamptz column
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id IN (
+    WITH c AS (SELECT id, created_at FROM suborders) SELECT id FROM c WHERE created_at > '2026-10-13'
+) ORDER BY id;
+
+-- case
 -- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = count
 -- route select: 0,1
 -- route select: 0,1
