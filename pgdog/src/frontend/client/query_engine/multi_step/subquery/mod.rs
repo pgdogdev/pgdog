@@ -4,12 +4,11 @@
 //! Please do not work on without discussing with @jkaczman first.
 
 use pg_raw_parse::{
-    ConstValue, Node, Owned, deparse,
+    Node, Owned, deparse,
     make::{MemoryToken, Unique, owned},
     nodes::{CommonTableExpr, RawStmt, SelectStmt},
+    raw::SubLinkType,
 };
-use pgdog_postgres_types::Datum;
-use rust_decimal::prelude::ToPrimitive;
 
 // These are all internal modules; don't need to be exported out.
 mod from_clause;
@@ -26,8 +25,10 @@ use crate::{
         router::parser::rewrite::statement::{
             insert::Subquery,
             subquery::{
-                from_clause::parse_from_clause, insert_select::parse_insert_select,
-                where_clause::parse_where_clause, with_clause::parse_with_clause,
+                from_clause::parse_from_clause,
+                insert_select::parse_insert_select,
+                where_clause::{has_sub_link_in_where, parse_where_clause},
+                with_clause::parse_with_clause,
             },
         },
     },
@@ -360,6 +361,43 @@ impl<'ast> SubqueryMulti<'ast> {
         // hold these in the existing one
         let mut new_bind = self.current_level_bind.clone();
 
+        // We send the rows of subqueries as unnest(..) arrays, so we check the column types before rewriting to ensure that all columns have array types.
+        for (subquery, (_, row_description)) in
+            self.subqueries.iter().zip(self.subquery_results.iter())
+        {
+            // If we have an EXISTS_SUBLINK in WHERE, we don't send data back in the next round trip; instead, we replace the whole
+            // query with a boolean result.
+            let sends_rows_as_unnest_arrays = match subquery {
+                Subquery::WhereClause => has_sub_link_in_where(self.top_level_statement)
+                    .is_some_and(|(sublink, _)| {
+                        sublink.sub_link_type != SubLinkType::EXISTS_SUBLINK
+                    }),
+                Subquery::FromClause
+                | Subquery::InsertSelect
+                | Subquery::Cte(_)
+                | Subquery::WhereClauseCte(_) => true,
+            };
+
+            if !sends_rows_as_unnest_arrays {
+                continue;
+            }
+
+            let Some(row_description) = row_description else {
+                continue;
+            };
+
+            if row_description
+                .fields
+                .iter()
+                .find(|field| field.data_type().into_array_type().is_none())
+                .is_some()
+            {
+                return Err(Error::Subquery(
+                    SubqueryError::SubqueryReturningUnsupportedColumn,
+                ));
+            }
+        }
+
         let new_statement: Owned<RawStmt> = owned(|mem| {
             let mut statement: Unique<'_, Node<'_>> = mem.make_unique(self.top_level_statement);
 
@@ -413,36 +451,6 @@ impl<'ast> SubqueryMulti<'ast> {
             Subquery::Cte(alias) => {
                 self.handle_with_clause(alias, mem, stmt, row_description, data_rows, new_bind)
             }
-        }
-    }
-
-    /// Helper method to turn `Datum` (from DataRow response) into an A_Const node we can inject into the subquery
-    fn convert_datum_to_a_const<'mem>(
-        datum: Datum,
-        mem: MemoryToken<'mem>,
-    ) -> Unique<'mem, Node<'mem>> {
-        match datum {
-            Datum::Integer(num) => mem.make_a_const(ConstValue::Integer(num)).uncast(),
-            Datum::Bigint(num) => match i32::try_from(num) {
-                Ok(num) => mem.make_a_const(ConstValue::Integer(num)).uncast(),
-                Err(_) => mem
-                    .make_a_const(ConstValue::Float(num.to_string().as_str()))
-                    .uncast(),
-            },
-            Datum::Text(text) => mem.make_a_const(ConstValue::String(text.as_str())).uncast(),
-            Datum::Numeric(num) => match num.as_decimal() {
-                Some(decimal) => match decimal.to_i64().filter(|_| decimal.is_integer()) {
-                    Some(whole) => Self::convert_datum_to_a_const(Datum::Bigint(whole), mem),
-                    None => mem
-                        .make_a_const(ConstValue::Float(decimal.to_string().as_str()))
-                        .uncast(),
-                },
-                None => mem
-                    .make_a_const(ConstValue::String(num.to_string().as_str()))
-                    .uncast(),
-            },
-            Datum::Null => mem.make_null().uncast(),
-            _ => panic!("Subqueries: unsupported datum {datum:?}!"),
         }
     }
 }

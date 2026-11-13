@@ -1,4 +1,5 @@
 use indexmap::{IndexMap, IndexSet};
+use itertools::Itertools;
 use pg_raw_parse::{Node, NodeMut, deparse, make, nodes, walk};
 use pgdog_config::RewriteMode;
 use pgdog_postgres_types::{Array, DataType, Datum};
@@ -446,22 +447,59 @@ fn param_ref_under_casts<'a>(mut node: Node<'a>) -> Option<&'a nodes::ParamRef> 
     }
 }
 
-// If the INSERT selects from unnest(..), returns the SELECT, the RangeFunction and the unnest(..) call.
+// If the SELECT selects from unnest(..), this returns the unnest(..) node in the FROM clause (for the alias) and the unnest(..) call (for the arguments).
 fn find_unnest_call(
-    insert: &nodes::InsertStmt,
-) -> Option<(&nodes::SelectStmt, &nodes::RangeFunction, &nodes::FuncCall)> {
-    if let Node::SelectStmt(select) = insert.select_stmt()
-        && let Some(Node::RangeFunction(unnest_range_function)) = select.from_clause().first()
+    select: &nodes::SelectStmt,
+) -> Option<(&nodes::RangeFunction, &nodes::FuncCall)> {
+    if let Some(Node::RangeFunction(unnest_range_function)) = select.from_clause().first()
         && let Some(Node::NodeList(node_list)) = unnest_range_function.functions().first()
         && let Some(Node::FuncCall(unnest_call)) = node_list.first()
         && let Some(func_name) = unnest_call.funcname().first()
         && let Some(func_name) = func_name.as_str()
         && func_name.eq("unnest")
     {
-        return Some((select, unnest_range_function, unnest_call));
+        return Some((unnest_range_function, unnest_call));
     }
 
     None
+}
+
+// E.g., for SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1), this returns the Bind parameter of the unnest array ($1) and the OID of the array elements.
+//
+// The clauses of SELECT besides FROM (e.g., WHERE or LIMIT) only have the capability to remove rows, meaning we know for
+// sure that the SELECT will never return values that *aren't* in the array.
+pub(crate) fn array_param_of_select_from_unnest(
+    select: &nodes::SelectStmt,
+) -> Option<(&nodes::ParamRef, i32)> {
+    let (unnest_range_function, unnest_call) = find_unnest_call(select)?;
+
+    let (Ok(select_target), Ok(unnest_argument)) = (
+        select.target_list().into_iter().exactly_one(),
+        unnest_call.args().into_iter().exactly_one(),
+    ) else {
+        return None;
+    };
+
+    let Node::ColumnRef(select_target_column_ref) = select_target.val() else {
+        return None;
+    };
+
+    let select_returns_unnest_column = select.from_clause().len() == 1
+        && unnest_range_function.functions().len() == 1
+        && UnnestOutputNames::new(unnest_range_function, 1)
+            .unnest_argument_indexes(select_target_column_ref)
+            == Some(vec![0]);
+
+    // With nested casts (e.g., $1::pg_catalog._int8::pg_catalog._text), Postgres converts the elements before comparing the elements (e.g., the bigint 01 becomes the text '1').
+    // Thus, we need to make sure that that doesn't occur.
+    let param_has_one_type_cast =
+        matches!(unnest_argument, Node::TypeCast(cast) if matches!(cast.arg(), Node::ParamRef(_)));
+
+    if !select_returns_unnest_column || !param_has_one_type_cast {
+        return None;
+    }
+
+    typed_array_param(unnest_argument)
 }
 
 // The table name and the column names that Postgres uses for the unnest(..) output.
@@ -765,7 +803,8 @@ impl StatementRewrite<'_> {
         }
 
         let tables = Tables::new(self.schema);
-        if let Some((select, unnest_range_function, unnest_call)) = find_unnest_call(insert)
+        if let Node::SelectStmt(select) = insert.select_stmt()
+            && let Some((unnest_range_function, unnest_call)) = find_unnest_call(select)
             && let Some(relation) = insert.relation()
             && tables
                 .sharded(Table::from(relation))

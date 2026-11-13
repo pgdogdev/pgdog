@@ -54,6 +54,9 @@ use crate::{
     net::{messages::Format, parameter::ParameterValue},
 };
 use pgdog_config::LookupResult;
+use pgdog_postgres_types::{Array, Datum};
+
+use super::rewrite::statement::insert::array_param_of_select_from_unnest;
 
 /// Context for searching a SELECT statement, tracking table aliases.
 #[derive(Debug, Default, Clone)]
@@ -688,7 +691,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn compute_shard(
         &mut self,
         column: Column<'a>,
-        value: Value<'a>,
+        value: Value<'_>,
     ) -> Result<Option<Shard>, Error> {
         let sharded_table = self.get_sharded_table(column);
         self.compute_shard_for_table(sharded_table, value)
@@ -698,7 +701,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn compute_shard_for_table(
         &mut self,
         sharded_table: Option<&ShardedTable>,
-        value: Value<'a>,
+        value: Value<'_>,
     ) -> Result<Option<Shard>, Error> {
         if let Some(table) = sharded_table {
             // Own the extracted values so the context can borrow them
@@ -934,6 +937,57 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                 }
             }
 
+            // E.g., if we have a statement such as
+            // UPDATE users SET status = 'changed' WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))
+            // and the Bind has {1, 2} for $1, then the UPDATE can only match the rows with the id 1 or 2.
+            // Therefore, we route the statement the same way as we would for id IN (1, 2), i.e., we compute the shards of the elements, and only send the statement to those shards.
+            Node::SubLink(sublink) => {
+                let Some(array_elements_as_text) =
+                    self.array_elements_of_in_select_from_unnest(sublink)
+                else {
+                    return Recurse::yes();
+                };
+                let Some(SearchResult::Column(sharding_key_column)) =
+                    self.search_expr(sublink.testexpr(), ctx)?
+                else {
+                    return Recurse::no();
+                };
+
+                // The array doesn't have to be the same type as the key, e.g., id could be a bigint while $1 is a numeric array such as {1.5}.
+                // Postgres is fine with comparing a bigint to a numeric, however, if we tried to compute the shard of 1.5 for a bigint key, PgDog would return an error to the client.
+                // Therefore, we skip this IN, and the statement is routed by whatever else is in the WHERE (which is also what we do for id IN (1.5)).
+                let sharding_key_data_type = self
+                    .get_sharded_table(ctx.resolve_column(sharding_key_column))
+                    .map(|sharded_table| sharded_table.data_type);
+
+                if sharding_key_data_type.is_some_and(|sharding_key_data_type| {
+                    array_elements_as_text.iter().any(|array_element_as_text| {
+                        !ShardingValue::new(array_element_as_text.as_str(), sharding_key_data_type)
+                            .valid()
+                    })
+                }) {
+                    return Recurse::no();
+                }
+
+                let shards_of_array_elements = array_elements_as_text
+                    .iter()
+                    .filter_map(|array_element_as_text| {
+                        self.compute_shard_with_ctx(
+                            sharding_key_column,
+                            Value::String(array_element_as_text),
+                            ctx,
+                        )
+                        .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .break_err()?;
+
+                match Self::converge(&shards_of_array_elements) {
+                    Some(shard) => ControlFlow::Break(Ok(shard)),
+                    None => Recurse::no(),
+                }
+            }
+
             Node::BoolExpr(expr) => {
                 // Only AND expressions can determine a shard.
                 // OR expressions could route to multiple shards.
@@ -1121,11 +1175,63 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         }
     }
 
+    // E.g., for id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1)), this returns the elements of the $1 array in the Bind as text (e.g., "1" and "2" for {1, 2}).
+    //
+    // This returns None if the expression is anything else (e.g., id = ANY (SELECT ..), or the SELECT returns u.c1 + 1), or if we can't read the array (e.g., we haven't received the Bind yet).
+    fn array_elements_of_in_select_from_unnest(
+        &self,
+        sublink: &'a nodes::SubLink,
+    ) -> Option<Vec<String>> {
+        let Node::ColumnRef(_) = sublink.testexpr() else {
+            return None;
+        };
+
+        let Node::SelectStmt(select_from_unnest) = sublink.subselect() else {
+            return None;
+        };
+
+        // Postgres parses both id IN (SELECT ..) and id = ANY (SELECT ..) as an ANY_SUBLINK.
+        // The difference is that IN leaves the operator name empty (while = ANY has "="), which is how we tell that this is an IN.
+        if sublink.sub_link_type != nodes::SubLinkType::ANY_SUBLINK
+            || !sublink.oper_name().is_empty()
+        {
+            return None;
+        }
+
+        let (array_param_ref, array_element_oid) =
+            array_param_of_select_from_unnest(select_from_unnest)?;
+        let array_bind_param = self
+            .bind?
+            .parameter((array_param_ref.number as usize).checked_sub(1)?)
+            .ok()??;
+
+        let array_elements_as_text = if array_bind_param.is_null() {
+            vec![]
+        } else {
+            Array::decode_typed(
+                array_bind_param.data(),
+                array_bind_param.format(),
+                array_element_oid,
+            )
+            .ok()?
+            .elements()
+            .iter()
+            .filter(|array_element| !matches!(array_element, Datum::Null))
+            .map(|array_element| {
+                let array_element_text = array_element.encode(Format::Text).ok()?;
+                String::from_utf8(array_element_text.to_vec()).ok()
+            })
+            .collect::<Option<Vec<_>>>()?
+        };
+
+        Some(array_elements_as_text)
+    }
+
     /// Compute shard with alias resolution from context.
     fn compute_shard_with_ctx(
         &mut self,
         column: Column<'a>,
-        value: Value<'a>,
+        value: Value<'_>,
         ctx: &SearchContext<'a>,
     ) -> Result<Option<Shard>, Error> {
         let resolved_column = ctx.resolve_column(column);
@@ -1764,6 +1870,149 @@ mod test {
         )
         .unwrap();
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_sharding_key_in_select_from_unnest_routes_like_in_list() {
+        let in_select_from_unnest = "(SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))";
+        let binary_array_with_null = pgdog_postgres_types::Array::new(
+            vec![Datum::Bigint(1), Datum::Null, Datum::Bigint(2)],
+            20,
+        )
+        .encode(Format::Binary)
+        .unwrap();
+
+        let text_and_binary_array_binds = [
+            Bind::new_params("", &[Parameter::new(b"{1,NULL,2}")]),
+            Bind::new_params_codes(
+                "",
+                &[Parameter::new(&binary_array_with_null)],
+                &[Format::Binary],
+            ),
+        ];
+
+        for array_bind in &text_and_binary_array_binds {
+            for statement_up_to_in in [
+                "SELECT * FROM sharded WHERE id IN",
+                "UPDATE sharded SET name = 'foo' WHERE id IN",
+                "DELETE FROM sharded WHERE name = 'foo' AND id IN",
+            ] {
+                let sorted_shards = |shard: Option<Shard>| match shard {
+                    Some(Shard::Multi(mut shards)) => {
+                        shards.sort();
+                        shards
+                    }
+                    shard => panic!("expected two shards, found {shard:?}"),
+                };
+
+                let shards_of_in_list =
+                    run_test(&format!("{statement_up_to_in} (1, 2)"), None).unwrap();
+                let shards_of_in_select_from_unnest = run_test(
+                    &format!("{statement_up_to_in} {in_select_from_unnest}"),
+                    Some(array_bind),
+                )
+                .unwrap();
+
+                assert_eq!(
+                    sorted_shards(shards_of_in_select_from_unnest),
+                    sorted_shards(shards_of_in_list)
+                );
+            }
+        }
+
+        let one_element_array_bind = Bind::new_params("", &[Parameter::new(b"{1}")]);
+        assert_eq!(
+            run_test(
+                &format!("SELECT * FROM sharded WHERE id IN {in_select_from_unnest}"),
+                Some(&one_element_array_bind)
+            )
+            .unwrap(),
+            run_test("SELECT * FROM sharded WHERE id = 1", None).unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_sharding_key_in_select_from_unnest_without_route() {
+        let one_element_array_bind = Bind::new_params("", &[Parameter::new(b"{1}")]);
+        let empty_array_bind = Bind::new_params("", &[Parameter::new(b"{}")]);
+        let fractional_array_bind = Bind::new_params("", &[Parameter::new(b"{1.5,1.0}")]);
+
+        for (statement, array_bind) in [
+            // NOT IN matches the rows that *aren't* in the array, and those rows can be on any of these shards
+            (
+                "SELECT * FROM sharded WHERE id NOT IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+            // Matches id = 2, not id = 1 (the SELECT adds 1 to the elements). Can't route with the array.
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 + 1 FROM unnest($1::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+            // Matches no rows. Nothing to route with (empty array)
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))",
+                &empty_array_bind,
+            ),
+            // id is a bigint, but the array is numeric. Can't compute the shard of 1.5 for a bigint, so we skip the IN (no error to the client).
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._numeric) AS u(c1))",
+                &fractional_array_bind,
+            ),
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._float8) AS u(c1))",
+                &fractional_array_bind,
+            ),
+            // $0 doesn't exist. Shouldn't panic.
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($0::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+            // The Bind only has $1; no array for $2
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($2::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+        ] {
+            assert_eq!(
+                run_test(statement, Some(array_bind)).unwrap(),
+                None,
+                "{statement}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_varchar_sharding_key_in_select_from_unnest() {
+        let acme_array_bind = Bind::new_params("", &[Parameter::new(b"{acme}")]);
+        let shard_of_acme = run_test_with_column_data_type(
+            "SELECT * FROM users WHERE tenant_id = 'acme'",
+            None,
+            DataType::Varchar,
+        )
+        .unwrap();
+
+        assert!(matches!(shard_of_acme, Some(Shard::Direct(_))));
+        assert_eq!(
+            run_test_with_column_data_type(
+                "SELECT * FROM users WHERE tenant_id IN (SELECT u.c1 FROM unnest($1::pg_catalog._text) AS u(c1))",
+                Some(&acme_array_bind),
+                DataType::Varchar,
+            )
+            .unwrap(),
+            shard_of_acme,
+        );
+
+        // Postgres compares tenant_id with '1' (the bigint 1 casted to text), not with the '01' in the Bind. Can't route with the Bind.
+        let zero_one_array_bind = Bind::new_params("", &[Parameter::new(b"{01}")]);
+        assert_eq!(
+            run_test_with_column_data_type(
+                "SELECT * FROM users WHERE tenant_id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8::pg_catalog._text) AS u(c1))",
+                Some(&zero_one_array_bind),
+                DataType::Varchar,
+            )
+            .unwrap(),
+            None,
+        );
     }
 
     #[test]

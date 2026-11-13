@@ -65,6 +65,14 @@ SELECT * FROM suborders WHERE state NOT IN (
 ) ORDER BY id;
 
 -- case
+-- what: .. WHERE <col> NOT IN (<sq>), <sq> returns zero rows
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE state NOT IN (
+    SELECT status FROM subusers WHERE status = 'some random status which doesnt exist'
+) ORDER BY id;
+
+-- case
 -- what: .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c)
 -- route select: 0,1
 -- route select: 0,1
