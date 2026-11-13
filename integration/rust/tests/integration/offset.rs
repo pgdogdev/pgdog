@@ -163,6 +163,33 @@ async fn offset_pagination_prepared() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[tokio::test]
+async fn offset_pagination_expressions() -> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset(&sharded).await?;
+    seed(&sharded).await?;
+
+    let rows = sharded
+        .fetch_all(
+            format!("SELECT value FROM {TABLE} ORDER BY value LIMIT 1 + 2 OFFSET 2 * 2").as_str(),
+        )
+        .await?;
+    assert_eq!(values(&rows), vec![5, 6, 7]);
+
+    // sqlx sends i32 parameters as 4-byte binary integers.
+    let rows = sqlx::query(&format!(
+        "SELECT value FROM {TABLE} ORDER BY value LIMIT $1::int OFFSET $2::int + 1"
+    ))
+    .bind(3i32)
+    .bind(3i32)
+    .fetch_all(&sharded)
+    .await?;
+    assert_eq!(values(&rows), vec![5, 6, 7]);
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn offset_full_scan() -> Result<(), Box<dyn std::error::Error>> {
     let sharded = connections_sqlx().await.get(1).cloned().unwrap();
     reset(&sharded).await?;
