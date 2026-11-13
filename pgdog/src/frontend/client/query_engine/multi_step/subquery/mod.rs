@@ -455,34 +455,4 @@ impl<'ast> SubqueryMulti<'ast> {
             }
         }
     }
-
-    /// Helper method to turn `Datum` (from DataRow response) into an A_Const node we can inject into the subquery
-    fn convert_datum_to_a_const<'mem>(
-        datum: Datum,
-        mem: MemoryToken<'mem>,
-    ) -> Unique<'mem, Node<'mem>> {
-        match datum {
-            Datum::Integer(num) => mem.make_a_const(ConstValue::Integer(num)).uncast(),
-            Datum::Bigint(num) => match i32::try_from(num) {
-                Ok(num) => mem.make_a_const(ConstValue::Integer(num)).uncast(),
-                Err(_) => mem
-                    .make_a_const(ConstValue::Float(num.to_string().as_str()))
-                    .uncast(),
-            },
-            Datum::Text(text) => mem.make_a_const(ConstValue::String(text.as_str())).uncast(),
-            Datum::Numeric(num) => match num.as_decimal() {
-                Some(decimal) => match decimal.to_i64().filter(|_| decimal.is_integer()) {
-                    Some(whole) => Self::convert_datum_to_a_const(Datum::Bigint(whole), mem),
-                    None => mem
-                        .make_a_const(ConstValue::Float(decimal.to_string().as_str()))
-                        .uncast(),
-                },
-                None => mem
-                    .make_a_const(ConstValue::String(num.to_string().as_str()))
-                    .uncast(),
-            },
-            Datum::Null => mem.make_null().uncast(),
-            _ => panic!("Subqueries: unsupported datum {datum:?}!"),
-        }
-    }
 }
