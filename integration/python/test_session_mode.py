@@ -367,3 +367,6 @@ async def test_unrecognized_aggregate_function_works_on_schema_based_sharding():
 
     async with conn.transaction():
         await conn.execute("SELECT pgdog_sum_python(lol) FROM unrecognized_agg_test_python")
+
+    await conn.execute("DROP TABLE unrecognized_agg_test_python")
+    await conn.execute("DROP AGGREGATE pgdog_sum_python(int4)")

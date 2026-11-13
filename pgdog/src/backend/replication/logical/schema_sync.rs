@@ -116,6 +116,30 @@ impl SchemaSync {
     }
 }
 
+/// `invalid_table_definition`: `ADD PRIMARY KEY` on a table that already has
+/// one ("multiple primary keys for table are not allowed").
+const INVALID_TABLE_DEFINITION: &str = "42P16";
+
+/// `duplicate_object`: a constraint, trigger, type, collation, cast, policy,
+/// rule, statistics object, operator class or family, conversion, access
+/// method, event trigger, foreign-data wrapper, server or user mapping that
+/// already exists.
+const DUPLICATE_OBJECT: &str = "42710";
+
+/// `duplicate_function`: `CREATE OPERATOR` for an operator that already
+/// exists.
+const DUPLICATE_FUNCTION: &str = "42723";
+
+/// `wrong_object_type`: `ATTACH PARTITION` of a table that is already a
+/// partition ("is already a partition"), or an `ALTER TABLE` on a relation
+/// that already exists with another kind, for example a sequence.
+const WRONG_OBJECT_TYPE: &str = "42809";
+
+/// `duplicate_table`: a relation that already exists. This covers tables,
+/// foreign tables, the index behind a `UNIQUE` or `EXCLUDE` constraint, and
+/// `ALTER TABLE … INHERIT` that was already applied.
+const DUPLICATE_TABLE: &str = "42P07";
+
 /// A connection to one destination shard, applying statements one at a time.
 #[derive(Debug)]
 pub(crate) struct ShardRestore {
@@ -143,7 +167,11 @@ impl ShardRestore {
         if statement.skip_if_exists
             && matches!(
                 execution_error.code.as_str(),
-                "42P16" | "42710" | "42809" | "42P07"
+                INVALID_TABLE_DEFINITION
+                    | DUPLICATE_OBJECT
+                    | DUPLICATE_FUNCTION
+                    | WRONG_OBJECT_TYPE
+                    | DUPLICATE_TABLE
             )
         {
             warn!("entity already exists, skipping");
@@ -224,6 +252,11 @@ mod tests {
                 "DROP SEQUENCE IF EXISTS _sync_sequence",
                 "CREATE SEQUENCE _sync_sequence",
                 "ALTER TABLE _sync_sequence ADD COLUMN val INT",
+            ),
+            (
+                "DROP OPERATOR IF EXISTS === (int4, int4)",
+                "CREATE OPERATOR === (leftarg = int4, rightarg = int4, function = int4eq)",
+                "CREATE OPERATOR === (leftarg = int4, rightarg = int4, function = int4eq)",
             ),
         ];
 
