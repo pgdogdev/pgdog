@@ -161,17 +161,36 @@ impl Users {
     /// Remove user with the same name and database.
     ///
     /// Add new user in its place.
-    pub fn add_or_replace(&mut self, user: User) {
+    pub fn add_or_replace(&mut self, user: &User) {
         self.users
             .retain(|existing| !(existing.name == user.name && existing.database == user.database));
-        self.users.push(user);
+        self.users.push(user.clone());
     }
 
-    pub fn find(&self, user: &User) -> Option<User> {
+    pub fn find(&self, user: &PassthroughUser) -> Option<User> {
         self.users
             .iter()
             .find(|existing| existing.name == user.name && existing.database == user.database)
             .cloned()
+    }
+}
+
+/// User specified via passthrough authentication.
+#[derive(Hash, Eq, PartialEq, Clone)]
+pub struct PassthroughUser {
+    pub name: String,
+    pub database: String,
+    pub password: String,
+}
+
+impl From<PassthroughUser> for User {
+    fn from(value: PassthroughUser) -> Self {
+        User {
+            name: value.name,
+            password: Some(value.password),
+            database: value.database,
+            ..Default::default()
+        }
     }
 }
 
