@@ -4,13 +4,11 @@
 //! Please do not work on without discussing with @jkaczman first.
 
 use pg_raw_parse::{
-    ConstValue, Node, Owned, deparse,
+    Node, Owned, deparse,
     make::{MemoryToken, Unique, owned},
     nodes::{CommonTableExpr, RawStmt, SelectStmt},
     raw::SubLinkType,
 };
-use pgdog_postgres_types::Datum;
-use rust_decimal::prelude::ToPrimitive;
 
 // These are all internal modules; don't need to be exported out.
 mod from_clause;
