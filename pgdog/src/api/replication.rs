@@ -1,4 +1,5 @@
 //! Logical-replication background task.
+#![allow(clippy::large_futures)]
 
 use std::marker::PhantomData;
 use std::pin::pin;
@@ -438,8 +439,8 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         let cutover_policy = CutoverPolicy::new(config().as_ref().into(), progress);
         cutover_policy.wait_for_stop_threshold().await;
         ctx.set_status(ReplicationStatus::StoppingTraffic.into());
-        maintenance.stop_traffic().await;
         let result = async {
+            maintenance.stop_traffic().await?;
             let database = &state.source.identifier().database;
             try_join!(
                 super::ee::cancel_queries(database),
@@ -851,23 +852,24 @@ impl MaintenanceMode {
         }
     }
 
-    async fn stop_traffic(&mut self) {
+    /// Pause local traffic, then ask the control plane to pause the other
+    /// instances. A failure means the fleet is not paused; the caller must
+    /// resume traffic.
+    async fn stop_traffic(&mut self) -> Result<(), Error> {
         maintenance_mode::start(None);
-        if let Err(err) = super::ee::stop_traffic(None).await {
-            error!(
-                "[cutover] maintenance mode not disabled across the fleet: {}",
-                err
-            );
-        }
         self.stopped_traffic = true;
+        super::ee::stop_traffic(None).await?;
+        Ok(())
     }
 
+    /// Resume local traffic, then ask the control plane to resume the other
+    /// instances. The control plane hook retries until the request succeeds.
     async fn resume_traffic(&mut self) {
         if self.stopped_traffic {
             maintenance_mode::stop(None);
             if let Err(err) = super::ee::resume_traffic(None).await {
                 error!(
-                    "[cutover] maintenance mode not enabled across the fleet: {}",
+                    "[cutover] maintenance mode not disabled across the fleet: {}",
                     err
                 );
             }
@@ -1044,7 +1046,10 @@ mod tests {
         let mut maintenance = MaintenanceMode::new();
         assert!(!traffic_stopped());
 
-        maintenance.stop_traffic().await;
+        maintenance
+            .stop_traffic()
+            .await
+            .expect("no control client in tests");
         assert!(traffic_stopped());
 
         maintenance.resume_traffic().await;
@@ -1058,7 +1063,10 @@ mod tests {
     async fn dropping_the_maintenance_guard_resumes_traffic() {
         let _guard = MAINTENANCE_TEST_LOCK.lock().await;
         let mut maintenance = MaintenanceMode::new();
-        maintenance.stop_traffic().await;
+        maintenance
+            .stop_traffic()
+            .await
+            .expect("no control client in tests");
         assert!(traffic_stopped());
 
         drop(maintenance);
