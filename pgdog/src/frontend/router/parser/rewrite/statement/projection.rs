@@ -594,6 +594,18 @@ mod tests {
                 "SELECT category, count(*) FROM items GROUP BY category \
                  LIMIT CASE WHEN NULL::bigint < 0 THEN NULL::bigint END",
             ),
+            (
+                "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT 1 + 1",
+                false,
+                "SELECT category, count(*) FROM items GROUP BY category \
+                 LIMIT CASE WHEN (1 + 1)::bigint < 0 THEN (1 + 1)::bigint END",
+            ),
+            (
+                "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT $1::int",
+                false,
+                "SELECT category, count(*) FROM items GROUP BY category \
+                 LIMIT CASE WHEN $1::int::bigint < 0 THEN $1::int::bigint END",
+            ),
         ] {
             assert_eq!(
                 shard_sql(sql, rewrite_offset).as_deref(),
@@ -631,9 +643,9 @@ mod tests {
         for sql in [
             "SELECT category, COUNT(*) FROM items GROUP BY category \
              ORDER BY 2 FETCH FIRST 1 ROWS WITH TIES",
-            "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT 1 + 1",
+            "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT (SELECT 1)",
             "SELECT category, COUNT(*) FROM items GROUP BY category OFFSET '1'",
-            "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT $1::int",
+            "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT $1::numeric",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let error = build(&ast, &Schema::default(), false).unwrap_err();
@@ -765,13 +777,13 @@ mod tests {
             // An expression over aggregates would keep one shard's value.
             "SELECT customer_id, SUM(price) / COUNT(*) FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
-            // Only whole-row DISTINCT and decodable LIMIT/OFFSET run after the filter.
+            // Only whole-row DISTINCT and computable LIMIT/OFFSET run after the filter.
             "SELECT DISTINCT ON (customer_id) customer_id FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > 2 ORDER BY customer_id FETCH FIRST 1 ROWS WITH TIES",
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*) > 2 LIMIT 1 + 1",
+             HAVING COUNT(*) > 2 LIMIT (SELECT 1)",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let error = build(&ast, &Schema::default(), false).unwrap_err();
