@@ -238,8 +238,13 @@ impl QueryEngine {
                 transaction_type,
                 ..
             } => {
-                self.start_transaction(context, client_request, query.clone(), *transaction_type)
-                    .await?
+                self.start_transaction(
+                    context,
+                    client_request,
+                    query.as_ref().clone(),
+                    *transaction_type,
+                )
+                .await?
             }
             Command::CommitTransaction { .. } => {
                 if self.backend.connected() {
