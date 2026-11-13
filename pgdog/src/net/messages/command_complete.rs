@@ -34,7 +34,7 @@ impl CommandComplete {
     /// Get command tag.
     pub(crate) fn tag(&self) -> &str {
         // SAFETY: split always returns at least one element.
-        self.command().split(" ").next().unwrap()
+        self.command().split(' ').next().unwrap()
     }
 
     pub(crate) fn command(&self) -> &str {
