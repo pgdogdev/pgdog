@@ -3,11 +3,16 @@ use std::{sync::Arc, time::Duration};
 use pgdog_config::{ConfigAndUsers, User};
 use tokio::{sync::oneshot, task::yield_now, time::advance};
 
-use super::{Key, THROTTLE, check_db};
+use super::{Error, Key, THROTTLE, check_db, reset};
 
 const DEBOUNCE: Duration = Duration::from_millis(500);
 
+fn unexpected_callback() -> Result<(), Error> {
+    panic!("cached or failed validation must not invoke the callback");
+}
+
 fn setup() {
+    reset();
     let mut config = ConfigAndUsers::default();
     config.config.general.passthrough_auth_debounce_delay = DEBOUNCE.as_millis() as u64;
     crate::config::set(config).expect("set debounce config");
@@ -40,7 +45,9 @@ async fn debounce_shares_in_flight_success_and_failure() {
         let mut clients = Vec::new();
         for _ in 0..16 {
             let user = user.clone();
-            clients.push(tokio::spawn(async move { check_db(&user).await }));
+            clients.push(tokio::spawn(async move {
+                check_db(&user, unexpected_callback).await
+            }));
         }
         yield_now().await;
         assert!(clients.iter().all(|client| !client.is_finished()));
@@ -50,7 +57,7 @@ async fn debounce_shares_in_flight_success_and_failure() {
         for client in clients {
             assert_eq!(client.await.expect("join client"), result);
         }
-        assert_eq!(check_db(&user).await, result);
+        assert_eq!(check_db(&user, unexpected_callback).await, result);
         assert!(THROTTLE.contains_key(&key));
     }
 }
@@ -65,11 +72,11 @@ async fn debounce_expires_success_and_failure() {
         let entry = THROTTLE.entry(key.clone()).or_default().clone();
         entry.set(result).expect("seed validation result");
 
-        assert_eq!(check_db(&user).await, result);
+        assert_eq!(check_db(&user, unexpected_callback).await, result);
         // Let the cleanup task start its timer before advancing virtual time.
         yield_now().await;
         advance(DEBOUNCE / 2).await;
-        assert_eq!(check_db(&user).await, result);
+        assert_eq!(check_db(&user, unexpected_callback).await, result);
         assert!(Arc::ptr_eq(
             &entry,
             &THROTTLE.get(&key).expect("cached check")
@@ -80,7 +87,7 @@ async fn debounce_expires_success_and_failure() {
         assert!(!THROTTLE.contains_key(&key));
 
         // A repeated hit must not keep this password suppressed forever.
-        assert!(!check_db(&user).await);
+        assert!(!check_db(&user, unexpected_callback).await);
         assert!(!Arc::ptr_eq(
             &entry,
             &THROTTLE.get(&key).expect("fresh check")
@@ -103,9 +110,9 @@ async fn debounce_is_scoped_to_user_database_and_password() {
         User::new("scoped", "secret", "other_db"),
         User::new("scoped", "different", "db"),
     ] {
-        assert!(!check_db(&candidate).await);
+        assert!(!check_db(&candidate, unexpected_callback).await);
     }
-    assert!(check_db(&user).await);
+    assert!(check_db(&user, unexpected_callback).await);
 }
 
 #[tokio::test(start_paused = true)]
@@ -127,7 +134,7 @@ async fn debounce_cancelled_waiter_allows_fresh_validation_after_expiry() {
 
     let waiter = tokio::spawn({
         let user = user.clone();
-        async move { check_db(&user).await }
+        async move { check_db(&user, unexpected_callback).await }
     });
     yield_now().await;
     assert!(!waiter.is_finished());
@@ -140,7 +147,7 @@ async fn debounce_cancelled_waiter_allows_fresh_validation_after_expiry() {
     assert!(!THROTTLE.contains_key(&key));
     assert!(!validation.is_finished());
     // Expiration intentionally permits another check while the old one hangs.
-    assert!(!check_db(&user).await);
+    assert!(!check_db(&user, unexpected_callback).await);
     validation.abort();
     assert!(
         validation
