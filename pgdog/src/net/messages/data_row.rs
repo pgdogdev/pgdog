@@ -140,6 +140,7 @@ impl DataRow {
     }
 
     /// How many columns in the data row.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.columns.len()
     }

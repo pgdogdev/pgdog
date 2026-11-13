@@ -199,6 +199,11 @@ impl<T, E> ResultControlFlowExt<T, E> for Result<T, E> {
     }
 }
 
+#[cfg(not(feature = "bench"))]
+pub(crate) type LruHasher = lru::DefaultHasher;
+#[cfg(feature = "bench")]
+pub(crate) type LruHasher = foldhash::fast::FixedState;
+
 #[cfg(test)]
 mod test {
 

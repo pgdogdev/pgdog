@@ -3226,7 +3226,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3252,6 +3252,7 @@ dependencies = [
  "divan",
  "dyn-clone",
  "fnv",
+ "foldhash 0.2.0",
  "futures",
  "hex",
  "hickory-resolver",

@@ -4,6 +4,40 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### v0.1.65
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.65` |
+
+#### Peformance
+
+- More performance improvements in the hot path, reducing memory allocations, CPU instructions, and mutex contention required to serve a query @jkaczman
+- Use `unnest()` in cross-shard subqueries instead of injecting raw values, producing a massive improvement in performance @jkaczman
+
+#### Features
+
+- Cross-shard `GROUP BY` now supports aggregation on columns not specified in the `SELECT` clause @murex971
+- Add support for cross-shard CTEs @jkaczman
+- Add support for derived tables in subqueries @jkaczman
+- Add support for cross-shard `GROUP BY` with `HAVING` clause @murex971
+- Add support for moving individual tables with logical replication. This is useful for using it for other purposes than resharding. @murex971
+- Add support for `NULLS FIRST` and `NULLS LAST` in cross-shard `ORDER BY` @murex971
+
+#### Bugs
+
+- Cross-shard `GROUP BY` without an aggregate function would return incorrect results @murex971
+- Passthrough auth token cache would keep expired entries blocking their re-use if their expiration time wasn't correctly calculated @daryllimyt
+- `read_write_split = "prefer_primary"` would route reads to a missing primary on read-only clusters @eidam
+- `RESET` statements & `DateStyle` parameter were incorrectly handled in some edge cases @meskill
+- Replica lag ban was using uninitialized stats, causing a race condition during pool initialization
+- `INSERT [...] SELECT` would route rows incorrectly if the configuration didn't have matching shards for all rows in the `SELECT` statement @jkaczman
+- Empty query would not be accepted in a failed transaction if the query parser was disabled
+- Return an error when aggregate functions would overflow; this would cause a panic before @murex971
+- Query cancellation wouldn't wait for Postgres to ack the request, causing it to occasionally fail @andersondario
+- Aurora detection query in the LSN monitor would cause unnecessary error noise in community PG @eidam
+- Cross-shard `GROUP BY` would incorrectly apply `LIMIT` and `OFFSET` prior to aggregation in the proxy @murex971
+
 ### v0.1.64
 
 | Application | Docker image                     |

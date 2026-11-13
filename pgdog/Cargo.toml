@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.64"
+version = "0.1.65"
 edition = "2024"
 description = "Modern PostgreSQL proxy, pooler, load balancer and database sharder."
 authors = ["PgDog <hi@pgdog.dev>"]
@@ -12,9 +12,10 @@ default-run = "pgdog"
 
 [features]
 fips = ["tokio-rustls/fips"]
-bench = []
+bench = ["foldhash"]
 
 [dependencies]
+foldhash = { version = "0.2", default-features = false, optional = true  }
 bon.workspace = true
 pin-project = "1"
 tokio.workspace = true

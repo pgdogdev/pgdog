@@ -34,7 +34,7 @@ use crate::{
             },
         },
     },
-    net::{Bind, DataRow, Decoder, ProtocolMessage, RowDescription},
+    net::{Bind, DataRow, ProtocolMessage, RowDescription},
 };
 
 /// Evaluates the Subquery and injects the results into the top-level statement.
@@ -123,10 +123,7 @@ impl<'ast> SubqueryMulti<'ast> {
         Self {
             subqueries,
             top_level_bind: parent_engine.top_level_bind,
-            current_level_bind: parent_engine
-                .top_level_bind
-                .cloned()
-                .unwrap_or(Bind::default()),
+            current_level_bind: parent_engine.current_level_bind.clone(),
             subquery_results: Vec::new(),
             is_extended_protocol: parent_engine.is_extended_protocol,
             top_level_statement: new_parent_ast,
@@ -181,10 +178,12 @@ impl<'ast> SubqueryMulti<'ast> {
         for subquery in &subqueries {
             // Send the subquery that we parsed through the QueryEngine, and fetch its response back
 
-            let rewritten_subquery_ast: Owned<SelectStmt> =
+            let (rewritten_subquery_ast, subquery_bind): (Owned<SelectStmt>, Bind) =
                 self.parse_and_rewrite_subquery_ast(subquery, current_statement)?;
 
             let subquery_sql = deparse(&*rewritten_subquery_ast)?.as_str().to_string();
+
+            let current_level_bind = std::mem::replace(&mut self.current_level_bind, subquery_bind);
 
             let results = self
                 .send_query_string(
@@ -195,8 +194,25 @@ impl<'ast> SubqueryMulti<'ast> {
                     // 'is_subquery' will allow us to get the response back
                     true,
                 )
-                .await?
-                .expect("send_query_string is only None when `is_subquery` is false");
+                .await;
+
+            self.current_level_bind = current_level_bind;
+
+            let results =
+                results?.expect("send_query_string is only None when `is_subquery` is false");
+
+            // We send the rows of subqueries as unnest(..) arrays, so we check the column types before rewriting to ensure that all columns have array types.
+            if !matches!(subquery, Subquery::WhereClause)
+                && let (_, Some(row_description)) = &results
+                && row_description
+                    .fields
+                    .iter()
+                    .any(|field| field.data_type().into_array_type().is_none())
+            {
+                return Err(Error::Subquery(
+                    SubqueryError::SubqueryReturningUnsupportedColumn,
+                ));
+            }
 
             self.subquery_results.push(results);
         }
@@ -218,12 +234,14 @@ impl<'ast> SubqueryMulti<'ast> {
         &self,
         subquery: &Subquery,
         subquery_ast: Node<'ast>,
-    ) -> Owned<SelectStmt> {
+    ) -> (Owned<SelectStmt>, Bind) {
         let Node::SelectStmt(select) = subquery_ast else {
             unreachable!("We only allow subselects to be subqueries");
         };
 
-        owned(|mem| {
+        let mut subquery_bind = self.current_level_bind.clone();
+
+        let rewritten_subquery_ast = owned(|mem| {
             let mut subquery_ast = mem.make_unique(select);
 
             if matches!(subquery, Subquery::InsertSelect)
@@ -249,29 +267,15 @@ impl<'ast> SubqueryMulti<'ast> {
                             .as_ref()
                             .expect("RowDescription must be Some(..) in order to reach here");
 
-                        let mut decoder = Decoder::default();
-                        decoder.set_row_description(row_description.clone());
-
                         // We need to set this within a WITH clause of the subselect,
                         // so that the subselect can reference previously ran CTEs
-
-                        let mut new_cte_subselect = mem.make_node::<SelectStmt>();
-                        let mut values_lists = Vec::new();
-
-                        for row in rows {
-                            let mut elems = Vec::new();
-
-                            for col in 0..row.len() {
-                                let datum = row.get_column(col, &decoder).unwrap().unwrap().value;
-                                elems.push(Self::convert_datum_to_a_const(datum, mem).uncast());
-                            }
-
-                            let tuple = mem.make_list(elems.as_ref()).uncast();
-                            values_lists.push(tuple)
-                        }
-
-                        let values_lists = mem.make_list(values_lists.as_ref());
-                        new_cte_subselect.as_mut().set_values_lists(values_lists);
+                        let new_cte_subselect = Self::new_select_with_unnest(
+                            &mut subquery_bind,
+                            mem,
+                            Node::None,
+                            rows,
+                            row_description,
+                        );
 
                         // Need to form the alias for the CTE to be referenced within the other CTE,
                         // so that it can reference <CTE>.<col>
@@ -309,23 +313,22 @@ impl<'ast> SubqueryMulti<'ast> {
             }
 
             subquery_ast
-        })
+        });
+
+        (rewritten_subquery_ast, subquery_bind)
     }
 
     fn parse_and_rewrite_subquery_ast(
         &self,
         subquery: &Subquery,
         entire_ast: Node<'ast>,
-    ) -> Result<Owned<SelectStmt>, Error> {
+    ) -> Result<(Owned<SelectStmt>, Bind), Error> {
         let subquery_ast: Node<'ast> = self.parse_out_relevant_query_to_send(subquery, entire_ast);
 
-        // We might have to reference earlier statements and perform a re-write. E.g., if we have CTE b referencing CTE a, then we need to include the re-written CTE (w/ VALUES) here
+        // We might have to reference earlier statements and perform a re-write. E.g., if we have CTE b referencing CTE a, then we need to include the re-written CTE (w/ unnest) here
         // Only if it's actually relevant, but we need to either (a) figure that out somehow or (b) always include earlier ones
 
-        let rewritten_subquery_ast =
-            self.rewrite_subquery_ast_with_earlier_subquery_responses(subquery, subquery_ast);
-
-        Ok(rewritten_subquery_ast)
+        Ok(self.rewrite_subquery_ast_with_earlier_subquery_responses(subquery, subquery_ast))
     }
 
     /// This is the relevant part of what we need to send, e.g., the subselect of a specific CTE.
