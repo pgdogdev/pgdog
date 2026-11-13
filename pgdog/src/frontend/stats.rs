@@ -16,6 +16,7 @@ pub(crate) struct Stats {
     transaction_timer: Instant,
     query_timer: Instant,
     wait_timer: Instant,
+    last_request_at: Instant,
 }
 
 impl Deref for Stats {
@@ -46,11 +47,12 @@ impl Stats {
             transaction_timer: now,
             query_timer: now,
             wait_timer: now,
+            last_request_at: now,
         }
     }
 
-    pub(super) fn transaction(&mut self, two_pc: bool) {
-        self.last_transaction_time = self.transaction_timer.elapsed();
+    pub(super) fn transaction(&mut self, two_pc: bool, now: Instant) {
+        self.last_transaction_time = now.duration_since(self.transaction_timer);
         self.transactions += 1;
         self.inner.transaction_time += self.inner.last_transaction_time;
         if two_pc {
@@ -64,8 +66,7 @@ impl Stats {
         self.state = State::Idle;
     }
 
-    pub(super) fn query(&mut self) {
-        let now = Instant::now();
+    pub(super) fn query(&mut self, now: Instant) {
         self.queries += 1;
         self.inner.query_time += now.duration_since(self.query_timer);
         self.query_timer = now;
@@ -85,12 +86,11 @@ impl Stats {
         }
     }
 
-    pub(super) fn connected(&mut self) {
-        let now = Instant::now();
+    pub(super) fn connected(&mut self, connected_at: Instant) {
         self.state = State::Active;
-        self.transaction_timer = now;
-        self.query_timer = now;
-        self.wait_time = now.duration_since(self.wait_timer);
+        self.transaction_timer = connected_at;
+        self.query_timer = connected_at;
+        self.wait_time = connected_at.duration_since(self.wait_timer);
     }
 
     pub(super) fn locked(&mut self, lock: bool) {
@@ -113,19 +113,24 @@ impl Stats {
         }
     }
 
-    pub(super) fn received(&mut self, bytes: usize) {
+    pub(super) fn received(&mut self, bytes: usize, request_start: Instant) {
         self.bytes_received += bytes;
         // In session mode, we stay connected to the server
         // until client disconnects, so we need to reset timers every time
         // client is activated from idle state.
         if self.state == State::Idle {
-            let now = Instant::now();
-            self.transaction_timer = now;
-            self.query_timer = now;
-            self.last_request = SystemTime::now();
+            self.transaction_timer = request_start;
+            self.query_timer = request_start;
+            self.last_request_at = request_start;
         }
 
         self.state = State::Active;
+    }
+
+    pub(crate) fn last_request(&self) -> SystemTime {
+        SystemTime::now()
+            .checked_sub(self.last_request_at.elapsed())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
     }
 
     /// Number of prepared statements currently in the cache.

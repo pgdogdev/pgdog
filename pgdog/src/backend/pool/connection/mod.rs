@@ -2,6 +2,7 @@
 
 use futures::future::try_join_all;
 use tokio::select;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -457,6 +458,10 @@ impl Connection {
     /// We are done and can disconnect from this server.
     pub(crate) fn done(&self) -> bool {
         self.binding.done() && !self.binding.is_locked()
+    }
+
+    pub(crate) fn take_last_query_exec_time(&mut self) -> Option<Instant> {
+        self.binding.take_last_query_exec_time()
     }
 
     /// Lock this connection to the client, preventing it's

@@ -149,7 +149,8 @@ impl QueryEngine {
             return Ok(result);
         }
 
-        self.stats.received(client_request.total_message_len());
+        self.stats
+            .received(client_request.total_message_len(), context.query_start);
         self.set_state(State::Active); // Client is active.
 
         if self.discard_until_sync(client_request) {

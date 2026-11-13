@@ -11,7 +11,7 @@ pub(crate) mod time;
 pub(crate) use pgdog_util::format_bytes;
 pub(crate) use time::{
     format_time, human_duration, human_duration_display, millis, postgres_now, safe_interval,
-    safe_sleep, safe_timeout,
+    safe_sleep, safe_timeout, safe_timeout_from,
 };
 
 use futures::future::Either;

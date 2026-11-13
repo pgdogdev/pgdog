@@ -175,8 +175,9 @@ impl<'a> SubqueryMulti<'a> {
             ])
         };
 
+        let timestamps = context.timestamps();
         let cluster = engine.backend.cluster()?;
-        let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
+        let ast_ctx = AstContext::from_cluster(cluster, context.params, timestamps);
 
         let query = crate::frontend::BufferedQuery::Query(Query::new(&query_string));
         let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;

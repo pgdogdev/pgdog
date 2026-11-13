@@ -15,7 +15,7 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         context.transaction = Some(Transaction::started_at(
             transaction_type,
-            context.statement_start,
+            context.statement_start.time(),
         ));
         context.params.begin();
 

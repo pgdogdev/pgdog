@@ -113,6 +113,22 @@ where
     }
 }
 
+/// [`safe_timeout`] that counts the timeout from `start` instead of reading the clock.
+/// We use this when we already read the clock for the request.
+pub(crate) fn safe_timeout_from<F>(
+    start: tokio::time::Instant,
+    duration: Duration,
+    future: F,
+) -> impl Future<Output = Result<F::Output, tokio::time::error::Elapsed>>
+where
+    F: Future,
+{
+    match armable(Some(duration)).and_then(|duration| start.checked_add(duration)) {
+        Some(deadline) => Either::Left(tokio::time::timeout_at(deadline, future)),
+        None => Either::Right(future.map(Ok)),
+    }
+}
+
 /// [`tokio::time::sleep`] that waits forever instead of arming a timer
 /// outside [`MAX_DURATION`].
 pub(crate) async fn safe_sleep(duration: Duration) {

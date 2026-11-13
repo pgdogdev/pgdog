@@ -29,7 +29,7 @@ impl QueryEngine {
                         }
                         _ => TransactionType::ErrorReadWrite,
                     },
-                    context.statement_start,
+                    context.statement_start.time(),
                 ));
                 self.error_response(
                     context,

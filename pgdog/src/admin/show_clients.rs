@@ -94,7 +94,7 @@ impl Command for ShowClients {
                 .add("connect_time", format_time(client.connected_at))
                 .add(
                     "last_request",
-                    format_time(DateTime::from(client.stats.last_request)),
+                    format_time(DateTime::from(client.stats.last_request())),
                 )
                 .add("queries", client.stats.queries)
                 .add("transactions", client.stats.transactions)

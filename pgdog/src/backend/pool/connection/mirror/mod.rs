@@ -13,7 +13,7 @@ use crate::backend::Cluster;
 use crate::config::{ConfigAndUsers, config};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
-use crate::frontend::client::transaction_type::Transaction;
+use crate::frontend::client::transaction_type::{StatementStart, Transaction};
 use crate::frontend::{ClientComms, PreparedStatements};
 use crate::net::{FrontendPid, Parameter, Parameters, Stream};
 use crate::parameters::ParameterStore;
@@ -47,6 +47,7 @@ pub(crate) struct Mirror {
     pub(crate) stream: Stream,
     /// Transaction state.
     pub(crate) transaction: Option<Transaction>,
+    pub(crate) statement_start: StatementStart,
 }
 
 impl Mirror {
@@ -61,6 +62,7 @@ impl Mirror {
             timeouts: Timeouts::from_config(&config.config.general),
             stream: Stream::dev_null(),
             transaction: None,
+            statement_start: StatementStart::default(),
         }
     }
 

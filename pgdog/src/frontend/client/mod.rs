@@ -8,9 +8,9 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
+use tokio::time::Instant;
 use tokio::{select, spawn};
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
@@ -42,7 +42,7 @@ pub(crate) mod transaction_type;
 
 use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
-pub(crate) use transaction_type::{QueryTimestamps, Transaction, TransactionType};
+pub(crate) use transaction_type::{QueryTimestamps, StatementStart, Transaction, TransactionType};
 
 /// PostgreSQL client.
 ///
@@ -96,7 +96,8 @@ pub(crate) struct Client {
     /// Maximum query message size before a warning is logged.
     query_size_limit: Option<usize>,
     /// When we received the first message of the current request.
-    statement_start: DateTime<Utc>,
+    request_start: Instant,
+    statement_start: StatementStart,
 }
 
 /// Inputs to the per-user client certificate check.
@@ -472,7 +473,8 @@ impl Client {
             database,
             query_log_stdout: false,
             query_size_limit: None,
-            statement_start: Utc::now(),
+            request_start: Instant::now(),
+            statement_start: StatementStart::default(),
         }))
     }
 
@@ -512,7 +514,8 @@ impl Client {
             database: "pgdog".to_string(),
             query_log_stdout: false,
             query_size_limit: None,
-            statement_start: Utc::now(),
+            request_start: Instant::now(),
+            statement_start: StatementStart::default(),
         }
     }
 
@@ -658,10 +661,12 @@ impl Client {
             QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
                 if extended {
-                    self.transaction.get_or_insert(Transaction::started_at(
-                        TransactionType::Implicit,
-                        self.statement_start,
-                    ));
+                    self.transaction.get_or_insert_with(|| {
+                        Transaction::started_at(
+                            TransactionType::Implicit,
+                            self.statement_start.time(),
+                        )
+                    });
                 }
 
                 while let Some(mut request) = requests.next() {
@@ -677,6 +682,10 @@ impl Client {
                             self.transaction = transaction;
                         }
                         _ => panic!("query engine cannot split requests twice"),
+                    }
+
+                    if requests.len() > 0 {
+                        self.request_start = Instant::now();
                     }
                 }
             }
@@ -734,7 +743,8 @@ impl Client {
 
             if !has_set_time {
                 has_set_time = true;
-                self.statement_start = Utc::now();
+                self.request_start = Instant::now();
+                self.statement_start.reset();
             }
 
             // Terminate (B & F).
@@ -747,11 +757,11 @@ impl Client {
         }
 
         if enabled!(LogLevel::DEBUG) {
-            let elapsed_time = Utc::now() - self.statement_start;
+            let elapsed_time = self.request_start.elapsed();
             if !enabled!(LogLevel::TRACE) {
                 debug!(
                     "request buffered [{:.4}ms] {:?}",
-                    elapsed_time.as_seconds_f64() * 1000.0,
+                    elapsed_time.as_secs_f64() * 1000.0,
                     self.client_request
                         .messages
                         .iter()
@@ -761,7 +771,7 @@ impl Client {
             } else {
                 trace!(
                     "request buffered [{:.4}ms]\n{:#?}",
-                    elapsed_time.as_seconds_f64() * 1000.0,
+                    elapsed_time.as_secs_f64() * 1000.0,
                     self.client_request,
                 );
             }

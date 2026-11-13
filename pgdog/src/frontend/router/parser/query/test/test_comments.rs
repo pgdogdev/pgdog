@@ -1,3 +1,5 @@
+use tokio::time::Instant;
+
 use crate::{backend::pool::Request, frontend::router::parser::Shard};
 
 use super::setup::*;
@@ -19,7 +21,7 @@ fn test_comment_pgdog_lsn() {
         let command = test.execute(vec![Query::new(sql).into()]);
         let route = command.route();
         assert_eq!(route.lsn, expected, "{sql}");
-        let request = Request::new(Default::default(), route, false);
+        let request = Request::new(Default::default(), route, false, Instant::now());
         assert_eq!(request.lsn, expected, "{sql}");
     }
 }

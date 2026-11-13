@@ -12,6 +12,7 @@ use crate::{
 };
 
 use futures::future::join_all;
+use tokio::time::Instant;
 
 use super::*;
 use crate::util::safe_sleep;
@@ -223,6 +224,17 @@ impl Binding {
         match self {
             Binding::MultiShard(servers) => servers.connected_shards().next(),
             _ => None,
+        }
+    }
+
+    pub(crate) fn take_last_query_exec_time(&mut self) -> Option<Instant> {
+        match self {
+            Binding::Direct(direct) => direct.server.take_last_query_exec_time(),
+            Binding::MultiShard(servers) => servers
+                .iter_mut()
+                .filter_map(|server| server.take_last_query_exec_time())
+                .max(),
+            Binding::Transaction(_) | Binding::Admin(_) | Binding::NotConnected => None,
         }
     }
 

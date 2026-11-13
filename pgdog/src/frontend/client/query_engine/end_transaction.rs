@@ -1,3 +1,5 @@
+use tokio::time::Instant;
+
 use crate::net::NoticeResponse;
 
 use super::fake::{FakeCommand, FakeResponse};
@@ -56,8 +58,9 @@ impl QueryEngine {
             self.backend.execute("ROLLBACK").await?;
 
             // Update stats.
-            self.stats.query();
-            self.stats.transaction(true);
+            let now = Instant::now();
+            self.stats.query(now);
+            self.stats.transaction(true, now);
 
             // Disconnect from servers.
             self.cleanup_backend(context).await?;
@@ -82,8 +85,9 @@ impl QueryEngine {
             self.end_two_pc(false).await?;
 
             // Update stats.
-            self.stats.query();
-            self.stats.transaction(true);
+            let now = Instant::now();
+            self.stats.query(now);
+            self.stats.transaction(true, now);
 
             // Disconnect from servers.
             self.cleanup_backend(context).await?;
