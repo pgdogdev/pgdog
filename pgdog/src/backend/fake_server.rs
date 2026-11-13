@@ -181,7 +181,7 @@ impl Reply {
                 let columns = select_columns(select);
                 let row_count = if reads_catalog(select) {
                     0
-                } else if returns_one_row(select) {
+                } else if returns_one_row(select) || select.from_clause().is_empty() {
                     1
                 } else {
                     limit_count(select)

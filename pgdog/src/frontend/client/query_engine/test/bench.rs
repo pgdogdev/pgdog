@@ -33,7 +33,7 @@ use pgdog_config::{DataType, ShardedTableConfig};
 use super::prelude::*;
 use crate::backend::databases::{databases, reload_from_existing};
 use crate::backend::fake_server;
-use crate::config::{config, load_test_sharded, set};
+use crate::config::{config, load_test, load_test_sharded, set};
 use crate::frontend::router::parser::Cache;
 
 struct Case(&'static str, &'static str);
@@ -49,6 +49,8 @@ impl Case {
         self.1
     }
 }
+
+const POOLER_CASES: &[Case] = &[Case("select_1", "SELECT 1")];
 
 const CASES: &[Case] = &[
     Case("select_by_key", "SELECT * FROM sharded WHERE id = 1"),
@@ -136,11 +138,34 @@ enum Scope {
     Full,
 }
 
+#[derive(Clone, Copy)]
+enum BenchConfig {
+    Sharded,
+    Pooler,
+}
+
+impl BenchConfig {
+    fn load(self) {
+        match self {
+            Self::Sharded => bench_config(),
+            Self::Pooler => pooler_config(),
+        }
+    }
+
+    fn cases(self) -> &'static [Case] {
+        match self {
+            Self::Sharded => CASES,
+            Self::Pooler => POOLER_CASES,
+        }
+    }
+}
+
 struct Group {
     name: &'static str,
     protocol: ClientProtocol,
     caches: Caches,
     scope: Scope,
+    config: BenchConfig,
 }
 
 const SIMPLE_COLD: Group = Group {
@@ -148,42 +173,56 @@ const SIMPLE_COLD: Group = Group {
     protocol: ClientProtocol::Simple,
     caches: Caches::Cold,
     scope: Scope::Route,
+    config: BenchConfig::Sharded,
 };
 const EXTENDED_COLD: Group = Group {
     name: "extended_cold",
     protocol: ClientProtocol::Unnamed,
     caches: Caches::Cold,
     scope: Scope::Route,
+    config: BenchConfig::Sharded,
 };
 const EXTENDED_CACHED: Group = Group {
     name: "extended_cached",
     protocol: ClientProtocol::Unnamed,
     caches: Caches::Warm,
     scope: Scope::Route,
+    config: BenchConfig::Sharded,
 };
 const EXTENDED_EVICTING: Group = Group {
     name: "extended_evicting",
     protocol: ClientProtocol::Unnamed,
     caches: Caches::Evicting,
     scope: Scope::Route,
+    config: BenchConfig::Sharded,
 };
 const FULL_SIMPLE: Group = Group {
     name: "full_simple",
     protocol: ClientProtocol::Simple,
     caches: Caches::Cold,
     scope: Scope::Full,
+    config: BenchConfig::Sharded,
 };
 const FULL_EXTENDED_CACHED: Group = Group {
     name: "full_extended_cached",
     protocol: ClientProtocol::Unnamed,
     caches: Caches::Warm,
     scope: Scope::Full,
+    config: BenchConfig::Sharded,
 };
 const FULL_NAMED_CACHED: Group = Group {
     name: "full_named_cached",
     protocol: ClientProtocol::Named,
     caches: Caches::Warm,
     scope: Scope::Full,
+    config: BenchConfig::Sharded,
+};
+const POOLER_SIMPLE: Group = Group {
+    name: "pooler_simple",
+    protocol: ClientProtocol::Simple,
+    caches: Caches::Cold,
+    scope: Scope::Full,
+    config: BenchConfig::Pooler,
 };
 
 const GROUPS: &[Group] = &[
@@ -194,6 +233,7 @@ const GROUPS: &[Group] = &[
     FULL_SIMPLE,
     FULL_EXTENDED_CACHED,
     FULL_NAMED_CACHED,
+    POOLER_SIMPLE,
 ];
 
 const NAMED_STATEMENT: &str = "bench";
@@ -374,6 +414,18 @@ fn bench_config() {
     reload_from_existing().unwrap();
 }
 
+fn pooler_config() {
+    load_test();
+
+    let mut config = config().deref().clone();
+    for database in &mut config.config.databases {
+        database.host = fake_server::HOST.into();
+    }
+
+    set(config).unwrap();
+    reload_from_existing().unwrap();
+}
+
 fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -381,7 +433,7 @@ fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
         .unwrap();
 
     let _guard = rt.enter();
-    bench_config();
+    group.config.load();
 
     let runner = RefCell::new(rt.block_on(Runner::new(case, group)));
 
@@ -439,6 +491,14 @@ fn full_named_cached(bencher: divan::Bencher, case: &Case) {
     std::hint::black_box(());
 }
 
+// Mimics our `pooler` end-to-end benchmark.
+#[divan::bench(args = POOLER_CASES, sample_count = 1000)]
+#[inline(never)]
+fn pooler_simple(bencher: divan::Bencher, case: &Case) {
+    bench(bencher, case, &POOLER_SIMPLE);
+    std::hint::black_box(());
+}
+
 #[test]
 #[cfg(all(feature = "bench", target_os = "linux"))]
 fn count_instructions() {
@@ -456,8 +516,8 @@ fn count_instructions() {
     let module = module_path!().trim_start_matches("pgdog::");
 
     for group in GROUPS {
-        for case in CASES {
-            bench_config();
+        for case in group.config.cases() {
+            group.config.load();
             let mut runner = rt.block_on(Runner::new(case, group));
 
             for _ in 0..WARMUP {
@@ -495,8 +555,8 @@ fn count_instructions() {
 #[tokio::test]
 async fn test_bench_groups() {
     for group in GROUPS {
-        for case in CASES {
-            bench_config();
+        for case in group.config.cases() {
+            group.config.load();
             let mut runner = Runner::new(case, group).await;
             let mut input = runner.input();
             let ok = Box::pin(runner.request(&mut input)).await;
