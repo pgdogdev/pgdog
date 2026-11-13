@@ -12,10 +12,10 @@ default-run = "pgdog"
 
 [features]
 fips = ["tokio-rustls/fips"]
-bench = []
+bench = ["foldhash"]
 
 [dependencies]
-foldhash = { version = "0.2", default-features = false }
+foldhash = { version = "0.2", default-features = false, optional = true  }
 bon.workspace = true
 pin-project = "1"
 tokio.workspace = true
