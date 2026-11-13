@@ -2,6 +2,7 @@ use super::*;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::{AstContext, Cache};
 use crate::net::ProtocolMessage;
+use crate::parameters::KnownParameter;
 
 impl QueryEngine {
     /// Rewrite extended protocol messages.
@@ -59,7 +60,7 @@ impl QueryEngine {
         let cluster = self.backend.cluster()?;
         let timezone = context
             .params
-            .get("timezone")
+            .get_known(KnownParameter::TimeZone)
             .or_else(|| cluster.default_timezone());
 
         let mut rewrite_result = ast

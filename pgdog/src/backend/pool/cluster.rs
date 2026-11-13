@@ -25,6 +25,7 @@ use crate::{
         bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid,
         parameter::ParameterValue,
     },
+    parameters::KnownParameter,
 };
 
 use super::{
@@ -510,7 +511,7 @@ impl Cluster {
         self.shards
             .iter()
             .flat_map(|shard| shard.pool_iter())
-            .find_map(|pool| pool.cached_params()?.get("TimeZone"))
+            .find_map(|pool| pool.cached_params()?.get_known(KnownParameter::TimeZone))
     }
 
     pub(crate) fn passwords(&self) -> &[PasswordKind] {

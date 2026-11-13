@@ -86,7 +86,7 @@ impl QueryEngine {
         let result = tokio::select! {
             result = safe_timeout(
                 query_timeout,
-                self.client_server_exchange(context, client_request, query_planner),
+                Box::pin(self.client_server_exchange(context, client_request, query_planner)),
             ) => {
                 result
             }

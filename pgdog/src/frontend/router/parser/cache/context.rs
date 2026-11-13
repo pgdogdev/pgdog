@@ -5,7 +5,7 @@ use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
 use crate::frontend::BufferedQuery;
 use crate::frontend::client::QueryTimestamps;
-use crate::parameters::{ParameterStore, ParameterValue};
+use crate::parameters::{KnownParameter, ParameterStore, ParameterValue};
 
 /// Context for AST parsing and rewriting.
 #[derive(Debug)]
@@ -35,9 +35,9 @@ impl<'a> AstContext<'a> {
             sharding_schema: cluster.sharding_schema(),
             db_schema: cluster.loaded_schema(),
             user: cluster.user(),
-            search_path: params.get("search_path"),
+            search_path: params.get_known(KnownParameter::SearchPath),
             timezone: params
-                .get("timezone")
+                .get_known(KnownParameter::TimeZone)
                 .or_else(|| cluster.default_timezone()),
             query_timestamps,
         }

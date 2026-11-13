@@ -12,12 +12,15 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 
-use super::{ParameterName, ParameterNameRef, ParameterValue, hash_parameters, is_untracked};
+use super::{
+    KnownParameter, ParameterName, ParameterNameRef, ParameterValue, hash_parameters, is_untracked,
+};
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct Parameters {
     parameters: BTreeMap<ParameterName, ParameterValue>,
     hash: u64,
+    known: [Option<ParameterValue>; KnownParameter::ALL.len()],
 }
 /// Parameters we return to admin clients to make this seem
 /// like a legitimate PostgreSQL connection.
@@ -64,6 +67,10 @@ impl Parameters {
         }
     }
 
+    pub(crate) fn get_known(&self, known: KnownParameter) -> Option<&ParameterValue> {
+        self.known[known.index()].as_ref()
+    }
+
     /// Look up a parameter by name without allocating.
     pub(crate) fn get(&self, name: impl AsRef<str>) -> Option<&ParameterValue> {
         self.parameters.get(ParameterNameRef::new(name.as_ref()))
@@ -104,9 +111,13 @@ impl Parameters {
             .into_iter()
             .map(|(name, value)| (ParameterName::new(name), value))
             .collect();
-        let hash = hash_parameters(parameters.iter());
+        let mut parameters = Self {
+            parameters,
+            ..Default::default()
+        };
+        parameters.update_derived();
 
-        Self { parameters, hash }
+        parameters
     }
 
     /// Insert a parameter into the store, returning previous value if
@@ -118,14 +129,14 @@ impl Parameters {
     ) -> Option<ParameterValue> {
         let name = ParameterName::new(name.as_ref());
         let existing = self.parameters.insert(name, value.into());
-        self.hash = hash_parameters(self.parameters.iter());
+        self.update_derived();
         existing
     }
 
     /// Remove a parameter from the store, recomputing the hash if necessary.
     pub(crate) fn remove(&mut self, name: impl AsRef<str>) -> Option<ParameterValue> {
         if let Some(exists) = self.parameters.remove(ParameterNameRef::new(name.as_ref())) {
-            self.hash = hash_parameters(self.parameters.iter());
+            self.update_derived();
             Some(exists)
         } else {
             None
@@ -137,7 +148,7 @@ impl Parameters {
         for name in names.into_iter() {
             self.parameters.remove(ParameterNameRef::new(name));
         }
-        self.hash = hash_parameters(self.parameters.iter());
+        self.update_derived();
     }
 
     /// Compare hashes to quickly check if the two parameter stores
@@ -153,13 +164,25 @@ impl Parameters {
     pub(crate) fn clear(&mut self) {
         self.parameters.clear();
         self.hash = 0;
+        self.known = Default::default();
     }
 
     /// Copy parameters from other into self, recomputing the hash.
     pub(super) fn extend(&mut self, other: Self) {
         if !other.parameters.is_empty() {
             self.parameters.extend(other.parameters);
-            self.hash = hash_parameters(self.parameters.iter());
+            self.update_derived();
+        }
+    }
+
+    fn update_derived(&mut self) {
+        self.hash = hash_parameters(self.parameters.iter());
+
+        for known in KnownParameter::ALL {
+            self.known[known.index()] = self
+                .parameters
+                .get(ParameterNameRef::new(known.name()))
+                .cloned();
         }
     }
 
@@ -175,7 +198,7 @@ impl Parameters {
     /// recomputing the hash.
     pub(super) fn restore_from(&mut self, other: &Self) {
         self.parameters.clone_from(&other.parameters);
-        self.hash = hash_parameters(self.parameters.iter());
+        self.update_derived();
     }
 }
 

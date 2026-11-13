@@ -65,6 +65,16 @@ impl ParameterStore {
         self.params.clear();
     }
 
+    pub(crate) fn get_known_default<'a>(
+        &'a self,
+        known: KnownParameter,
+        default: &'a str,
+    ) -> &'a str {
+        self.get_known(known)
+            .and_then(ParameterValue::as_str)
+            .unwrap_or(default)
+    }
+
     pub(crate) fn get_default<'a>(&'a self, name: &str, default: &'a str) -> &'a str {
         self.get(name)
             .and_then(ParameterValue::as_str)
@@ -77,7 +87,7 @@ impl ParameterStore {
     }
 
     pub(crate) fn search_path(&self) -> Option<&ParameterValue> {
-        self.get("search_path")
+        self.get_known(KnownParameter::SearchPath)
     }
 
     /// Commit parameters to store after a transaction is complete.
@@ -166,6 +176,13 @@ impl ParameterStore {
 
         self.transaction_local_params.clear();
         self.transaction_params.clear();
+    }
+
+    pub(crate) fn get_known(&self, known: KnownParameter) -> Option<&ParameterValue> {
+        self.transaction_local_params
+            .get_known(known)
+            .or_else(|| self.transaction_params.get_known(known))
+            .or_else(|| self.params.get_known(known))
     }
 
     /// Get a parameter value from the store, respecting transactional semantics.
