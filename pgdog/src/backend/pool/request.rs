@@ -26,10 +26,15 @@ pub(crate) struct Request {
 
 impl Request {
     /// Create new request for client given a query route.
-    pub(crate) fn new(id: FrontendPid, route: &Route, read_only: bool) -> Self {
+    pub(crate) fn new(
+        id: FrontendPid,
+        route: &Route,
+        read_only: bool,
+        created_at: Instant,
+    ) -> Self {
         Self {
             id,
-            created_at: Instant::now(),
+            created_at,
             read: route.is_read(),
             lsn: route.lsn,
             read_only,

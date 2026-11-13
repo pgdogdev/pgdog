@@ -83,6 +83,23 @@ impl QueryTimestamps {
     }
 }
 
+/// Wrapper around an Option to de-duplicate logic of fetching the current time, if it hasn't been fetched,
+/// or if not, re-use it.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct StatementStart {
+    time: Option<DateTime<Utc>>,
+}
+
+impl StatementStart {
+    pub(crate) fn reset(&mut self) {
+        self.time = None;
+    }
+
+    pub(crate) fn time(&mut self) -> DateTime<Utc> {
+        *self.time.get_or_insert_with(Utc::now)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum TransactionType {
     ReadOnly,

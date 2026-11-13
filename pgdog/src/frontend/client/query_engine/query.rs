@@ -11,9 +11,10 @@ use crate::{
         RowDescription, ToBytes, TransactionState,
     },
     state::State,
-    util::safe_timeout,
+    util::safe_timeout_from,
 };
 
+use tokio::time::Instant;
 use tracing::{debug, error};
 
 use super::hooks::schema::schema_changed;
@@ -84,7 +85,8 @@ impl QueryEngine {
         let query_timeout = context.timeouts.query_timeout(&State::Active);
 
         let result = tokio::select! {
-            result = safe_timeout(
+            result = safe_timeout_from(
+                context.query_start,
                 query_timeout,
                 Box::pin(self.client_server_exchange(context, client_request, query_planner)),
             ) => {
@@ -317,8 +319,14 @@ impl QueryEngine {
         state: TransactionState,
         message: &mut Message,
     ) -> Result<(), Error> {
+        let now = self
+            .backend
+            .take_last_query_exec_time()
+            .filter(|ready_for_query_at| *ready_for_query_at >= context.query_start)
+            .unwrap_or_else(Instant::now);
+
         self.pending_explain = None;
-        self.stats.query();
+        self.stats.query(now);
 
         let mut two_pc_auto = false;
 
@@ -351,7 +359,7 @@ impl QueryEngine {
                     None => {
                         context.transaction = Some(Transaction::started_at(
                             TransactionType::ReadWrite,
-                            context.statement_start,
+                            context.statement_start.time(),
                         ));
                     }
 
@@ -359,14 +367,14 @@ impl QueryEngine {
                     Some(TransactionType::ErrorReadOnly) => {
                         context.transaction = Some(Transaction::started_at(
                             TransactionType::ReadOnly,
-                            context.statement_start,
+                            context.statement_start.time(),
                         ));
                     }
 
                     Some(TransactionType::ErrorReadWrite) => {
                         context.transaction = Some(Transaction::started_at(
                             TransactionType::ReadWrite,
-                            context.statement_start,
+                            context.statement_start.time(),
                         ));
                     }
 
@@ -393,7 +401,7 @@ impl QueryEngine {
         self.handle_advisory_locks(message);
 
         if !context.in_transaction() {
-            self.stats.transaction(two_pc_auto);
+            self.stats.transaction(two_pc_auto, now);
         }
 
         Ok(())

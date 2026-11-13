@@ -145,6 +145,7 @@ pub(crate) struct Server {
     re_synced: bool,
     replication_mode: bool,
     statement_executed: bool,
+    last_query_exec_time: Option<Instant>,
     sending_request: bool,
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
@@ -445,6 +446,7 @@ impl Server {
             sync_prepared: false,
             in_transaction: false,
             statement_executed: false,
+            last_query_exec_time: None,
             re_synced: false,
             sending_request: false,
             pooler_mode: PoolerMode::Transaction,
@@ -702,6 +704,7 @@ impl Server {
 
     fn handle_ready_for_query(&mut self, rfq: &ReadyForQuery) -> Result<(), Error> {
         let now = Instant::now();
+        self.last_query_exec_time = Some(now);
 
         self.stats.query(now, rfq.status == 'T');
         self.stats.memory_used(self.memory_stats());
@@ -875,6 +878,10 @@ impl Server {
     /// A statement completed since the last ReadyForQuery.
     pub(crate) fn statement_executed(&self) -> bool {
         self.statement_executed
+    }
+
+    pub(crate) fn take_last_query_exec_time(&mut self) -> Option<Instant> {
+        self.last_query_exec_time.take()
     }
 
     /// The server connection permanently failed.
@@ -1464,6 +1471,7 @@ pub(crate) mod test {
                 stream_buffer: MessageBuffer::new(4096, None),
                 disconnect_reason: None,
                 statement_executed: false,
+                last_query_exec_time: None,
                 sending_request: false,
                 password_attempts: 1,
                 max_age: None,

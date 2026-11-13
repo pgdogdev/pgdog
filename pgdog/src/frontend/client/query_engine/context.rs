@@ -5,13 +5,13 @@ use crate::{
         client::{
             Sticky,
             timeouts::Timeouts,
-            transaction_type::{QueryTimestamps, Transaction},
+            transaction_type::{QueryTimestamps, StatementStart, Transaction},
         },
     },
     net::{FrontendPid, Stream},
     parameters::ParameterStore,
 };
-use chrono::{DateTime, Utc};
+use tokio::time::Instant;
 
 use super::split::Pipeline;
 
@@ -45,8 +45,8 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
     pub(super) query_size_limit: Option<usize>,
-    /// When we received the first message of the request.
-    pub(super) statement_start: DateTime<Utc>,
+    pub(super) query_start: Instant,
+    pub(super) statement_start: &'a mut StatementStart,
 
     /// Is there a subquery in the pipeline that was
     /// originally from the simple protocol?
@@ -74,7 +74,8 @@ impl<'a> QueryEngineContext<'a> {
                 sticky: client.sticky,
                 query_log_stdout: client.query_log_stdout,
                 query_size_limit: client.query_size_limit,
-                statement_start: client.statement_start,
+                query_start: client.request_start,
+                statement_start: &mut client.statement_start,
                 drop_extended_parse_and_bind: false,
             },
             &mut client.client_request,
@@ -90,6 +91,8 @@ impl<'a> QueryEngineContext<'a> {
 
     /// Create context from mirror.
     pub(crate) fn new_mirror(mirror: &'a mut Mirror) -> Self {
+        mirror.statement_start.reset();
+
         Self {
             id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
@@ -105,7 +108,8 @@ impl<'a> QueryEngineContext<'a> {
             sticky: Sticky::new(),
             query_log_stdout: false,
             query_size_limit: None,
-            statement_start: Utc::now(),
+            query_start: Instant::now(),
+            statement_start: &mut mirror.statement_start,
             drop_extended_parse_and_bind: false,
         }
     }
@@ -115,8 +119,8 @@ impl<'a> QueryEngineContext<'a> {
     }
 
     /// Request itself can start a transaction, so this is computed "on demand"
-    pub(crate) fn timestamps(&self) -> QueryTimestamps {
-        QueryTimestamps::new(self.transaction.as_ref(), self.statement_start)
+    pub(crate) fn timestamps(&mut self) -> QueryTimestamps {
+        QueryTimestamps::new(self.transaction.as_ref(), self.statement_start.time())
     }
 
     pub(crate) fn in_transaction(&self) -> bool {

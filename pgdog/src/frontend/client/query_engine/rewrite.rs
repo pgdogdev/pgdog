@@ -39,8 +39,9 @@ impl QueryEngine {
         }
 
         if let Some(query) = client_request.query()? {
+            let timestamps = context.timestamps();
             let cluster = self.backend.cluster()?;
-            let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
+            let ast_ctx = AstContext::from_cluster(cluster, context.params, timestamps);
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
             client_request.ast = Some(ast.ast);
             client_request.cached = ast.cached;
@@ -57,6 +58,7 @@ impl QueryEngine {
         let Some(ast) = client_request.ast.take() else {
             return Ok(None);
         };
+        let timestamps = context.timestamps();
         let cluster = self.backend.cluster()?;
         let timezone = context
             .params
@@ -65,7 +67,7 @@ impl QueryEngine {
 
         let mut rewrite_result = ast
             .rewrite_plan
-            .apply(client_request, timezone, context.timestamps())
+            .apply(client_request, timezone, timestamps)
             .await?;
         client_request.ast = Some(ast);
 

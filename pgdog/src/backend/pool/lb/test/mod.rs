@@ -454,7 +454,7 @@ async fn test_lsn_filtering() {
 
         let mut route = Route::read(ShardWithPriority::default());
         route.lsn = Some(caught_up);
-        let request = Request::new(Default::default(), &route, false);
+        let request = Request::new(Default::default(), &route, false, Instant::now());
 
         // A replica exactly at the requested LSN is eligible; the lagging one is not.
         for _ in 0..4 {
@@ -464,7 +464,7 @@ async fn test_lsn_filtering() {
 
         // Fall back to primary when every replica is behind the requested LSN.
         route.lsn = Some(ahead);
-        let request = Request::new(Default::default(), &route, false);
+        let request = Request::new(Default::default(), &route, false, Instant::now());
         let conn = replicas.get(&request).await.expect("primary fallback");
         assert_eq!(conn.pool.id(), primary_id);
     }
@@ -494,7 +494,7 @@ async fn test_include_primary_if_replica_lag() {
         let mut route = Route::read(ShardWithPriority::default());
         for lsn in [None, Some(200), Some(201)] {
             route.lsn = lsn;
-            let request = Request::new(Default::default(), &route, read_only);
+            let request = Request::new(Default::default(), &route, read_only, Instant::now());
 
             // Round robin must never select the primary while an eligible replica exists.
             for _ in 0..4 {
@@ -539,6 +539,7 @@ async fn test_user_read_only_include_primary() {
         Default::default(),
         &Route::read(ShardWithPriority::default()),
         true,
+        Instant::now(),
     );
 
     // Try getting connections multiple times and verify primary is never used
@@ -588,6 +589,7 @@ async fn test_user_read_only_include_primary_no_replicas() {
         Default::default(),
         &Route::read(ShardWithPriority::default()),
         true,
+        Instant::now(),
     );
 
     // Should only use primary since replica is banned

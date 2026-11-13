@@ -1,8 +1,13 @@
-use crate::util::safe_timeout;
+use futures::poll;
+use std::pin::pin;
+use std::task::Poll;
+
+use tokio::time::Instant;
+use tracing::error;
+
+use crate::util::safe_timeout_from;
 
 use super::*;
-
-use tracing::error;
 
 impl QueryEngine {
     /// Connect to backend, if necessary.
@@ -29,20 +34,33 @@ impl QueryEngine {
         // Pass through the cluster's `read_only` flag (propagated from `User.read_only`)
         // to determine if we should exclude the primary from being allowed to read.
         let read_only = self.backend.cluster()?.read_only();
-        let request = Request::new(context.id, connect_route, read_only);
+        let request = Request::new(context.id, connect_route, read_only, context.query_start);
 
         self.stats.waiting(request.created_at);
         self.comms.update_stats(self.stats);
 
-        let connected = match self.backend.connect(&request, connect_route).await {
+        // If the pool hands out a connection right away, we reuse the start of the request.
+        // We only read the clock if the checkout waited.
+        let (connect_result, connected_at) = {
+            let mut connect = pin!(self.backend.connect(&request, connect_route));
+
+            match poll!(connect.as_mut()) {
+                Poll::Ready(connect_result) => (connect_result, request.created_at),
+                Poll::Pending => (connect.await, Instant::now()),
+            }
+        };
+
+        let connected = match connect_result {
             Ok(_) => {
-                self.stats.connected();
+                self.stats.connected(connected_at);
+                context.query_start = connected_at;
                 self.debug_connected(connect_route, false);
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
 
                 // We may need to sync params with the server and that reads from the socket.
-                safe_timeout(
+                safe_timeout_from(
+                    connected_at,
                     query_timeout,
                     self.backend.link_client(context.id, context.params),
                 )

@@ -4,7 +4,6 @@ use crate::{MemoryStats, state::State};
 
 use std::ops::Add;
 use std::time::Duration;
-use std::time::SystemTime;
 
 /// Client statistics.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -31,8 +30,6 @@ pub struct Stats {
     pub wait_time: Duration,
     /// Current client state.
     pub state: State,
-    /// Last time this client sent a query.
-    pub last_request: SystemTime,
     /// Number of bytes used by the stream buffer, where all the messages
     /// are stored until they are processed.
     pub memory_stats: MemoryStats,
@@ -62,7 +59,6 @@ impl Stats {
             query_time: Duration::from_secs(0),
             wait_time: Duration::from_secs(0),
             state: State::Idle,
-            last_request: SystemTime::now(),
             memory_stats: MemoryStats::default(),
             prepared_statements: 0,
             locked: false,
@@ -86,7 +82,6 @@ impl Add for Stats {
             query_time: self.query_time.saturating_add(rhs.query_time),
             wait_time: self.wait_time.saturating_add(rhs.wait_time),
             state: rhs.state, // Not summed
-            last_request: self.last_request.max(rhs.last_request),
             memory_stats: self.memory_stats + rhs.memory_stats,
             prepared_statements: self.prepared_statements + rhs.prepared_statements,
             locked: rhs.locked, // Not summed either
