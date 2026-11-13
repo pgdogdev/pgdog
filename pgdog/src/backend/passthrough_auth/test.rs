@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use pgdog_config::{
     Config, ConfigAndUsers, Database, General, LoadSchema, PassthroughAuth, Role, User, Users,
+    users::PassthroughUser,
 };
 
 use crate::auth::AuthResult;
@@ -11,6 +12,7 @@ use crate::config::{config, set};
 use super::{check_or_add, restore_after_reload};
 
 fn setup(passthrough_auth: PassthroughAuth, users: Vec<User>) {
+    super::check_db::reset();
     // Use the same PostgreSQL fixture as the backend server and pool tests:
     // pgdog:pgdog at 127.0.0.1:5432/pgdog, with password authentication enabled.
     // PGDOG_TEST_PG_PORT can select an isolated PostgreSQL instance when the
@@ -61,6 +63,14 @@ fn user(password: Option<&str>) -> User {
     }
 }
 
+fn passthrough_user(password: &str) -> PassthroughUser {
+    PassthroughUser {
+        name: "pgdog".to_owned(),
+        database: "pgdog".to_owned(),
+        password: password.to_owned(),
+    }
+}
+
 #[tokio::test]
 async fn cached_password_skips_database_validation_and_reload() {
     for mode in [
@@ -75,7 +85,7 @@ async fn cached_password_skips_database_validation_and_reload() {
         let before = config();
         let pools = databases::databases();
 
-        let result = check_or_add(user(Some("cached_password")))
+        let result = check_or_add(passthrough_user("cached_password"))
             .await
             .expect("authenticate");
 
@@ -91,7 +101,7 @@ async fn disallowed_password_change_is_rejected_without_database_validation() {
         setup(mode, vec![user(Some("pgdog"))]);
         let before = config();
 
-        let result = check_or_add(user(Some("wrong")))
+        let result = check_or_add(passthrough_user("wrong"))
             .await
             .expect("authenticate");
 
@@ -105,13 +115,13 @@ async fn new_user_requires_database_validation() {
     setup(PassthroughAuth::EnabledPlain, vec![]);
     let before = config();
 
-    let result = check_or_add(user(Some("wrong")))
+    let result = check_or_add(passthrough_user("wrong"))
         .await
         .expect("authenticate");
 
-    assert_eq!(result, AuthResult::NoPassthroughDatabaseCheck);
+    assert_eq!(result, AuthResult::NoPasswordMatch);
     assert!(Arc::ptr_eq(&before, &config()));
-    assert!(config().users.find(&user(None)).is_none());
+    assert!(config().users.find(&passthrough_user("")).is_none());
 }
 
 #[tokio::test]
@@ -119,13 +129,13 @@ async fn initial_password_requires_database_validation() {
     setup(PassthroughAuth::EnabledPlain, vec![user(None)]);
     let before = config();
 
-    let result = check_or_add(user(Some("wrong")))
+    let result = check_or_add(passthrough_user("wrong"))
         .await
         .expect("authenticate");
 
-    assert_eq!(result, AuthResult::NoPassthroughDatabaseCheck);
+    assert_eq!(result, AuthResult::NoPasswordMatch);
     assert!(Arc::ptr_eq(&before, &config()));
-    assert_eq!(config().users.find(&user(None)), Some(user(None)));
+    assert_eq!(config().users.find(&passthrough_user("")), Some(user(None)));
 }
 
 #[tokio::test]
@@ -137,17 +147,16 @@ async fn allowed_password_change_requires_database_validation() {
         setup(mode.clone(), vec![user(Some("pgdog"))]);
         let before = config();
 
-        let result = check_or_add(user(Some("wrong")))
+        let result = check_or_add(passthrough_user("wrong"))
             .await
             .expect("authenticate");
 
-        assert_eq!(
-            result,
-            AuthResult::NoPassthroughDatabaseCheck,
-            "mode: {mode:?}"
-        );
+        assert_eq!(result, AuthResult::NoPasswordMatch, "mode: {mode:?}");
         assert!(Arc::ptr_eq(&before, &config()));
-        assert_eq!(config().users.find(&user(None)), Some(user(Some("pgdog"))));
+        assert_eq!(
+            config().users.find(&passthrough_user("")),
+            Some(user(Some("pgdog")))
+        );
     }
 }
 
@@ -160,18 +169,18 @@ async fn cached_password_is_scoped_to_user_and_database() {
     let before = config();
 
     for candidate in [
-        User {
+        PassthroughUser {
             name: "pgdog_passthrough_missing_user".to_owned(),
-            ..user(Some("cached_password"))
+            ..passthrough_user("cached_password")
         },
-        User {
+        PassthroughUser {
             database: "pgdog_alias".to_owned(),
-            ..user(Some("cached_password"))
+            ..passthrough_user("cached_password")
         },
     ] {
         let result = check_or_add(candidate).await.expect("authenticate");
 
-        assert_eq!(result, AuthResult::NoPassthroughDatabaseCheck);
+        assert_eq!(result, AuthResult::NoPasswordMatch);
         assert!(Arc::ptr_eq(&before, &config()));
     }
 }
@@ -179,12 +188,12 @@ async fn cached_password_is_scoped_to_user_and_database() {
 #[tokio::test]
 async fn new_user_with_valid_postgres_password_is_cached() {
     setup(PassthroughAuth::EnabledPlain, vec![]);
-    let provided = user(Some("pgdog"));
+    let provided = passthrough_user("pgdog");
 
     let result = check_or_add(provided.clone()).await.expect("authenticate");
 
     assert_eq!(result, AuthResult::Ok);
-    assert_eq!(config().users.find(&provided), Some(provided));
+    assert_eq!(config().users.find(&provided), Some(provided.into()));
     assert!(databases::databases().cluster(("pgdog", "pgdog")).is_ok());
 }
 
@@ -197,7 +206,7 @@ async fn initial_valid_password_preserves_existing_user_settings() {
     };
     setup(PassthroughAuth::EnabledPlain, vec![existing.clone()]);
 
-    let result = check_or_add(user(Some("pgdog")))
+    let result = check_or_add(passthrough_user("pgdog"))
         .await
         .expect("authenticate");
 
@@ -206,7 +215,7 @@ async fn initial_valid_password_preserves_existing_user_settings() {
         password: Some("pgdog".to_owned()),
         ..existing
     };
-    assert_eq!(config().users.find(&expected), Some(expected));
+    assert_eq!(config().users.find(&passthrough_user("")), Some(expected));
 }
 
 #[tokio::test]
@@ -222,7 +231,7 @@ async fn allowed_valid_password_change_preserves_existing_user_settings() {
         };
         setup(mode, vec![existing.clone()]);
 
-        let result = check_or_add(user(Some("pgdog")))
+        let result = check_or_add(passthrough_user("pgdog"))
             .await
             .expect("authenticate");
 
@@ -231,19 +240,22 @@ async fn allowed_valid_password_change_preserves_existing_user_settings() {
             password: Some("pgdog".to_owned()),
             ..existing
         };
-        assert_eq!(config().users.find(&expected), Some(expected));
+        assert_eq!(config().users.find(&passthrough_user("")), Some(expected));
     }
 }
 
 #[tokio::test]
 async fn restore_missing_user_skips_database_validation() {
     setup(PassthroughAuth::EnabledPlain, vec![]);
-    let restored = user(Some("secret"));
+    let restored = passthrough_user("secret");
 
-    let result = restore_after_reload(restored.clone()).expect("restore user");
+    restore_after_reload(&restored).expect("restore user");
 
-    assert_eq!(result, AuthResult::Ok);
-    assert_eq!(config().users.find(&restored), Some(restored));
+    assert_eq!(
+        config().users.find(&restored),
+        Some(restored.clone().into())
+    );
+    assert!(databases::databases().passthrough_cluster_ready(&restored));
 }
 
 #[tokio::test]
@@ -252,45 +264,59 @@ async fn restore_matching_password_leaves_config_and_pools_unchanged() {
     let before = config();
     let pools = databases::databases();
 
-    let result = restore_after_reload(user(Some("secret"))).expect("restore user");
+    restore_after_reload(&passthrough_user("secret")).expect("restore user");
 
-    assert_eq!(result, AuthResult::Ok);
     assert!(Arc::ptr_eq(&before, &config()));
     assert!(Arc::ptr_eq(&pools, &databases::databases()));
 }
 
 #[tokio::test]
 async fn restore_password_preserves_existing_user_settings() {
-    for (mode, old_password) in [
-        (PassthroughAuth::EnabledPlain, None),
-        (PassthroughAuth::EnabledPlainAllowChange, Some("old")),
+    for mode in [
+        PassthroughAuth::EnabledPlain,
+        PassthroughAuth::EnabledPlainAllowChange,
     ] {
         let existing = User {
             statement_timeout: Some(100),
             pool_size: Some(7),
             server_password: Some("server_secret".to_owned()),
-            ..user(old_password)
+            ..user(None)
         };
         setup(mode, vec![existing.clone()]);
+        let restored = passthrough_user("new");
 
-        let result = restore_after_reload(user(Some("new"))).expect("restore user");
+        restore_after_reload(&restored).expect("restore user");
 
-        assert_eq!(result, AuthResult::Ok);
         let expected = User {
-            password: Some("new".to_owned()),
+            password: Some(restored.password.clone()),
             ..existing
         };
-        assert_eq!(config().users.find(&expected), Some(expected));
+        assert_eq!(config().users.find(&restored), Some(expected));
+        assert!(databases::databases().passthrough_cluster_ready(&restored));
     }
 }
 
 #[tokio::test]
-async fn restore_rejects_disallowed_password_change() {
-    setup(PassthroughAuth::EnabledPlain, vec![user(Some("secret"))]);
-    let before = config();
+async fn restore_does_not_overwrite_existing_password_even_when_changes_are_allowed() {
+    for mode in [
+        PassthroughAuth::Enabled,
+        PassthroughAuth::EnabledPlain,
+        PassthroughAuth::EnabledAllowChange,
+        PassthroughAuth::EnabledPlainAllowChange,
+    ] {
+        setup(mode, vec![user(Some("new_password"))]);
+        let before = config();
+        let pools = databases::databases();
 
-    let result = restore_after_reload(user(Some("different"))).expect("restore user");
+        // An older connection may request restoration after another client has
+        // already recreated the pool with a new password.
+        restore_after_reload(&passthrough_user("old_password")).expect("restore user");
 
-    assert_eq!(result, AuthResult::NoPassthroughPasswordChange);
-    assert!(Arc::ptr_eq(&before, &config()));
+        assert!(Arc::ptr_eq(&before, &config()));
+        assert!(Arc::ptr_eq(&pools, &databases::databases()));
+        assert_eq!(
+            config().users.find(&passthrough_user("")),
+            Some(user(Some("new_password")))
+        );
+    }
 }

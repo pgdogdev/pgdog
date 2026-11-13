@@ -11,7 +11,10 @@ use crate::{
     config::config,
     frontend::router::parser::Shard,
 };
-use pgdog_config::{PoolerMode, User, users::PasswordKind};
+use pgdog_config::{
+    PoolerMode,
+    users::{PassthroughUser, PasswordKind},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -202,35 +205,28 @@ impl ClusterConnection {
         let config = config();
         let databases = databases::databases();
 
-        let user = self.identity();
+        let identity = self.identity();
 
-        if config.config.general.passthrough_auth() && databases.passwords(user).is_none() {
-            let mut user = User {
-                name: user.0.to_string(),
-                database: user.1.to_string(),
-                ..Default::default()
+        if config.config.general.passthrough_auth()
+            && !databases.passthrough_cluster_ready(identity)
+        {
+            let user = PassthroughUser {
+                name: identity.0.to_string(),
+                database: identity.1.to_string(),
+                password: self
+                    .cluster()?
+                    .passwords()
+                    .iter()
+                    .find(|p| matches!(p, PasswordKind::Plain(_)))
+                    .expect("passthrough clusters use plain passwords")
+                    .to_string(),
             };
-
-            for pass in self.cluster()?.passwords() {
-                match pass {
-                    PasswordKind::Hashed(hashed) => {
-                        user.password_hash = Some(hashed.clone());
-                    }
-
-                    PasswordKind::Plain(plain) => {
-                        user.passwords.push(plain.clone());
-                    }
-
-                    // Vault static roles are for client auth only; skip for passthrough.
-                    PasswordKind::VaultStaticRole(_) => {}
-                }
-            }
 
             // Auth result is ignored because the user
             // has already authenticated. We could kick them
             // if the password changed, but that's not how
             // Postgres does it so we won't either.
-            passthrough_auth::restore_after_reload(user)?;
+            passthrough_auth::restore_after_reload(&user)?;
         }
 
         Ok(())

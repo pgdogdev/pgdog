@@ -1,5 +1,7 @@
 //! Databases behind pgDog.
 
+pub(crate) mod to_user;
+
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
 use indexmap::IndexMap;
@@ -7,7 +9,6 @@ use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use pgdog_config::pool::ShardNodes;
-use pgdog_config::users::PasswordKind;
 use pgdog_config::util::normalize_identifier;
 use pgdog_config::{
     AuthType, EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey,
@@ -31,12 +32,15 @@ use crate::{
     config::{ConfigAndUsers, ShardedMappingDeprecated, config, load},
     net::{messages::FrontendPid, tls},
 };
+pub(crate) use pgdog_stats::User;
 
 use super::{
     Cluster, ClusterShardConfig, Error, ShardedTables,
     pool::{Address, ClusterConfig},
     reload_notify,
 };
+
+use to_user::ToUser;
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
@@ -83,6 +87,7 @@ pub(crate) fn replace_databases(new_databases: Databases, reload: bool) -> Resul
 
 /// Re-create all connections.
 pub(crate) fn reconnect() -> Result<(), Error> {
+    let _guard = lock();
     let config = config();
     let databases = from_config(&config);
     replace_databases(databases, false)?;
@@ -95,6 +100,14 @@ pub(crate) fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
     let config = config();
     let databases = from_config(&config);
+    replace_databases(databases, true)?;
+    super::passthrough_auth::check_db::reset();
+
+    Ok(())
+}
+
+pub(crate) fn reload_from_config(config: &ConfigAndUsers) -> Result<(), Error> {
+    let databases = from_config(config);
     replace_databases(databases, true)?;
     Ok(())
 }
@@ -153,6 +166,8 @@ pub(crate) fn terminate_active_connections() {
 
 /// Re-create pools from config.
 pub(crate) fn reload(force: bool) -> Result<(), Error> {
+    let _guard = lock();
+
     if force {
         info!("force reloading configuration");
     } else {
@@ -183,6 +198,10 @@ pub(crate) fn reload(force: bool) -> Result<(), Error> {
     // Resize query cache.
     Cache::resize(new_config.config.general.query_cache_limit);
 
+    // Reset passthrough throttles, so all passthrough
+    // clients are forced to re-check their credentials.
+    super::passthrough_auth::check_db::reset();
+
     Ok(())
 }
 
@@ -212,32 +231,6 @@ pub(crate) async fn cutover(source: &str, destination: &str) -> Result<ConfigAnd
     Ok(config)
 }
 
-pub(crate) use pgdog_stats::User;
-
-/// Convert to a database/user pair.
-pub(crate) trait ToUser {
-    /// Perform the conversion.
-    fn to_user(&self) -> User;
-}
-
-impl ToUser for (&str, &str) {
-    fn to_user(&self) -> User {
-        User {
-            user: self.0.to_string(),
-            database: self.1.to_string(),
-        }
-    }
-}
-
-impl ToUser for (&str, Option<&str>) {
-    fn to_user(&self) -> User {
-        User {
-            user: self.0.to_string(),
-            database: self.1.map_or(self.0.to_string(), |d| d.to_string()),
-        }
-    }
-}
-
 /// Databases.
 #[derive(Default, Clone)]
 pub(crate) struct Databases {
@@ -247,19 +240,6 @@ pub(crate) struct Databases {
 }
 
 impl Databases {
-    /// Get the database user password, if one is configured.
-    pub(crate) fn passwords(&self, user: impl ToUser) -> Option<&[PasswordKind]> {
-        if let Some(cluster) = self.databases.get(&user.to_user()) {
-            if cluster.passwords().is_empty() {
-                None
-            } else {
-                Some(cluster.passwords())
-            }
-        } else {
-            None
-        }
-    }
-
     /// Get a configured auth type for this user, if the user exists.
     pub(crate) fn auth_type(&self, user: impl ToUser) -> Option<AuthType> {
         self.databases
@@ -274,6 +254,16 @@ impl Databases {
             Ok(cluster.clone())
         } else {
             Err(Error::NoDatabase(user.clone()))
+        }
+    }
+
+    /// Check if the cluster is configured and ready to be used.
+    pub(crate) fn passthrough_cluster_ready(&self, user: impl ToUser) -> bool {
+        let user = user.to_user();
+        if let Some(cluster) = self.databases.get(&user) {
+            !cluster.passwords().is_empty()
+        } else {
+            false
         }
     }
 

@@ -161,17 +161,36 @@ impl Users {
     /// Remove user with the same name and database.
     ///
     /// Add new user in its place.
-    pub fn add_or_replace(&mut self, user: User) {
+    pub fn add_or_replace(&mut self, user: &User) {
         self.users
             .retain(|existing| !(existing.name == user.name && existing.database == user.database));
-        self.users.push(user);
+        self.users.push(user.clone());
     }
 
-    pub fn find(&self, user: &User) -> Option<User> {
+    pub fn find(&self, user: &PassthroughUser) -> Option<User> {
         self.users
             .iter()
             .find(|existing| existing.name == user.name && existing.database == user.database)
             .cloned()
+    }
+}
+
+/// User specified via passthrough authentication.
+#[derive(Hash, Eq, PartialEq, Clone)]
+pub struct PassthroughUser {
+    pub name: String,
+    pub database: String,
+    pub password: String,
+}
+
+impl From<PassthroughUser> for User {
+    fn from(value: PassthroughUser) -> Self {
+        User {
+            name: value.name,
+            password: Some(value.password),
+            database: value.database,
+            ..Default::default()
+        }
     }
 }
 
@@ -652,7 +671,7 @@ password = "secret"
     fn test_add_or_replace_adds_new_user() {
         let mut users = Users::default();
         let user = User::new("alice", "pass", "db1");
-        users.add_or_replace(user.clone());
+        users.add_or_replace(&user);
 
         assert_eq!(users.users.len(), 1);
         assert_eq!(users.users[0], user);
@@ -661,8 +680,8 @@ password = "secret"
     #[test]
     fn test_add_or_replace_replaces_same_name_and_database() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "old_pass", "db1"));
-        users.add_or_replace(User::new("alice", "new_pass", "db1"));
+        users.add_or_replace(&User::new("alice", "old_pass", "db1"));
+        users.add_or_replace(&User::new("alice", "new_pass", "db1"));
 
         assert_eq!(users.users.len(), 1);
         assert_eq!(users.users[0].password(), "new_pass");
@@ -671,8 +690,8 @@ password = "secret"
     #[test]
     fn test_add_or_replace_keeps_different_database() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("alice", "pass2", "db2"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("alice", "pass2", "db2"));
 
         assert_eq!(users.users.len(), 2);
     }
@@ -680,8 +699,8 @@ password = "secret"
     #[test]
     fn test_add_or_replace_keeps_different_name() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("bob", "pass2", "db1"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("bob", "pass2", "db1"));
 
         assert_eq!(users.users.len(), 2);
     }
@@ -689,9 +708,9 @@ password = "secret"
     #[test]
     fn test_add_or_replace_multiple_replaces() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("alice", "pass2", "db1"));
-        users.add_or_replace(User::new("alice", "pass3", "db1"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("alice", "pass2", "db1"));
+        users.add_or_replace(&User::new("alice", "pass3", "db1"));
 
         assert_eq!(users.users.len(), 1);
         assert_eq!(users.users[0].password(), "pass3");
@@ -700,12 +719,12 @@ password = "secret"
     #[test]
     fn test_add_or_replace_preserves_ordering_of_other_users() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("bob", "pass2", "db1"));
-        users.add_or_replace(User::new("charlie", "pass3", "db1"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("bob", "pass2", "db1"));
+        users.add_or_replace(&User::new("charlie", "pass3", "db1"));
 
         // Replace bob — alice stays, charlie stays, new bob appended at end
-        users.add_or_replace(User::new("bob", "new_pass", "db1"));
+        users.add_or_replace(&User::new("bob", "new_pass", "db1"));
 
         assert_eq!(users.users.len(), 3);
         assert_eq!(users.users[0].name, "alice");
@@ -718,9 +737,13 @@ password = "secret"
     fn test_find_returns_matching_user() {
         let mut users = Users::default();
         let alice = User::new("alice", "pass1", "db1");
-        users.add_or_replace(alice.clone());
+        users.add_or_replace(&alice);
 
-        let needle = User::new("alice", "", "db1");
+        let needle = PassthroughUser {
+            name: "alice".to_owned(),
+            database: "db1".to_owned(),
+            password: String::new(),
+        };
         let found = users.find(&needle).unwrap();
         assert_eq!(found, alice);
     }
@@ -728,21 +751,33 @@ password = "secret"
     #[test]
     fn test_find_returns_none_when_no_match() {
         let users = Users::default();
-        let needle = User::new("alice", "", "db1");
+        let needle = PassthroughUser {
+            name: "alice".to_owned(),
+            database: "db1".to_owned(),
+            password: String::new(),
+        };
         assert!(users.find(&needle).is_none());
     }
 
     #[test]
     fn test_find_matches_on_name_and_database() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("alice", "pass2", "db2"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("alice", "pass2", "db2"));
 
-        let needle = User::new("alice", "", "db2");
+        let needle = PassthroughUser {
+            name: "alice".to_owned(),
+            database: "db2".to_owned(),
+            password: String::new(),
+        };
         let found = users.find(&needle).unwrap();
         assert_eq!(found.password(), "pass2");
 
-        let needle = User::new("bob", "", "db1");
+        let needle = PassthroughUser {
+            name: "bob".to_owned(),
+            database: "db1".to_owned(),
+            password: String::new(),
+        };
         assert!(users.find(&needle).is_none());
     }
 

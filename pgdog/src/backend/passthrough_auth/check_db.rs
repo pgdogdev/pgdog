@@ -26,6 +26,14 @@ mod test;
 // (user, database) -> validator
 static THROTTLE: Lazy<DashMap<Key, Arc<OnceCell<bool>>>> = Lazy::new(DashMap::default);
 
+/// Remove all throttles and validation decisions.
+///
+/// Run this after reloading config to make sure passthrough auth re-validates
+/// all users.
+pub(in crate::backend) fn reset() {
+    THROTTLE.clear();
+}
+
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct Key {
     inner: Arc<KeyInner>,
@@ -101,24 +109,21 @@ impl Drop for ThrottleShutdown {
 /// Protected against a thundering herd by a lock. The result of the check is preserved
 /// for up to `passthrough_auth_debounce_delay`.
 ///
-pub(super) async fn check_db(user: &User) -> bool {
-    let config = config();
-
-    // TODO(lev): This is a copy/pasta of what databases::add() does
-    // for which we'll pay for later...
-    let user = if let Some(mut existing) = config.users.find(user) {
-        existing.password = user.password.clone();
-        existing
-    } else {
-        user.clone()
-    };
-
-    let key = Key::new(&user);
+/// Run `callback` after successful validation while holding the lock.
+pub(super) async fn check_db(user: &User, callback: impl FnOnce() -> Result<(), Error>) -> bool {
+    let key = Key::new(user);
     let throttle = ThrottleShutdown { key };
     let entry = THROTTLE.entry(throttle.key.clone()).or_default().clone();
+    let user: User = user.clone();
 
     entry
-        .get_or_try_init(async || check_password(&user, &config.config).await)
+        .get_or_try_init(async || {
+            let valid = check_password(&user, &config().config).await?;
+            if valid {
+                callback()?;
+            }
+            Ok::<_, Error>(valid)
+        })
         .await
         .copied()
         .unwrap_or_default()
