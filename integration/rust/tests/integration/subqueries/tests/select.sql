@@ -73,6 +73,16 @@ SELECT * FROM suborders WHERE state NOT IN (
 ) ORDER BY id;
 
 -- case
+-- what: .. WHERE <col> IN (<sq>) AND <col> IN (<sq on a table that isn't sharded>)
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id IN (
+    SELECT id FROM subusers WHERE status = 'VIP'
+) AND state IN (
+    SELECT state FROM substates WHERE shipping = 'quick'
+) ORDER BY id;
+
+-- case
 -- what: .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c)
 -- route select: 0,1
 -- route select: 0,1
