@@ -21,7 +21,7 @@ pub(crate) fn user_from_params<'a>(
 
     Ok(PassthroughUser {
         name: user,
-        database: database,
-        password: password,
+        database,
+        password,
     })
 }
