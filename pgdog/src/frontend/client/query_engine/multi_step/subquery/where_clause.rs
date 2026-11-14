@@ -38,7 +38,8 @@ impl<'a> SubqueryMulti<'a> {
 
         // Replace the SubLink node present with our own re-written version.
         transform::transform(&mut where_clause, |node| match &*node {
-            NodeMut::SubLink(_) => {
+            // The WHERE clause can have multiple subqueries, e.g., WHERE id IN (SELECT user_id FROM orders) AND state IN (SELECT state FROM states), so we match the subquery that we ran by `location` (instead of matching all SubLink nodes).
+            NodeMut::SubLink(candidate) if candidate.location == sublink.location => {
                 let sublink_replacement = Self::rewrite_sublink_in_where_clause(
                     sublink,
                     data_rows,
