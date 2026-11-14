@@ -67,7 +67,7 @@ fn passthrough_user<'a>(password: &'a str) -> PassthroughUser<'a> {
     PassthroughUser {
         name: "pgdog",
         database: "pgdog",
-        password: password,
+        password,
     }
 }
 
