@@ -34,11 +34,11 @@ impl ToUser for &pgdog_config::User {
     }
 }
 
-impl ToUser for &PassthroughUser {
+impl ToUser for &PassthroughUser<'_> {
     fn to_user(&self) -> User {
         User {
-            user: self.name.clone(),
-            database: self.database.clone(),
+            user: self.name.to_string(),
+            database: self.database.to_string(),
         }
     }
 }

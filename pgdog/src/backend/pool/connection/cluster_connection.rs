@@ -211,21 +211,17 @@ impl ClusterConnection {
             && !databases.passthrough_cluster_ready(identity)
         {
             let user = PassthroughUser {
-                name: identity.0.to_string(),
-                database: identity.1.to_string(),
+                name: identity.0,
+                database: identity.1,
                 password: self
                     .cluster()?
                     .passwords()
                     .iter()
                     .find(|p| matches!(p, PasswordKind::Plain(_)))
                     .expect("passthrough clusters use plain passwords")
-                    .to_string(),
+                    .as_str(),
             };
 
-            // Auth result is ignored because the user
-            // has already authenticated. We could kick them
-            // if the password changed, but that's not how
-            // Postgres does it so we won't either.
             passthrough_auth::restore_after_reload(&user)?;
         }
 

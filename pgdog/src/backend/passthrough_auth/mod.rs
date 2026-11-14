@@ -1,5 +1,4 @@
 pub(crate) mod check_db;
-pub(crate) mod per_user_lock;
 
 use tracing::debug;
 
@@ -23,12 +22,11 @@ enum CheckExistingResult {
     Ok,
     Add,
     WrongPassword,
-    NoDatabase,
 }
 
 /// Check that a user can be added to the in-memory config
 /// by validating its password against the database.
-pub(crate) async fn check_or_add(user: PassthroughUser) -> Result<AuthResult, Error> {
+pub(crate) async fn check_or_add(user: PassthroughUser<'_>) -> Result<AuthResult, Error> {
     let config = config();
     let allow_password_change = config.config.general.passthrough_auth.allows_change();
     match check_existing(&user)? {
@@ -36,14 +34,12 @@ pub(crate) async fn check_or_add(user: PassthroughUser) -> Result<AuthResult, Er
         CheckExistingResult::WrongPassword if !allow_password_change => {
             Ok(AuthResult::NoPassthroughPasswordChange)
         }
-        CheckExistingResult::NoDatabase
-        | CheckExistingResult::WrongPassword
-        | CheckExistingResult::Add => {
+        CheckExistingResult::WrongPassword | CheckExistingResult::Add => {
             let user = config
                 .users
                 .find(&user)
                 .map(|mut existing| {
-                    existing.password = Some(user.password.clone());
+                    existing.password = Some(user.password.to_string());
                     existing
                 })
                 .unwrap_or(user.into());
@@ -64,15 +60,21 @@ pub(crate) async fn check_or_add(user: PassthroughUser) -> Result<AuthResult, Er
 /// Add a user back to the in-memory config after a config reload.
 /// We assume the user keeps a valid password so we don't check it against the database again.
 pub(crate) fn restore_after_reload(user: &PassthroughUser) -> Result<(), Error> {
+    // Check before acquiring lock.
+    if databases().passthrough_cluster_ready(user) {
+        return Ok(());
+    }
+
     let _lock = lock();
 
+    // Check again protected by lock.
     if databases().passthrough_cluster_ready(user) {
         return Ok(());
     }
 
     let user = if let Some(mut existing) = config().users.find(user) {
         if existing.password.is_none() {
-            existing.password = Some(user.password.clone());
+            existing.password = Some(user.password.to_string());
         }
         existing
     } else {
@@ -107,7 +109,7 @@ fn check_existing(user: &PassthroughUser) -> Result<CheckExistingResult, Error> 
             }
         }) {
         Ok(result) => Ok(result),
-        Err(Error::NoDatabase(_)) => Ok(CheckExistingResult::NoDatabase),
+        Err(Error::NoDatabase(_)) => Ok(CheckExistingResult::Add),
         Err(err) => Err(err),
     }
 }

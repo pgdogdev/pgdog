@@ -63,11 +63,11 @@ fn user(password: Option<&str>) -> User {
     }
 }
 
-fn passthrough_user(password: &str) -> PassthroughUser {
+fn passthrough_user<'a>(password: &'a str) -> PassthroughUser<'a> {
     PassthroughUser {
-        name: "pgdog".to_owned(),
-        database: "pgdog".to_owned(),
-        password: password.to_owned(),
+        name: "pgdog",
+        database: "pgdog",
+        password: password,
     }
 }
 
@@ -170,11 +170,11 @@ async fn cached_password_is_scoped_to_user_and_database() {
 
     for candidate in [
         PassthroughUser {
-            name: "pgdog_passthrough_missing_user".to_owned(),
+            name: "pgdog_passthrough_missing_user",
             ..passthrough_user("cached_password")
         },
         PassthroughUser {
-            database: "pgdog_alias".to_owned(),
+            database: "pgdog_alias",
             ..passthrough_user("cached_password")
         },
     ] {
@@ -288,7 +288,7 @@ async fn restore_password_preserves_existing_user_settings() {
         restore_after_reload(&restored).expect("restore user");
 
         let expected = User {
-            password: Some(restored.password.clone()),
+            password: Some(restored.password.to_string()),
             ..existing
         };
         assert_eq!(config().users.find(&restored), Some(expected));

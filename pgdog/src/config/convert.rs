@@ -3,10 +3,10 @@ use crate::net::{Parameters, Password};
 
 use pgdog_config::users::PassthroughUser;
 
-pub(crate) fn user_from_params(
-    params: &Parameters,
-    password: &Password,
-) -> Result<PassthroughUser, Error> {
+pub(crate) fn user_from_params<'a>(
+    params: &'a Parameters,
+    password: &'a Password,
+) -> Result<PassthroughUser<'a>, Error> {
     #[allow(clippy::unnecessary_lazy_evaluations)]
     let user = params
         .get("user")
@@ -20,8 +20,8 @@ pub(crate) fn user_from_params(
         .ok_or_else(|| Error::IncompleteStartup)?;
 
     Ok(PassthroughUser {
-        name: user.to_owned(),
-        database: database.to_owned(),
-        password: password.to_owned(),
+        name: user,
+        database: database,
+        password: password,
     })
 }

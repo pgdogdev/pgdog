@@ -176,19 +176,19 @@ impl Users {
 }
 
 /// User specified via passthrough authentication.
-#[derive(Hash, Eq, PartialEq, Clone)]
-pub struct PassthroughUser {
-    pub name: String,
-    pub database: String,
-    pub password: String,
+#[derive(Debug, Clone)]
+pub struct PassthroughUser<'a> {
+    pub name: &'a str,
+    pub database: &'a str,
+    pub password: &'a str,
 }
 
-impl From<PassthroughUser> for User {
+impl From<PassthroughUser<'_>> for User {
     fn from(value: PassthroughUser) -> Self {
         User {
-            name: value.name,
-            password: Some(value.password),
-            database: value.database,
+            name: value.name.to_string(),
+            password: Some(value.password.to_string()),
+            database: value.database.to_string(),
             ..Default::default()
         }
     }
@@ -740,9 +740,9 @@ password = "secret"
         users.add_or_replace(&alice);
 
         let needle = PassthroughUser {
-            name: "alice".to_owned(),
-            database: "db1".to_owned(),
-            password: String::new(),
+            name: "alice",
+            database: "db1",
+            password: "",
         };
         let found = users.find(&needle).unwrap();
         assert_eq!(found, alice);
@@ -752,9 +752,9 @@ password = "secret"
     fn test_find_returns_none_when_no_match() {
         let users = Users::default();
         let needle = PassthroughUser {
-            name: "alice".to_owned(),
-            database: "db1".to_owned(),
-            password: String::new(),
+            name: "alice",
+            database: "db1",
+            password: "",
         };
         assert!(users.find(&needle).is_none());
     }
@@ -766,17 +766,17 @@ password = "secret"
         users.add_or_replace(&User::new("alice", "pass2", "db2"));
 
         let needle = PassthroughUser {
-            name: "alice".to_owned(),
-            database: "db2".to_owned(),
-            password: String::new(),
+            name: "alice",
+            database: "db2",
+            password: "",
         };
         let found = users.find(&needle).unwrap();
         assert_eq!(found.password(), "pass2");
 
         let needle = PassthroughUser {
-            name: "bob".to_owned(),
-            database: "db1".to_owned(),
-            password: String::new(),
+            name: "bob",
+            database: "db1",
+            password: "",
         };
         assert!(users.find(&needle).is_none());
     }
