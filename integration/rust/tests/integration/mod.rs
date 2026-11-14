@@ -31,6 +31,7 @@ pub mod offset;
 pub mod order_by;
 pub mod partial_req;
 mod passthrough_debounce;
+mod passthrough_race;
 pub mod per_stmt_routing;
 pub mod prepared;
 pub mod protocol_version;
