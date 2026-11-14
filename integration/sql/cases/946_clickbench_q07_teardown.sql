@@ -1,0 +1,1 @@
+clickbench_teardown.sql
