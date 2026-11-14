@@ -9,7 +9,9 @@ SELECT * FROM subusers WHERE id IN (
 -- case
 -- what: .. WHERE <col> IN (<sq>), neither side has a key
 -- route select: 0,1
+-- sql: SELECT id FROM subusers WHERE status = 'VIP'
 -- route select: 0,1
+-- sql: SELECT * FROM suborders WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) u(c1)) ORDER BY id
 SELECT * FROM suborders WHERE id IN (
     SELECT id FROM subusers WHERE status = 'VIP'
 ) ORDER BY id;
@@ -43,7 +45,9 @@ SELECT * FROM suborders WHERE id IN (
 -- case
 -- what: .. WHERE NOT EXISTS (<sq>)
 -- route select: 1
+-- sql: SELECT 1 FROM subusers WHERE id = 3
 -- route select: 0,1
+-- sql: SELECT * FROM suborders WHERE NOT true ORDER BY id
 SELECT * FROM suborders WHERE NOT EXISTS (
     SELECT 1 FROM subusers WHERE id = 3
 ) ORDER BY id;
@@ -131,7 +135,9 @@ SELECT * FROM suborders WHERE id = (
 -- case
 -- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = avg
 -- route select: 0,1
+-- sql: SELECT avg(id), count(id) AS __pgdog_count_col0 FROM subusers WHERE id < 4
 -- route select: 0,1
+-- sql: SELECT * FROM suborders WHERE id = (SELECT u.c1 FROM unnest($1::pg_catalog._numeric) u(c1)) ORDER BY id
 SELECT * FROM suborders WHERE id = (
     SELECT avg(id) FROM subusers WHERE id < 4
 ) ORDER BY id;
@@ -179,7 +185,9 @@ SELECT * FROM subusers WHERE id = $1 AND status IN (
 -- case
 -- what: SELECT <agg>(..) FROM (<sq>) s, <sq> is cross-shard
 -- route select: 0,1
+-- sql: SELECT id FROM subusers WHERE status = 'VIP'
 -- route select: any
+-- sql: SELECT count(*) FROM (SELECT u.c1 FROM unnest($1::pg_catalog._int8) u(c1)) s(id)
 SELECT count(*) FROM (
     SELECT id FROM subusers WHERE status = 'VIP'
 ) s;

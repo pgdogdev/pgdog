@@ -10,7 +10,7 @@ use sqlx::{
 };
 use tokio::net::TcpStream;
 
-use crate::integration::subqueries::{TestCase, test_case::StatementType};
+use crate::integration::subqueries::{TestCase, test_case::ExpectedStatement};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum Protocol {
@@ -99,6 +99,7 @@ pub(crate) async fn run(
     sql: String,
     protocol: Protocol,
     commands: Option<&TestCase>,
+    table_suffix: &str,
     direct_postgres: bool,
 ) -> Result<Vec<WireMessage>, anyhow::Error> {
     let app_name_tested =
@@ -168,7 +169,7 @@ pub(crate) async fn run(
         if done {
             if !direct_postgres && let Some(app_name_tested) = app_name_tested.as_ref() {
                 // Only assert routing if this is going to PgDog. We can't do the same for Postgres (as it's not sharded).
-                fetch_pg_stat_statement(commands.unwrap(), app_name_tested).await?;
+                fetch_pg_stat_statement(commands.unwrap(), app_name_tested, table_suffix).await?;
             }
 
             return Ok(messages);
@@ -189,12 +190,12 @@ pub(crate) async fn run(
 /// for each query, as well as the total amount of queries, and a general
 /// order.
 ///
-/// TODO(jkaczman): we should be more specific instead of 'select' / 'insert' / etc statements.
 async fn fetch_pg_stat_statement(
     test_case: &TestCase,
     app_name_tested: &str,
+    table_suffix: &str,
 ) -> Result<(), anyhow::Error> {
-    let mut actual: Vec<Vec<StatementType>> = Vec::new();
+    let mut actual: Vec<Vec<String>> = Vec::new();
     for shard in [0, 1] {
         let sharded_conn = PgPoolOptions::new()
             .max_connections(1)
@@ -226,37 +227,35 @@ async fn fetch_pg_stat_statement(
             .filter(|statement| !statement.get::<&str, &str>("query").starts_with("SET"))
             .collect();
 
-        let statement_types: Vec<StatementType> = relevant_statements
+        let queries: Vec<String> = relevant_statements
             .iter()
-            .map(|row| {
-                let query = row.get::<&str, &str>("query");
-
-                StatementType::parse(query)
-            })
+            .map(|row| row.get::<&str, &str>("query").to_string())
             .collect();
 
-        actual.push(statement_types);
+        actual.push(queries);
     }
 
-    // Directly match if there's no 'any' checks
-    if test_case.routing_any.is_empty() && actual != test_case.routing_expectations {
+    let matches_actual = |expected: &Vec<Vec<&ExpectedStatement>>| {
+        expected.len() == actual.len()
+            && expected
+                .iter()
+                .zip(actual.iter())
+                .all(|(expected, actual)| {
+                    expected.len() == actual.len()
+                        && expected
+                            .iter()
+                            .zip(actual.iter())
+                            .all(|(expected, actual)| expected.matches(actual, table_suffix))
+                })
+    };
+
+    let matches_with_any_shard = (0..actual.len())
+        .any(|any_shard| matches_actual(&test_case.expected_statements_per_shard(any_shard)));
+
+    if !matches_with_any_shard {
         return Err(anyhow!(
-            "Doesn't match; actual {actual:?} vs expected: {:?}",
+            "Routing doesn't match; actual per shard {actual:#?} vs expected: {:#?}",
             test_case.routing_expectations
-        ));
-    }
-
-    let candidates: Vec<Vec<Vec<StatementType>>> = (0..actual.len())
-        .map(|any_shard| {
-            let mut expected = test_case.routing_expectations.clone();
-            expected[any_shard].splice(0..0, test_case.routing_any.iter().cloned());
-            expected
-        })
-        .collect();
-
-    if !candidates.contains(&actual) {
-        return Err(anyhow!(
-            "Routing ANY doesn't match; actual {actual:?} vs expected one of {candidates:?}"
         ));
     }
 
