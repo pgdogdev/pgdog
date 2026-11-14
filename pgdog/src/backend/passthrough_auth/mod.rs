@@ -91,27 +91,42 @@ fn passwords_match(new: &User, existing: &User) -> bool {
 
 fn update_user(new: User, mut existing: User) -> Result<(), Error> {
     existing.password = new.password;
-    add(existing)?;
-    reload_from_existing()?;
+    add_new_user(existing)?;
     Ok(())
 }
 
 fn add_new_user(user: User) -> Result<(), Error> {
+    use crate::config::lock;
+
+    // This lock is here to prevent the passthrough check
+    // from returning AuthOk _before_ the pool has been
+    // added to the global in [`reload_from_existing`].
+    //
+    // N.B. This is not databases::lock. That one is taken when updating connection
+    // pools.
+    //
+    // TODO(lev): This is so incredibly brittle, I can't even begin to justify this design.
+    // We should refactor configuration/pool management to use "generations", i.e.,
+    // push new version of _everything_ through a [`tokio::sync::watch`] channel
+    // or something that clearly disambiguates different versions of these globals
+    // and allows us to version-control them.
+    let _lock = lock();
+
     add(user)?;
     reload_from_existing()?;
     Ok(())
 }
 
+// SAFETY: do not use this function without first taking a config lock.
+// See [`add_new_user`].
 fn add(user: User) -> Result<(), Error> {
     use crate::config::set;
-    use crate::databases::lock;
 
     debug!(
         r#"adding user "{}" to database "{}" via passthrough auth"#,
         user.name, user.database
     );
 
-    let _lock = lock();
     let mut config = (*config()).clone();
     config.users.add_or_replace(user);
     set(config)?;

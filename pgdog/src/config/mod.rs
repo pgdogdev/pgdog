@@ -41,7 +41,7 @@ pub(crate) use sharding::{DataType, Hasher, ShardedMappingDeprecated};
 // Re-export from replication module
 pub(crate) use replication::MirrorConfig;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use std::env;
 use std::sync::Arc;
 
@@ -52,6 +52,14 @@ static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
 
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+/// Get a config lock.
+///
+/// Protects concurrent config updates.
+///
+pub(crate) fn lock() -> MutexGuard<'static, ()> {
+    LOCK.lock()
+}
 
 /// Load configuration.
 pub(crate) fn config() -> Arc<ConfigAndUsers> {
