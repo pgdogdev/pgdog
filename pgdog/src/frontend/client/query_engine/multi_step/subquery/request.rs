@@ -29,7 +29,7 @@ impl<'a> SubqueryMulti<'a> {
         is_subquery: bool,
     ) -> Result<Option<(Vec<DataRow>, Option<RowDescription>)>, Error> {
         let mut client_request: ClientRequest = self
-            .form_client_request(engine, query_string, context)
+            .form_client_request(engine, query_string, context, is_subquery)
             .await?;
 
         multi_step::update::route(engine, &mut client_request, context)?;
@@ -133,9 +133,16 @@ impl<'a> SubqueryMulti<'a> {
         engine: &mut QueryEngine,
         mut query_string: String,
         context: &mut QueryEngineContext<'_>,
+        is_subquery: bool,
     ) -> Result<ClientRequest, Error> {
         let mut client_request = {
             let mut bind = Bind::default();
+
+            if is_subquery {
+                // We fetch the rows in binary, which allows us to copy the values into the unnest(..) arrays of the outer statement as-is (instead of decoding the values).
+                bind.set_binary_results();
+            }
+
             let mut actual_param_index = 1;
             let mut actual_param_index_str = format!("${actual_param_index}");
 

@@ -147,6 +147,51 @@ impl Array {
         Ok(Bytes::from(result))
     }
 
+    /// Builds a 1D array in binary format
+    ///
+    /// INVARIANT: the elements are values that Postgres returned in binary for the type `element_oid`, e.g., the rows of subqueries, which we pass on to the shards as `unnest(..)` arrays.
+    /// We don't reuse `Array::encode` here, since `Array::encode` takes decoded elements, thus, we would have to decode those values first.
+    pub fn binary_from_encoded_elements<'a>(
+        element_oid: i32,
+        elements: impl ExactSizeIterator<Item = Option<&'a [u8]>> + Clone,
+    ) -> Bytes {
+        let element_count = elements.len();
+        let dimensions = if element_count > 0 { 1 } else { 0 };
+
+        let mut has_nulls = false;
+        let mut elements_len = 0;
+        for element in elements.clone() {
+            match element {
+                Some(element) => elements_len += element.len(),
+                None => has_nulls = true,
+            }
+        }
+
+        let mut buf = BytesMut::with_capacity(12 + 8 + element_count * 4 + elements_len);
+
+        buf.put_i32(dimensions);
+        buf.put_i32(i32::from(has_nulls));
+        buf.put_i32(element_oid);
+
+        if dimensions > 0 {
+            buf.put_i32(element_count as i32);
+            // Index of the first element.
+            buf.put_i32(1);
+        }
+
+        for element in elements {
+            match element {
+                Some(element) => {
+                    buf.put_i32(element.len() as i32);
+                    buf.extend_from_slice(element);
+                }
+                None => buf.put_i32(-1),
+            }
+        }
+
+        buf.freeze()
+    }
+
     fn encode_binary(&self) -> Result<Bytes, Error> {
         let mut buf = BytesMut::with_capacity(12 + 8 + self.elements.len() * 8);
         // Use ndims=0 only for truly empty arrays with default bounds.

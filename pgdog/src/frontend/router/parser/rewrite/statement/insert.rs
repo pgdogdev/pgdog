@@ -133,15 +133,19 @@ impl UnnestInsert {
 
         let single_row_requests = (0..row_count)
             .map(|row_index| {
+                // These requests are only for routing (we never send them).
+                // Bit of a workaround used here: we encode the elements as text, as the router can't read binary elements of a different type than the sharding key column
+                // E.g., in INSERT INTO orders (id, user_id) SELECT sum(id), sum(user_id) FROM orders, sum(user_id) is a numeric and the sharding key user_id is a bigint
+                // TODO(jkaczman): Give the router this capability
                 let mut single_row_bind = Bind::new_statement("");
                 for unnest_array in &unnest_arrays {
                     let element_param = match unnest_array.elements.get(row_index) {
                         Some(element) if !element.is_null() => {
-                            Parameter::new(&element.encode(unnest_array.format)?)
+                            Parameter::new(&element.encode(Format::Text)?)
                         }
                         _ => Parameter::new_null(),
                     };
-                    single_row_bind.push_param(element_param, unnest_array.format);
+                    single_row_bind.push_param(element_param, Format::Text);
                 }
 
                 Ok(ClientRequest {

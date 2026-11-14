@@ -32,7 +32,7 @@ use crate::{
             },
         },
     },
-    net::{Bind, DataRow, ProtocolMessage, RowDescription},
+    net::{Bind, DataRow, Format, ProtocolMessage, RowDescription},
 };
 
 /// Evaluates the Subquery and injects the results into the top-level statement.
@@ -210,6 +210,18 @@ impl<'ast> SubqueryMulti<'ast> {
                 return Err(Error::Subquery(
                     SubqueryError::SubqueryReturningUnsupportedColumn,
                 ));
+            }
+
+            // INVARIANT: the rows that subqueries return are in binary format
+            // `form_client_request` sets the result format of subqueries to binary
+            // `new_select_with_unnest` relies on this; it copies the bytes of the values into binary arrays without decoding the values
+            if let Some(row_description) = &results.1 {
+                assert!(
+                    row_description
+                        .fields
+                        .iter()
+                        .all(|field| field.format() == Format::Binary),
+                );
             }
 
             self.subquery_results.push(results);

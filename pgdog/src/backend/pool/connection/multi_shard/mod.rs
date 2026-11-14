@@ -200,6 +200,12 @@ impl MultiShard {
         self.bound_statements.push_back(bind.clone());
     }
 
+    /// See `Connection::set_binds`.
+    pub(super) fn set_binds<'a>(&mut self, binds: impl Iterator<Item = &'a Bind>) {
+        self.bound_statements.clear();
+        self.bound_statements.extend(binds.cloned());
+    }
+
     /// Who asked for each description in the request we just sent.
     fn set_describes(&mut self, describes: VecDeque<DescribedBy>) {
         self.describes = describes;
