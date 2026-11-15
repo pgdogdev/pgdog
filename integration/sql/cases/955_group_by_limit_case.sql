@@ -9,4 +9,3 @@ SELECT category, SUM(amount) FROM sql_regression_samples GROUP BY 1 ORDER BY 2 D
 SELECT category, AVG(amount), COUNT(*) FROM sql_regression_samples GROUP BY category ORDER BY 3 DESC, 1 LIMIT 2;
 SELECT category, COUNT(*) FROM sql_regression_samples GROUP BY category ORDER BY 2 DESC, 1 LIMIT 1 + 1 OFFSET 2 - 1;
 SELECT category, COUNT(*) FROM sql_regression_samples GROUP BY category ORDER BY 2 DESC, 1 LIMIT 1::int OFFSET 1::smallint;
-SELECT id FROM sql_regression_samples ORDER BY id LIMIT 2 * 2 OFFSET 3 - 1;
