@@ -31,19 +31,19 @@ impl<'a> LimitClause<'a> {
     }
 
     /// Whether PgDog can compute this LIMIT or OFFSET value: integer literals,
-    /// parameters, casts to integer types, and arithmetic over them.
+    /// parameters, casts to integer types, and `+`, `-`, `*` over them.
     pub(crate) fn is_computable(node: Node<'_>) -> bool {
         match node {
             Node::None | Node::ParamRef(_) => true,
             Node::A_Const(constant) => constant
                 .val()
                 .is_none_or(|value| value.numeric_value::<i64>().is_some()),
-            Node::TypeCast(cast) => {
-                IntegerType::of(cast).is_some() && Self::is_computable(cast.arg())
+            Node::TypeCast(cast) => is_integer_cast(cast) && Self::is_computable(cast.arg()),
+            Node::A_Expr(expr) => {
+                operator(expr).is_some()
+                    && Self::is_computable(expr.lexpr())
+                    && Self::is_computable(expr.rexpr())
             }
-            Node::A_Expr(expr) => Operator::of(expr).is_some_and(|operator| {
-                operator.is_integer_arithmetic(expr) && operands(expr).all(Self::is_computable)
-            }),
             _ => false,
         }
     }
@@ -51,54 +51,30 @@ impl<'a> LimitClause<'a> {
     /// Values PgDog can't compute are `None`, the same as no limit.
     // FIXME: We should error and not silently treat as NULL
     fn decode(&self, node: Node<'_>) -> Result<Option<usize>, Error> {
-        use pg_raw_parse::ConstValue;
-
-        // Plain integers and parameters are the common case: skip the
-        // expression evaluator, this runs on every routed request.
-        let value = match node {
-            Node::A_Const(constant) if let Some(ConstValue::Integer(value)) = constant.val() => {
-                Some(i64::from(value))
-            }
-            Node::ParamRef(param) => self.parameter(param.number as usize)?,
-            node => self.evaluate(node)?,
-        };
-        Ok(value.and_then(|value| usize::try_from(value).ok()))
+        if !Self::is_computable(node) {
+            return Ok(None);
+        }
+        Ok(self
+            .evaluate(node)?
+            .and_then(|value| usize::try_from(value).ok()))
     }
 
-    /// Compute a LIMIT or OFFSET value. `None` is no limit, and also any value
-    /// rejected by [`Self::is_computable`].
+    /// Compute a value accepted by [`Self::is_computable`]. `None` is no limit.
     ///
-    /// Values Postgres rejects, e.g. an overflow or an out of range cast, are
-    /// also `None`: every shard query still evaluates the original expression,
-    /// so Postgres returns its own error to the client.
+    /// Values Postgres rejects, e.g. a negative LIMIT, an overflow or an out of
+    /// range cast, don't matter: every shard query still evaluates the original
+    /// expression, so Postgres returns its own error to the client.
     fn evaluate(&self, node: Node<'_>) -> Result<Option<i64>, Error> {
         Ok(match node {
             Node::A_Const(constant) => constant.val().and_then(|value| value.numeric_value()),
             Node::ParamRef(param) => self.parameter(param.number as usize)?,
-            Node::TypeCast(cast) => {
-                // Check the type first: `$1::numeric` may bind a non-integer.
-                let Some(integer) = IntegerType::of(cast) else {
-                    return Ok(None);
-                };
-                self.evaluate(cast.arg())?
-                    .filter(|&value| integer.fits(value))
-            }
+            Node::TypeCast(cast) => self.evaluate(cast.arg())?,
             Node::A_Expr(expr) => {
-                let Some(operator) = Operator::of(expr) else {
-                    return Ok(None);
-                };
-                if !operator.is_integer_arithmetic(expr) {
-                    return Ok(None);
-                }
+                let left = self.evaluate(expr.lexpr())?;
                 let right = self.evaluate(expr.rexpr())?;
-                match operator {
-                    Operator::Negate => right.and_then(i64::checked_neg),
-                    Operator::Identity => right,
-                    _ => self
-                        .evaluate(expr.lexpr())?
-                        .zip(right)
-                        .and_then(|(left, right)| operator.apply(left, right)),
-                }
+                left.zip(right)
+                    .zip(operator(expr))
+                    .and_then(|((left, right), apply)| apply(left, right))
             }
             _ => None,
         })
@@ -126,116 +102,40 @@ impl<'a> LimitClause<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Operator {
-    Negate,
-    Identity,
-    Add,
-    Subtract,
-    Multiply,
-    Div,
-    Modulo,
-}
-
-impl Operator {
-    fn of(expr: &nodes::A_Expr) -> Option<Self> {
-        if expr.kind != nodes::A_Expr_Kind::AEXPR_OP {
-            return None;
-        }
-        let name = expr.name().into_iter().exactly_one().ok()?.as_str()?;
-        let unary = matches!(expr.lexpr(), Node::None);
-        Some(match (name, unary) {
-            ("-", true) => Self::Negate,
-            ("+", true) => Self::Identity,
-            ("+", false) => Self::Add,
-            ("-", false) => Self::Subtract,
-            ("*", false) => Self::Multiply,
-            ("/", false) => Self::Div,
-            ("%", false) => Self::Modulo,
-            _ => return None,
-        })
+/// The binary `+`, `-` or `*` operator of this expression. Other operators
+/// are left out: `$1 / 2` is numeric division if the client declares `$1`
+/// as numeric.
+fn operator(expr: &nodes::A_Expr) -> Option<fn(i64, i64) -> Option<i64>> {
+    if expr.kind != nodes::A_Expr_Kind::AEXPR_OP || matches!(expr.lexpr(), Node::None) {
+        return None;
     }
-
-    /// Whether Postgres does integer arithmetic here, whatever type the client
-    /// declares for its parameters: `$1 / 2` is numeric division if `$1` is
-    /// declared numeric.
-    fn is_integer_arithmetic(self, expr: &nodes::A_Expr) -> bool {
-        self != Self::Div || operands(expr).all(is_integer_typed)
-    }
-
-    /// Integer arithmetic as Postgres does it: division truncates toward zero.
-    fn apply(self, left: i64, right: i64) -> Option<i64> {
-        match self {
-            Self::Add => left.checked_add(right),
-            Self::Subtract => left.checked_sub(right),
-            Self::Multiply => left.checked_mul(right),
-            Self::Div => left.checked_div(right),
-            // Postgres returns 0 for `i64::MIN % -1` instead of overflowing.
-            Self::Modulo if right == -1 => Some(0),
-            Self::Modulo => left.checked_rem(right),
-            Self::Negate | Self::Identity => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum IntegerType {
-    Int2,
-    Int4,
-    Int8,
-}
-
-impl IntegerType {
-    /// The integer type of `x::int2`, `x::int4` or `x::int8`, and their aliases.
-    fn of(cast: &nodes::TypeCast) -> Option<Self> {
-        let type_name = cast.type_name()?;
-        if type_name.setof
-            || type_name.pct_type
-            || !type_name.typmods().is_empty()
-            || !type_name.array_bounds().is_empty()
-        {
-            return None;
-        }
-        let names = type_name
-            .names()
-            .iter()
-            .map(|name| name.sval())
-            .collect::<Vec<_>>();
-        let name = match names.as_slice() {
-            [Some(name)] | [Some("pg_catalog"), Some(name)] => *name,
+    let apply: fn(i64, i64) -> Option<i64> =
+        match expr.name().into_iter().exactly_one().ok()?.as_str()? {
+            "+" => i64::checked_add,
+            "-" => i64::checked_sub,
+            "*" => i64::checked_mul,
             _ => return None,
         };
-        match name {
-            "int2" => Some(Self::Int2),
-            "int4" => Some(Self::Int4),
-            "int8" => Some(Self::Int8),
-            _ => None,
-        }
-    }
-
-    fn fits(self, value: i64) -> bool {
-        match self {
-            Self::Int2 => i16::try_from(value).is_ok(),
-            Self::Int4 => i32::try_from(value).is_ok(),
-            Self::Int8 => true,
-        }
-    }
+    Some(apply)
 }
 
-fn operands<'a>(expr: &'a nodes::A_Expr) -> impl Iterator<Item = Node<'a>> {
-    [expr.lexpr(), expr.rexpr()]
-        .into_iter()
-        .filter(|node| !matches!(node, Node::None))
-}
-
-/// Whether Postgres types this value as an integer, whatever type the client
-/// declares for its parameters.
-fn is_integer_typed(node: Node<'_>) -> bool {
-    match node {
-        Node::A_Const(_) | Node::TypeCast(_) => true,
-        Node::A_Expr(expr) => operands(expr).all(is_integer_typed),
-        _ => false,
+/// Whether this is `x::int2`, `x::int4` or `x::int8`, or one of their aliases.
+fn is_integer_cast(cast: &nodes::TypeCast) -> bool {
+    let Some(type_name) = cast.type_name() else {
+        return false;
+    };
+    if !type_name.array_bounds().is_empty() {
+        return false;
     }
+    let names = type_name
+        .names()
+        .iter()
+        .map(|name| name.sval())
+        .collect::<Vec<_>>();
+    matches!(
+        names.as_slice(),
+        [Some("int2" | "int4" | "int8")] | [Some("pg_catalog"), Some("int2" | "int4" | "int8")]
+    )
 }
 
 #[cfg(test)]
@@ -269,58 +169,27 @@ mod test {
         for (sql, expected) in [
             ("SELECT 1 LIMIT 1 + 1", Some(2)),
             ("SELECT 1 LIMIT 10 - 3 * 2", Some(4)),
-            ("SELECT 1 LIMIT 10 / 3", Some(3)),
-            ("SELECT 1 LIMIT 10 % 4", Some(2)),
-            ("SELECT 1 LIMIT -(-2)", Some(2)),
-            ("SELECT 1 LIMIT +3", Some(3)),
             ("SELECT 1 LIMIT (2 + 3) * 2", Some(10)),
             ("SELECT 1 LIMIT 10000000000", Some(10_000_000_000)),
-            ("SELECT 1 LIMIT 1 + NULL", None),
-            ("SELECT 1 LIMIT ALL", None),
-        ] {
-            assert_eq!(limit_count(sql), expected, "{sql}");
-        }
-    }
-
-    #[test]
-    fn evaluates_integer_casts() {
-        for (sql, expected) in [
             ("SELECT 1 LIMIT 5::int", Some(5)),
-            ("SELECT 1 LIMIT 5::smallint", Some(5)),
             ("SELECT 1 LIMIT CAST(5 AS bigint)", Some(5)),
             ("SELECT 1 LIMIT 5::int4 + 1::int8", Some(6)),
-            ("SELECT 1 LIMIT 3000000000::bigint", Some(3_000_000_000)),
-            // Postgres raises "out of range" on the shards.
-            ("SELECT 1 LIMIT 40000::smallint", None),
-            ("SELECT 1 LIMIT 3000000000::int", None),
+            ("SELECT 1 LIMIT 1 + NULL", None),
+            ("SELECT 1 LIMIT ALL", None),
+            // Postgres raises these errors on the shards.
+            ("SELECT 1 LIMIT -1", None),
+            ("SELECT 1 LIMIT 9223372036854775807 + 1", None),
         ] {
             assert_eq!(limit_count(sql), expected, "{sql}");
         }
     }
 
     #[test]
-    fn errors_postgres_raises_are_left_to_the_shards() {
-        for sql in [
-            "SELECT 1 LIMIT 1 / 0",
-            "SELECT 1 LIMIT 1 % 0",
-            "SELECT 1 LIMIT 9223372036854775807 + 1",
-            "SELECT 1 LIMIT -9223372036854775807 - 2",
-            "SELECT 1 LIMIT -1",
-        ] {
-            assert_eq!(limit_count(sql), None, "{sql}");
-        }
-        assert_eq!(
-            limit_count("SELECT 1 LIMIT -9223372036854775808 % -1"),
-            Some(0)
-        );
-    }
-
-    #[test]
-    fn evaluates_cast_parameters() {
+    fn evaluates_parameters() {
         let text = Bind::new_params("", &[Parameter::new(b"5"), Parameter::new(b"2")]);
-        let text = limit("SELECT 1 LIMIT $1::int + 1 OFFSET $2::int", Some(&text)).unwrap();
+        let text = limit("SELECT 1 LIMIT $1::int + 1 OFFSET $2 * 2", Some(&text)).unwrap();
         assert_eq!(text.limit, Some(6));
-        assert_eq!(text.offset, Some(2));
+        assert_eq!(text.offset, Some(4));
 
         // Drivers send `$1::int` as a 4-byte binary integer.
         let binary = Bind::new_params_codes(
@@ -343,18 +212,8 @@ mod test {
             limit("SELECT 1 LIMIT $1::int", Some(&fractional)),
             Err(Error::ParameterNotInteger(1, _))
         ));
-    }
-
-    #[test]
-    fn uncomputable_parameters_are_no_limit() {
-        // Without `is_computable` guarding `decode`, these must not try to
-        // read `$1` as an integer: Postgres types it as numeric here.
-        let fractional = Bind::new_params("", &[Parameter::new(b"2.5")]);
-        for sql in [
-            "SELECT 1 LIMIT $1::numeric",
-            "SELECT 1 LIMIT $1 / 2",
-            "SELECT 1 LIMIT ($1 + 1) / 2",
-        ] {
+        // Postgres types `$1` as numeric here, so PgDog doesn't read it.
+        for sql in ["SELECT 1 LIMIT $1::numeric", "SELECT 1 LIMIT $1 + 0.5"] {
             assert_eq!(limit(sql, Some(&fractional)).unwrap().limit, None, "{sql}");
         }
     }
@@ -366,22 +225,15 @@ mod test {
             "SELECT 1 LIMIT random()::int",
             "SELECT 1 LIMIT '1'",
             "SELECT 1 LIMIT 2.5",
-            "SELECT 1 LIMIT 2.5::int",
             "SELECT 1 LIMIT 5::numeric",
             "SELECT 1 LIMIT 5::int[]",
-            "SELECT 1 LIMIT 2 ^ 2",
+            "SELECT 1 LIMIT 10 / 2",
+            "SELECT 1 LIMIT -(2)",
             "SELECT 1 LIMIT 5 OPERATOR(pg_catalog.+) 1",
-            // `$1` is numeric if the client declares it so, then 5 / 2 is 2.5.
-            "SELECT 1 LIMIT $1 / 2",
-            "SELECT 1 LIMIT ($1 + 1) / 2",
         ] {
             assert!(!computable(sql), "{sql}");
         }
-        for sql in [
-            "SELECT 1 LIMIT $1::int / 2",
-            "SELECT 1 LIMIT $1 + 1",
-            "SELECT 1 LIMIT $1 * 2",
-        ] {
+        for sql in ["SELECT 1 LIMIT $1 + 1", "SELECT 1 LIMIT $1::bigint * $2"] {
             assert!(computable(sql), "{sql}");
         }
     }
