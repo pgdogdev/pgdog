@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS pgdog.resharding (
     run_id UUID NOT NULL,
     task_id BIGINT NOT NULL,
     format_version INTEGER NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (source_db, destination_db, publication)
 );
 

@@ -166,6 +166,7 @@ erDiagram
     uuid run_id
     bigint task_id
     int format_version
+    timestamptz updated_at "heartbeat"
   }
   PART_MARKER {
     uuid resharding_id PK
@@ -307,7 +308,7 @@ In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Canc
 4. Capture the config snapshot: the shard counts and sharding rules of both clusters.
 5. Insert the row before the first slot exists: command with its options, publication, slot name, "existed" flag, stage, config snapshot, owner task (instance id, run id, task id), format version.
 6. Write the stage at each phase start.
-7. Every 5 s the owner checks its state connection (lock watchdog). If the connection is lost, the run stops.
+7. Every 5 s the owner writes `updated_at` on its state connection (heartbeat, lock watchdog). If the write fails, the connection and the lock are lost, and the run stops.
 8. On stop, error, shutdown or lock loss, with `cleanup_on_cancel false`: stop tasks, keep slots and origins, release the lock. With `true`: drop the slots that the run created and all its origins, then delete the row and release the lock. If the drop fails, the row stays, so abort can finish the cleanup. After a crash, Postgres frees the lock and the row stays.
 9. At cutover start, delete the row. Cutover and reverse replication then work as today.
 10. At the end of a run with no cutover, delete the row.
@@ -318,7 +319,7 @@ Abort runs as the registered task `AbortReshardingTask`. Admin and CLI use the s
 
 The config snapshot holds the shard counts and the `sharded_tables`, `sharded_mappings`, `omnisharded_tables` and `sharded_schemas` entries of both databases. Every field is critical. Shard hosts are not stored: a failover or a DNS change keeps the same databases. The stored slots and origins prove that the databases are the same. A shared validator compares the snapshot with the live config. Stage 1 only reports the result. Stage 2 refuses a resume on a mismatch.
 
-`SHOW RESHARDING` reads the state table on shard 0 of each configured database at query time. A try-lock tells `running` from `paused`. It also counts the slots and origins that the resharding keeps. At startup in server mode, pgdog runs the same scan. It logs one warning for each unfinished resharding.
+`SHOW RESHARDING` reads the state table on shard 0 of each configured database at query time. A try-lock tells `running` from `paused`. It also counts the slots and origins that the resharding keeps. When a resharding starts, it checks its own key (an existing row refuses a fresh start; a resume checks the command, slot and config). It then reads the rest of its destination's state table: a row updated in the last 5 minutes is logged as in progress, an older row gets a warning as an unfinished resharding.
 
 Exclude the state table from the schema dump. A later run can use this destination as its source.
 

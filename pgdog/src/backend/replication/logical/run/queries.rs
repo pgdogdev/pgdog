@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use super::{ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
 use crate::net::bind::Parameter;
@@ -93,7 +95,8 @@ impl Query for SelectRow {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, instance_id, run_id::text,
-               task_id::text, format_version::text, id::text
+               task_id::text, format_version::text, id::text,
+               (extract(epoch FROM updated_at) * 1000)::bigint::text
         FROM pgdog.resharding
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
@@ -110,7 +113,8 @@ impl Query for ListRows {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, instance_id, run_id::text,
-               task_id::text, format_version::text, id::text
+               task_id::text, format_version::text, id::text,
+               (extract(epoch FROM updated_at) * 1000)::bigint::text
         FROM pgdog.resharding
         ORDER BY source_db, destination_db, publication";
 
@@ -152,10 +156,11 @@ impl Query for InsertRow {
     const SQL: &'static str = "
         INSERT INTO pgdog.resharding (
             source_db, destination_db, publication, command, slot_name,
-            slot_existed, stage, config, instance_id, run_id, task_id, format_version, id
+            slot_existed, stage, config, instance_id, run_id, task_id, format_version, id,
+            updated_at
         )
         VALUES ($1, $2, $3, $4::jsonb, $5, $6::boolean, $7, $8::jsonb, $9, $10::uuid,
-                $11::bigint, $12::integer, $13::uuid)";
+                $11::bigint, $12::integer, $13::uuid, to_timestamp($14::bigint / 1000.0))";
 
     type Params<'a> = &'a ReshardingRecord;
 
@@ -175,8 +180,14 @@ impl Query for InsertRow {
             text(&row.owner.task_id.to_string()),
             text(&row.format_version.to_string()),
             text(&row.id.to_string()),
+            text(&unix_millis(row.updated_at).to_string()),
         ]
     }
+}
+
+pub(crate) fn unix_millis(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as i64)
 }
 
 pub(crate) struct UpdateStage;
@@ -189,7 +200,7 @@ pub(crate) struct StageUpdate<'a> {
 impl Query for UpdateStage {
     const SQL: &'static str = "
         UPDATE pgdog.resharding
-        SET stage = $4
+        SET stage = $4, updated_at = now()
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
     type Params<'a> = StageUpdate<'a>;
@@ -215,7 +226,7 @@ pub(crate) struct OwnerUpdate<'a> {
 impl Query for UpdateOwner {
     const SQL: &'static str = "
         UPDATE pgdog.resharding
-        SET instance_id = $4, run_id = $5::uuid, task_id = $6::bigint
+        SET instance_id = $4, run_id = $5::uuid, task_id = $6::bigint, updated_at = now()
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
     type Params<'a> = OwnerUpdate<'a>;
@@ -230,6 +241,21 @@ impl Query for UpdateOwner {
             text(&update.owner.run_id.to_string()),
             text(&update.owner.task_id.to_string()),
         ]
+    }
+}
+
+pub(crate) struct Heartbeat;
+
+impl Query for Heartbeat {
+    const SQL: &'static str = "
+        UPDATE pgdog.resharding
+        SET updated_at = now()
+        WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
+
+    type Params<'a> = &'a ReshardingKey;
+
+    fn params(key: &ReshardingKey) -> Vec<Parameter> {
+        key_params(key).into()
     }
 }
 

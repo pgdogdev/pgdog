@@ -422,15 +422,27 @@ impl ReshardingState {
         stage: Stage,
         task_id: TaskId,
     ) -> Result<(), Error> {
-        let store = ReshardingStore::open(&self.state_address().await?, self.run_key()).await?;
+        let key = self.run_key();
+        let address = self.state_address().await?;
+        let store = ReshardingStore::open(&address, key.clone()).await?;
         let (slot_objects, origin_objects) =
             match self.record_run(&store, command, stage, task_id).await {
                 Ok(objects) => objects,
                 Err(err) => {
+                    warn!("resharding {key}: refused to start: {err}");
                     unlock(&store).await;
                     return Err(err);
                 }
             };
+        info!(
+            "resharding {key}: {} ({command}, slots {slot_objects:?}, origins {origin_objects:?})",
+            if self.inner.lock().resume {
+                "resumed"
+            } else {
+                "started"
+            },
+        );
+        run::scan::check_other_runs(&address, &key).await;
 
         let mut inner = self.inner.lock();
         inner.store = Some(Arc::new(store));
@@ -489,6 +501,7 @@ impl ReshardingState {
                         config: self.config_snapshot()?,
                         owner: TaskOwner::current(task_id),
                         format_version: FORMAT_VERSION,
+                        updated_at: std::time::SystemTime::now(),
                     })
                     .await?;
                 Ok((RunObjects::Create, RunObjects::Create))
@@ -1078,6 +1091,52 @@ mod test {
         state
             .start_run(REPLICATE, Stage::Replication, TaskId::new(task_id))
             .await
+    }
+
+    #[tokio::test]
+    async fn other_unfinished_runs_only_warn() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let paused_name = "state_other_paused";
+        let new_name = "state_other_new";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        for name in [paused_name, new_name] {
+            remove_resumable(&mut publication.server, name).await;
+        }
+
+        let paused = keyed_state(&source, paused_name, false);
+        start(&paused, 1).await.unwrap();
+        paused.cancel_run().await.unwrap();
+        publication
+            .server
+            .execute_checked(format!(
+                "UPDATE pgdog.resharding SET updated_at = now() - interval '10 minutes' \
+                 WHERE slot_name = '{paused_name}'"
+            ))
+            .await
+            .unwrap();
+
+        let again = start(&keyed_state(&source, paused_name, false), 2).await;
+        assert!(
+            matches!(again, Err(Error::ReshardingExists { .. })),
+            "{again:?}"
+        );
+
+        let other = keyed_state(&source, new_name, false);
+        start(&other, 3).await.unwrap();
+        assert_eq!(
+            resharding_rows(&mut publication.server, paused_name).await,
+            1
+        );
+        assert_eq!(resharding_rows(&mut publication.server, new_name).await, 1);
+        other.finish_run().await.unwrap();
+
+        for name in [paused_name, new_name] {
+            remove_resumable(&mut publication.server, name).await;
+        }
+        source.shutdown();
+        publication.cleanup().await;
     }
 
     async fn pause_after_replication(state: &ReshardingState) {

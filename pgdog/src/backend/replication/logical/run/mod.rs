@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
 
 use derive_more::{Display, FromStr, FromStrError};
 
@@ -199,6 +200,15 @@ pub(crate) struct ReshardingRecord {
     pub(crate) config: ConfigSnapshot,
     pub(crate) owner: TaskOwner,
     pub(crate) format_version: i32,
+    pub(crate) updated_at: SystemTime,
+}
+
+impl ReshardingRecord {
+    pub(crate) fn since_update(&self) -> Duration {
+        SystemTime::now()
+            .duration_since(self.updated_at)
+            .unwrap_or_default()
+    }
 }
 
 pub(crate) async fn existing_slots(

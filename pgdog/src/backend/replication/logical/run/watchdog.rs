@@ -7,8 +7,9 @@ use super::super::resharding_state::ReshardingState;
 use crate::tasks;
 use crate::util::safe_timeout;
 
-const LOCK_CHECK_INTERVAL: Duration = Duration::from_secs(5);
-const LOCK_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+/// The heartbeat write also checks the state connection.
+pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct ActiveRun {
     _watchdog: Option<AbortOnDropHandle<()>>,
@@ -19,12 +20,12 @@ impl ActiveRun {
         let watchdog = state.run_store().map(|store| {
             AbortOnDropHandle::new(tasks::spawn("resharding lock watchdog", async move {
                 loop {
-                    tokio::time::sleep(LOCK_CHECK_INTERVAL).await;
+                    tokio::time::sleep(HEARTBEAT_INTERVAL).await;
                     let Some(store) = store.upgrade() else {
                         return;
                     };
                     if !matches!(
-                        safe_timeout(LOCK_CHECK_TIMEOUT, store.ping()).await,
+                        safe_timeout(HEARTBEAT_TIMEOUT, store.heartbeat()).await,
                         Ok(Ok(()))
                     ) {
                         warn!(

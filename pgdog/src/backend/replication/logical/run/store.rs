@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
+use std::time::{Duration, UNIX_EPOCH};
 
 use pgdog_stats::{Databases, InstanceId};
 use serde::de::DeserializeOwned;
@@ -7,8 +8,9 @@ use tokio::sync::Mutex;
 
 use super::super::{Error, subscriber::connect_address};
 use super::queries::{
-    CREATE_TABLE, DeleteRow, InsertRow, ListRows, LockHolder, OwnerUpdate, Query, SelectRow,
-    SetApplicationName, StageUpdate, TableExists, TryLock, Unlock, UpdateOwner, UpdateStage,
+    CREATE_TABLE, DeleteRow, Heartbeat, InsertRow, ListRows, LockHolder, OwnerUpdate, Query,
+    SelectRow, SetApplicationName, StageUpdate, TableExists, TryLock, Unlock, UpdateOwner,
+    UpdateStage,
 };
 use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
@@ -89,8 +91,8 @@ impl ReshardingStore {
         self.execute(DeleteRow::request(&self.key)).await
     }
 
-    pub(crate) async fn ping(&self) -> Result<(), Error> {
-        self.execute("SELECT 1").await
+    pub(crate) async fn heartbeat(&self) -> Result<(), Error> {
+        self.execute(Heartbeat::request(&self.key)).await
     }
 
     pub(crate) async fn unlock(&self) -> Result<(), Error> {
@@ -222,6 +224,8 @@ fn parse_record(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, E
             task_id: parsed(row, 10, "task_id")?,
         },
         format_version,
+        updated_at: UNIX_EPOCH
+            + Duration::from_millis(parsed::<i64>(row, 13, "updated_at")?.max(0) as u64),
     })
 }
 
@@ -286,6 +290,13 @@ mod test {
             config,
             owner: TaskOwner::current(pgdog_stats::TaskId::new(7)),
             format_version: FORMAT_VERSION,
+            updated_at: UNIX_EPOCH
+                + Duration::from_millis(
+                    std::time::SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                ),
         }
     }
 
@@ -411,9 +422,11 @@ mod test {
         store.set_stage(Stage::Replication).await.unwrap();
         let loaded = store.load().await.unwrap().unwrap();
         assert_eq!(loaded.stage, Stage::Replication);
+        assert!(loaded.since_update() < Duration::from_secs(60));
         assert_eq!(
             ReshardingRecord {
                 stage: Stage::Copy,
+                updated_at: row.updated_at,
                 ..loaded
             },
             row
@@ -452,11 +465,41 @@ mod test {
             .unwrap();
 
         assert!(store.set_stage(Stage::Replication).await.is_err());
-        assert!(store.ping().await.is_err());
+        assert!(store.heartbeat().await.is_err());
         drop(store);
 
         let store = open_after_drop(&addr, key).await;
         assert_eq!(store.load().await.unwrap().unwrap().stage, Stage::Copy);
+        store.delete().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn writes_refresh_the_update_time() {
+        let addr = Address::new_test();
+        let key = key("store_heartbeat");
+        let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
+        store.delete().await.unwrap();
+        store.insert(&row(key.clone())).await.unwrap();
+
+        let mut server = test_server().await;
+        let backdate = format!(
+            "UPDATE pgdog.resharding SET updated_at = now() - interval '10 minutes' \
+             WHERE source_db = '{}'",
+            key.databases.source
+        );
+        for write in ["heartbeat", "stage"] {
+            server.execute_checked(backdate.as_str()).await.unwrap();
+            let before = store.load().await.unwrap().unwrap().since_update();
+            assert!(before >= Duration::from_secs(600), "{write}: {before:?}");
+
+            match write {
+                "heartbeat" => store.heartbeat().await.unwrap(),
+                _ => store.set_stage(Stage::Replication).await.unwrap(),
+            }
+            let after = store.load().await.unwrap().unwrap().since_update();
+            assert!(after < Duration::from_secs(60), "{write}: {after:?}");
+        }
+
         store.delete().await.unwrap();
     }
 }

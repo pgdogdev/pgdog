@@ -12,46 +12,34 @@ use crate::backend::Cluster;
 use crate::backend::databases::databases;
 use crate::backend::pool::{Address, Request};
 use crate::config::config;
-use crate::util::safe_timeout;
+use crate::util::{human_duration_display, safe_timeout};
+use tracing::{info, warn};
 
 const SCAN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Rows of running reshardings are refreshed every few seconds by the heartbeat.
+const STALE_AFTER: Duration = Duration::from_secs(5 * 60);
 
-/// One entry of the scan: what `SHOW RESHARDING` and the startup warning
-/// report for each state table and its rows.
 #[derive(Debug)]
 pub(crate) enum ReshardingScan {
-    /// A row this pgdog version can read, with the live checks of its objects.
     Found(Box<ReshardingReport>),
-    /// A row written by a newer or unknown format; only its key is known.
     Unreadable { key: ReshardingKey, error: String },
-    /// The state table of these databases could not be read at all.
     Failed { database: String, error: String },
 }
 
-/// An unfinished resharding and what is true about it right now.
 #[derive(Debug)]
 pub(crate) struct ReshardingReport {
-    /// The stored row, as the last attempt left it.
     pub(crate) record: ReshardingRecord,
-    /// Whether a session holds the resharding lock at the time of the scan.
     pub(crate) state: RunState,
-    /// Forward replication slots on the source shards. `None` when they could
-    /// not be counted: the source is not configured, or a query failed.
+    /// `None` when the objects could not be counted.
     pub(crate) slots: Option<ObjectCount>,
-    /// Replication origins on the destination shards. `None` as for `slots`.
     pub(crate) origins: Option<ObjectCount>,
-    /// The stored sharding config compared with the live one.
     pub(crate) config: ConfigCheck,
 }
 
-/// The lock decides the state: the database is the source of truth.
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
 pub(crate) enum RunState {
-    /// A session holds the lock; `owner` is its pgdog instance id.
     #[display("running")]
     Running { owner: String },
-    /// No session holds the lock: the run stopped or crashed and kept its
-    /// slots and origins.
     #[display("paused")]
     Paused,
 }
@@ -65,9 +53,6 @@ impl RunState {
     }
 }
 
-/// How many objects of one kind exist, and how many the resharding needs.
-/// One slot per source shard; one origin per source shard on each destination
-/// shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 #[display("{present}/{expected}")]
 pub(crate) struct ObjectCount {
@@ -75,21 +60,15 @@ pub(crate) struct ObjectCount {
     pub(crate) expected: usize,
 }
 
-/// Result of comparing the config snapshot in the row with the live config.
-/// A resume (Stage 2) refuses `Changed`; Stage 1 only reports it.
 #[derive(Debug, Display)]
 pub(crate) enum ConfigCheck {
-    /// Every stored sharding setting matches the live config.
     #[display("ok")]
     Unchanged,
-    /// These settings differ from the live config.
     #[display(
         "changed: {}",
         _0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
     Changed(Vec<ConfigMismatch>),
-    /// The live config cannot be compared, for example because the source or
-    /// destination is no longer configured.
     #[display("unknown: {_0}")]
     Unknown(String),
 }
@@ -133,6 +112,73 @@ pub(crate) async fn scan() -> Vec<ReshardingScan> {
     .await;
     results.extend(scans.into_iter().flatten());
     results
+}
+
+/// Never fails the run: other reshardings on the destination are only logged.
+pub(crate) async fn check_other_runs(address: &Address, own: &ReshardingKey) {
+    info!("resharding {own}: checking {address} for other unfinished reshardings");
+    let found = match safe_timeout(SCAN_TIMEOUT, scan_table(address)).await {
+        Ok(Ok(found)) => found,
+        Ok(Err(err)) => {
+            warn!("resharding {own}: checking other reshardings on {address} failed: {err}");
+            return;
+        }
+        Err(_) => {
+            warn!(
+                "resharding {own}: checking other reshardings on {address} timed out after {}s",
+                SCAN_TIMEOUT.as_secs()
+            );
+            return;
+        }
+    };
+
+    let mut others = 0;
+    for entry in found {
+        match entry {
+            ReshardingScan::Found(report) if report.record.key != *own => {
+                others += 1;
+                log_other_run(&report);
+            }
+            ReshardingScan::Unreadable { key, error } if key != *own => {
+                others += 1;
+                warn!("unfinished resharding {key} cannot be read by this pgdog version: {error}")
+            }
+            _ => (),
+        }
+    }
+    if others == 0 {
+        info!("resharding {own}: no other unfinished reshardings on {address}");
+    }
+}
+
+fn log_other_run(report: &ReshardingReport) {
+    let record = &report.record;
+    let state = match &report.state {
+        RunState::Running { owner } => format!("running on {owner}"),
+        RunState::Paused => "paused".into(),
+    };
+    let since_update = record.since_update();
+    let since_text = human_duration_display(since_update);
+    if since_update < STALE_AFTER {
+        info!(
+            "resharding {} is in progress ({}, stage {}, {state}, last update {since_text} ago)",
+            record.key, record.command, record.stage,
+        );
+    } else {
+        let count = |count: Option<ObjectCount>| {
+            count.map_or_else(|| "unknown".into(), |count| count.to_string())
+        };
+        warn!(
+            "unfinished resharding {} ({}, stage {}, {state}, last update {since_text} ago, slot {}, slots {}, origins {}, config {}); resume it or abort it with WITH (abort)",
+            record.key,
+            record.command,
+            record.stage,
+            record.slot_name,
+            count(report.slots),
+            count(report.origins),
+            report.config,
+        );
+    }
 }
 
 async fn scan_table(address: &Address) -> Result<Vec<ReshardingScan>, Error> {
