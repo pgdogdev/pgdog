@@ -97,15 +97,7 @@ pub(super) async fn abort(
     command: CommandKind,
     slot: Option<String>,
 ) -> Result<Vec<Message>, Error> {
-    state.check_record(command, slot.as_deref()).await?;
-    let task_id = run_task(
-        AbortReshardingTask::builder()
-            .state(state)
-            .command(command)
-            .maybe_slot(slot)
-            .build(),
-    )
-    .id();
+    let task_id = run_task(AbortReshardingTask::checked(state, command, slot).await?).id();
 
     let mut dr = DataRow::new();
     dr.add(task_id.to_string());
@@ -121,29 +113,9 @@ mod test {
     use super::*;
 
     #[test]
-    fn parses_run_mode() {
+    fn parses_slot_and_run_mode() {
         for (sql, slot, mode) in [
             ("reshard a b pub", None, RunMode::WithCleanup),
-            (
-                "reshard a b pub (cleanup_on_cancel)",
-                None,
-                RunMode::WithCleanup,
-            ),
-            (
-                "reshard a b pub (cleanup_on_cancel true)",
-                None,
-                RunMode::WithCleanup,
-            ),
-            (
-                "reshard a b pub with (cleanup_on_cancel false)",
-                None,
-                RunMode::NoCleanup,
-            ),
-            (
-                "reshard a b pub (cleanup_on_cancel off)",
-                None,
-                RunMode::NoCleanup,
-            ),
             (
                 "reshard a b pub slot with (cleanup_on_cancel false)",
                 Some("slot"),
@@ -156,16 +128,9 @@ mod test {
             assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
             assert_eq!(cmd.mode, mode, "{sql}");
         }
-
-        for sql in [
-            "reshard a b pub (cleanup_on_cancel maybe)",
-            "reshard a b pub (cleanup_on_cancel false, abort)",
-            "reshard a b pub (unknown)",
-        ] {
-            assert!(
-                matches!(Reshard::parse(sql), Err(Error::InvalidOption(_))),
-                "{sql}"
-            );
-        }
+        assert!(matches!(
+            Reshard::parse("reshard a b pub (unknown)"),
+            Err(Error::InvalidOption(_))
+        ));
     }
 }

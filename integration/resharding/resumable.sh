@@ -5,11 +5,11 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/shared.sh"
 
 slot_count() {
-    pg_sql "$1" "SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '$2%'"
+    pg_sql "$1" "SELECT count(*) FROM pg_replication_slots WHERE starts_with(slot_name::text, '$2')"
 }
 
 origin_count() {
-    pg_sql "$1" "SELECT count(*) FROM pg_replication_origin WHERE roname LIKE '__pgdog_origin_$2%'"
+    pg_sql "$1" "SELECT count(*) FROM pg_replication_origin WHERE starts_with(roname, '__pgdog_origin_$2')"
 }
 
 resharding_rows() {
@@ -25,11 +25,13 @@ resharding_record() {
 }
 
 lock_holders() {
-    pg_sql 15434 "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE l.locktype = 'advisory' AND l.granted AND a.application_name LIKE 'pgdog_resharding:%'"
+    pg_sql 15434 "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE l.locktype = 'advisory' AND l.granted AND starts_with(a.application_name, 'pgdog_resharding:')"
 }
 
 resharding_row() {
-    psql admin -tAc 'SHOW RESHARDING' | grep '^source|destination|' || true
+    local rows
+    rows=$(psql admin -tAc 'SHOW RESHARDING')
+    grep '^source|destination|' <<< "${rows}" || true
 }
 
 # SHOW RESHARDING without owner and last_task, which change between runs.
@@ -64,8 +66,9 @@ PAUSED="source|destination|reshard|pgdog|replication|paused|${SLOT}|f|2/2|4/4|ok
 test "$(resharding_status)" = "${PAUSED}"
 
 # The pause survives a restart: SHOW RESHARDING reads the database, not memory.
-kill -TERM "${PGBENCH_PID}"
+kill -TERM "${PGBENCH_PID}" 2>/dev/null || true
 wait "${PGBENCH_PID}" || true
+PGBENCH_PID=""
 restart_pgdog
 test "$(resharding_status)" = "${PAUSED}"
 

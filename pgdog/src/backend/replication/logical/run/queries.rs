@@ -18,10 +18,17 @@ pub(crate) trait Query {
     }
 }
 
-pub(crate) struct SetApplicationName;
+pub(crate) struct SetupSession;
 
-impl Query for SetApplicationName {
-    const SQL: &'static str = "SELECT set_config('application_name', $1, false)";
+impl Query for SetupSession {
+    // change tcp keepalive settings to react faster on the
+    // client socket abruption
+    const SQL: &'static str = "
+        SELECT set_config('application_name', $1, false),
+               set_config('tcp_keepalives_idle', '60', false),
+               set_config('tcp_keepalives_interval', '15', false),
+               set_config('tcp_keepalives_count', '4', false),
+               set_config('tcp_user_timeout', '120000', false)";
 
     type Params<'a> = &'a str;
 
@@ -96,7 +103,8 @@ impl Query for SelectRow {
         SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, instance_id, run_id::text,
                task_id::text, format_version::text, id::text,
-               (extract(epoch FROM updated_at) * 1000)::bigint::text
+               (extract(epoch FROM started_at) * 1000)::bigint::text,
+               coalesce((extract(epoch FROM resumed_at) * 1000)::bigint::text, '')
         FROM pgdog.resharding
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
@@ -114,7 +122,8 @@ impl Query for ListRows {
         SELECT source_db, destination_db, publication, command::text, slot_name,
                slot_existed::text, stage, config::text, instance_id, run_id::text,
                task_id::text, format_version::text, id::text,
-               (extract(epoch FROM updated_at) * 1000)::bigint::text
+               (extract(epoch FROM started_at) * 1000)::bigint::text,
+               coalesce((extract(epoch FROM resumed_at) * 1000)::bigint::text, '')
         FROM pgdog.resharding
         ORDER BY source_db, destination_db, publication";
 
@@ -157,7 +166,7 @@ impl Query for InsertRow {
         INSERT INTO pgdog.resharding (
             source_db, destination_db, publication, command, slot_name,
             slot_existed, stage, config, instance_id, run_id, task_id, format_version, id,
-            updated_at
+            started_at
         )
         VALUES ($1, $2, $3, $4::jsonb, $5, $6::boolean, $7, $8::jsonb, $9, $10::uuid,
                 $11::bigint, $12::integer, $13::uuid, to_timestamp($14::bigint / 1000.0))";
@@ -180,12 +189,12 @@ impl Query for InsertRow {
             text(&row.owner.task_id.to_string()),
             text(&row.format_version.to_string()),
             text(&row.id.to_string()),
-            text(&unix_millis(row.updated_at).to_string()),
+            text(&unix_millis(row.started_at).to_string()),
         ]
     }
 }
 
-pub(crate) fn unix_millis(time: SystemTime) -> i64 {
+fn unix_millis(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_millis() as i64)
 }
@@ -200,7 +209,7 @@ pub(crate) struct StageUpdate<'a> {
 impl Query for UpdateStage {
     const SQL: &'static str = "
         UPDATE pgdog.resharding
-        SET stage = $4, updated_at = now()
+        SET stage = $4
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
     type Params<'a> = StageUpdate<'a>;
@@ -216,22 +225,24 @@ impl Query for UpdateStage {
     }
 }
 
-pub(crate) struct UpdateOwner;
+pub(crate) struct ResumeRow;
 
-pub(crate) struct OwnerUpdate<'a> {
+pub(crate) struct ResumeUpdate<'a> {
     pub(crate) key: &'a ReshardingKey,
     pub(crate) owner: &'a TaskOwner,
+    pub(crate) resumed_at: SystemTime,
 }
 
-impl Query for UpdateOwner {
+impl Query for ResumeRow {
     const SQL: &'static str = "
         UPDATE pgdog.resharding
-        SET instance_id = $4, run_id = $5::uuid, task_id = $6::bigint, updated_at = now()
+        SET instance_id = $4, run_id = $5::uuid, task_id = $6::bigint,
+            resumed_at = to_timestamp($7::bigint / 1000.0)
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
-    type Params<'a> = OwnerUpdate<'a>;
+    type Params<'a> = ResumeUpdate<'a>;
 
-    fn params(update: OwnerUpdate<'_>) -> Vec<Parameter> {
+    fn params(update: ResumeUpdate<'_>) -> Vec<Parameter> {
         let [source, destination, publication] = key_params(update.key);
         vec![
             source,
@@ -240,6 +251,7 @@ impl Query for UpdateOwner {
             text(update.owner.instance_id.as_str()),
             text(&update.owner.run_id.to_string()),
             text(&update.owner.task_id.to_string()),
+            text(&unix_millis(update.resumed_at).to_string()),
         ]
     }
 }
@@ -247,15 +259,12 @@ impl Query for UpdateOwner {
 pub(crate) struct Heartbeat;
 
 impl Query for Heartbeat {
-    const SQL: &'static str = "
-        UPDATE pgdog.resharding
-        SET updated_at = now()
-        WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
+    const SQL: &'static str = "SELECT 1";
 
-    type Params<'a> = &'a ReshardingKey;
+    type Params<'a> = ();
 
-    fn params(key: &ReshardingKey) -> Vec<Parameter> {
-        key_params(key).into()
+    fn params(_: ()) -> Vec<Parameter> {
+        vec![]
     }
 }
 

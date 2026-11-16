@@ -43,6 +43,10 @@ pub(crate) struct ReplicationOrigin {
     retry_delay: Duration,
 }
 
+pub(crate) fn origin_name(slot: &str, shard: usize) -> String {
+    format!("__pgdog_origin_{slot}_{shard}")
+}
+
 #[bon::bon]
 impl ReplicationOrigin {
     /// Origin for the stream of replication slot `name` on destination
@@ -56,7 +60,7 @@ impl ReplicationOrigin {
         #[builder(default = RETRY_DELAY)] retry_delay: Duration,
     ) -> Self {
         Self {
-            name: quote_literal(&format!("__pgdog_origin_{name}_{shard}")),
+            name: quote_literal(&origin_name(name, shard)),
             address: address.clone(),
             retry_attempts,
             retry_delay,

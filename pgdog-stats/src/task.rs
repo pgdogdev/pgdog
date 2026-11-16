@@ -843,6 +843,20 @@ mod test {
         );
 
         assert_eq!(
+            serde_json::from_str::<Vec<TaskStatus>>(
+                r#"[{"kind":"reshard","status":"new_stage"},{"kind":"reshard","status":"syncing_data"}]"#
+            )
+            .unwrap(),
+            vec![
+                TaskStatus::Reshard(ReshardStatus::Other),
+                TaskStatus::Reshard(ReshardStatus::SyncingData)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_missing_cleanup_on_cancel_reads_as_true() {
+        assert_eq!(
             serde_json::from_str::<TaskDefinition>(
                 r#"{"name":"reshard","kind":"reshard","databases":{"source":"prod","destination":"prod_sharded"},"skip_schema_sync":false,"replicate_only":false,"sync_only":false,"auto_cutover":true}"#
             )
@@ -867,16 +881,24 @@ mod test {
                 cleanup_on_cancel: true,
             })
         );
+    }
 
+    #[test]
+    fn test_abort_resharding_definition() {
+        let definition = TaskDefinition::from(AbortReshardingDefinition {
+            databases: databases(),
+            command: "reshard".into(),
+        });
+        assert_eq!(definition.to_string(), "abort reshard prod -> prod_sharded");
+
+        let json = r#"{"name":"abort_resharding","kind":"abort_resharding","databases":{"source":"prod","destination":"prod_sharded"},"command":"reshard"}"#;
         assert_eq!(
-            serde_json::from_str::<Vec<TaskStatus>>(
-                r#"[{"kind":"reshard","status":"new_stage"},{"kind":"reshard","status":"syncing_data"}]"#
-            )
-            .unwrap(),
-            vec![
-                TaskStatus::Reshard(ReshardStatus::Other),
-                TaskStatus::Reshard(ReshardStatus::SyncingData)
-            ]
+            serde_json::to_value(&definition).unwrap(),
+            serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskDefinition>(json).unwrap(),
+            definition
         );
     }
 

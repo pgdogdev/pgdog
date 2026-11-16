@@ -2,6 +2,7 @@
 
 use super::error::Error;
 
+// W: maybe it should have 2 variants and the cleanup as a separate flag?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunMode {
     WithCleanup,
@@ -73,7 +74,7 @@ impl<'a> Options<'a> {
         let abort = self.flag("abort")?;
         let cleanup_on_cancel = self.take("cleanup_on_cancel");
         if abort && cleanup_on_cancel.is_some() {
-            return Err(Error::InvalidOption("abort".into()));
+            return Err(Error::InvalidOption("abort with cleanup_on_cancel".into()));
         }
         if abort {
             return Ok(RunMode::Abort);
@@ -163,9 +164,18 @@ mod test {
             ("reshard a b (cleanup_on_cancel maybe)", "cleanup_on_cancel"),
             ("reshard a b (cleanup_on_cancel 1)", "cleanup_on_cancel"),
             ("reshard a b (abort true)", "abort"),
-            ("reshard a b (abort, cleanup_on_cancel)", "abort"),
-            ("reshard a b (cleanup_on_cancel false, abort)", "abort"),
-            ("reshard a b (abort, cleanup_on_cancel true)", "abort"),
+            (
+                "reshard a b (abort, cleanup_on_cancel)",
+                "abort with cleanup_on_cancel",
+            ),
+            (
+                "reshard a b (cleanup_on_cancel false, abort)",
+                "abort with cleanup_on_cancel",
+            ),
+            (
+                "reshard a b (abort, cleanup_on_cancel true)",
+                "abort with cleanup_on_cancel",
+            ),
         ] {
             let (_, mut options) = Options::parse(sql).unwrap();
             assert!(

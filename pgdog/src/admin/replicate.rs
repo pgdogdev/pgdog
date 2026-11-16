@@ -104,29 +104,9 @@ mod test {
     use super::*;
 
     #[test]
-    fn parses_run_mode() {
+    fn parses_slot_and_run_mode() {
         for (sql, slot, mode) in [
             ("replicate a b pub", None, RunMode::WithCleanup),
-            (
-                "replicate a b pub (cleanup_on_cancel)",
-                None,
-                RunMode::WithCleanup,
-            ),
-            (
-                "replicate a b pub (cleanup_on_cancel true)",
-                None,
-                RunMode::WithCleanup,
-            ),
-            (
-                "replicate a b pub with (cleanup_on_cancel false)",
-                None,
-                RunMode::NoCleanup,
-            ),
-            (
-                "replicate a b pub (cleanup_on_cancel off)",
-                None,
-                RunMode::NoCleanup,
-            ),
             (
                 "replicate a b pub slot with (cleanup_on_cancel false)",
                 Some("slot"),
@@ -139,16 +119,9 @@ mod test {
             assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
             assert_eq!(cmd.mode, mode, "{sql}");
         }
-
-        for sql in [
-            "replicate a b pub (cleanup_on_cancel maybe)",
-            "replicate a b pub (cleanup_on_cancel false, abort)",
-            "replicate a b pub (unknown)",
-        ] {
-            assert!(
-                matches!(Replicate::parse(sql), Err(Error::InvalidOption(_))),
-                "{sql}"
-            );
-        }
+        assert!(matches!(
+            Replicate::parse("replicate a b pub (unknown)"),
+            Err(Error::InvalidOption(_))
+        ));
     }
 }

@@ -153,7 +153,16 @@ restart_pgdog() {
     wait "${PGDOG_PID}" || true
     "${PGDOG_BIN}" &
     PGDOG_PID="$!"
+    local deadline=$((SECONDS + 60))
     until psql admin -c 'SHOW TASKS' > /dev/null 2>&1; do
+        if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
+            echo "ERROR: PgDog exited during restart"
+            return 1
+        fi
+        if [ "${SECONDS}" -ge "${deadline}" ]; then
+            echo "ERROR: PgDog did not accept admin connections within 60s after restart"
+            return 1
+        fi
         sleep 1
     done
 }
@@ -427,12 +436,20 @@ admin_task_type() {
 wait_admin_task_status() {
     local task_id="$1"
     local expected="$2"
-    local row
+    local row status
     for _ in $(seq 1 120); do
         row=$(admin_task_row "${task_id}")
-        if [ "${row%%|*}" = "${expected}" ]; then
+        status=${row%%|*}
+        if [ "${status}" = "${expected}" ]; then
             return 0
         fi
+        case "${status}" in
+            finished|failed:*|panicked:*|cancelled)
+                echo "task ${task_id} reached ${status} while waiting for ${expected}"
+                psql admin -c 'SHOW TASKS'
+                return 1
+                ;;
+        esac
         sleep 1
     done
     echo "task ${task_id} did not reach ${expected} within 120s"
@@ -444,13 +461,14 @@ wait_for_value() {
     local expected="$1"
     shift
     local value=""
-    for _ in $(seq 1 10); do
+    for _ in $(seq 1 30); do
         value=$("$@")
         if [ "${value}" = "${expected}" ]; then
             return 0
         fi
         sleep 1
     done
-    echo "$* returned ${value}, expected ${expected}"
+    echo "$* returned ${value}, expected ${expected} within 30s"
+    psql admin -c 'SHOW TASKS'
     return 1
 }

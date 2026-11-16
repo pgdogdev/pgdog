@@ -10,5 +10,6 @@ use crate::Databases;
 #[display("abort {command} {databases}")]
 pub struct AbortReshardingDefinition {
     pub databases: Databases,
+    // W: can we reuse ReshardingCommand?
     pub command: String,
 }

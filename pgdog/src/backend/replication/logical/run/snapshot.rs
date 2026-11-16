@@ -1,5 +1,8 @@
 use derive_more::Display;
-use serde::{Deserialize, Serialize};
+use pgdog_config::{
+    OmnishardedTables, ShardedMappingDeprecated, ShardedSchema, ShardedTableConfig,
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use super::super::Error;
@@ -47,19 +50,25 @@ impl ClusterSnapshot {
             (ConfigField::Shards, self.shards != current.shards),
             (
                 ConfigField::ShardedTables,
-                self.sharded_tables != current.sharded_tables,
+                !same_rules::<ShardedTableConfig>(&self.sharded_tables, &current.sharded_tables),
             ),
             (
                 ConfigField::ShardedMappings,
-                self.sharded_mappings != current.sharded_mappings,
+                !same_rules::<ShardedMappingDeprecated>(
+                    &self.sharded_mappings,
+                    &current.sharded_mappings,
+                ),
             ),
             (
                 ConfigField::OmnishardedTables,
-                self.omnisharded_tables != current.omnisharded_tables,
+                !same_rules::<OmnishardedTables>(
+                    &self.omnisharded_tables,
+                    &current.omnisharded_tables,
+                ),
             ),
             (
                 ConfigField::ShardedSchemas,
-                self.sharded_schemas != current.sharded_schemas,
+                !same_rules::<ShardedSchema>(&self.sharded_schemas, &current.sharded_schemas),
             ),
         ]
         .into_iter()
@@ -141,9 +150,23 @@ fn sorted_rules<T: Serialize>(items: impl Iterator<Item = T>) -> Result<Vec<Valu
     Ok(rules)
 }
 
+/// Compare two rule lists as config values of type `T`. Rules that
+/// `T` cannot read are compared as JSON.
+fn same_rules<T: DeserializeOwned + PartialEq>(stored: &[Value], current: &[Value]) -> bool {
+    let parse = |rules: &[Value]| {
+        rules
+            .iter()
+            .map(T::deserialize)
+            .collect::<Result<Vec<T>, _>>()
+    };
+    match (parse(stored), parse(current)) {
+        (Ok(stored), Ok(current)) => stored == current,
+        _ => stored == current,
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use pgdog_config::ShardedTableConfig;
     use serde_json::json;
 
     use super::*;
@@ -193,46 +216,60 @@ mod test {
     }
 
     #[test]
-    fn validate_equal_finds_source_mismatches() {
-        let left = snapshot();
-        let mut right = snapshot();
-        right.source.shards = 2;
-        right.source.sharded_tables = rules();
-        right.source.sharded_mappings = rules();
-        right.source.omnisharded_tables = rules();
-        right.source.sharded_schemas = rules();
+    fn stored_rules_read_missing_fields_as_defaults() {
+        let current = sorted_rules([table("users")].iter()).unwrap();
+        let mut stored = current.clone();
+        stored[0].as_object_mut().unwrap().remove("lookup_query");
+        assert!(same_rules::<ShardedTableConfig>(&stored, &current));
 
-        assert_eq!(
-            left.validate_equal(&right),
-            Err(vec![
-                ConfigMismatch::Source(ConfigField::Shards),
-                ConfigMismatch::Source(ConfigField::ShardedTables),
-                ConfigMismatch::Source(ConfigField::ShardedMappings),
-                ConfigMismatch::Source(ConfigField::OmnishardedTables),
-                ConfigMismatch::Source(ConfigField::ShardedSchemas),
-            ])
-        );
+        let lookup = ShardedTableConfig {
+            lookup_query: Some("SELECT shard FROM users".into()),
+            ..table("users")
+        };
+        let current = sorted_rules([lookup].iter()).unwrap();
+        assert!(!same_rules::<ShardedTableConfig>(&stored, &current));
     }
 
     #[test]
-    fn validate_equal_finds_destination_mismatches() {
+    fn centroids_read_back_from_json_text_report_no_change() {
+        let vector = ShardedTableConfig {
+            centroids: (1..=2000)
+                .map(|value| vec![value as f32 / 7.0, value as f32 / 3.0].into())
+                .collect(),
+            ..table("embeddings")
+        };
+        let current = sorted_rules([vector].iter()).unwrap();
+        let stored: Vec<Value> =
+            serde_json::from_str(&serde_json::to_string(&current).unwrap()).unwrap();
+        assert!(same_rules::<ShardedTableConfig>(&stored, &current));
+    }
+
+    #[test]
+    fn validate_equal_finds_every_changed_field() {
         let left = snapshot();
         let mut right = snapshot();
-        right.destination.shards = 3;
-        right.destination.sharded_tables = rules();
-        right.destination.sharded_mappings = rules();
-        right.destination.omnisharded_tables = rules();
-        right.destination.sharded_schemas = rules();
+        for (cluster, shards) in [(&mut right.source, 2), (&mut right.destination, 3)] {
+            cluster.shards = shards;
+            cluster.sharded_tables = rules();
+            cluster.sharded_mappings = rules();
+            cluster.omnisharded_tables = rules();
+            cluster.sharded_schemas = rules();
+        }
 
+        let fields = [
+            ConfigField::Shards,
+            ConfigField::ShardedTables,
+            ConfigField::ShardedMappings,
+            ConfigField::OmnishardedTables,
+            ConfigField::ShardedSchemas,
+        ];
         assert_eq!(
             left.validate_equal(&right),
-            Err(vec![
-                ConfigMismatch::Destination(ConfigField::Shards),
-                ConfigMismatch::Destination(ConfigField::ShardedTables),
-                ConfigMismatch::Destination(ConfigField::ShardedMappings),
-                ConfigMismatch::Destination(ConfigField::OmnishardedTables),
-                ConfigMismatch::Destination(ConfigField::ShardedSchemas),
-            ])
+            Err(fields
+                .map(ConfigMismatch::Source)
+                .into_iter()
+                .chain(fields.map(ConfigMismatch::Destination))
+                .collect())
         );
     }
 

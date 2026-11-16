@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use derive_more::{Display, FromStr, FromStrError};
 
@@ -37,7 +37,7 @@ pub(crate) async fn state_address(destination: &Cluster) -> Result<Address, Erro
 
 pub(crate) const RESHARDING_TABLE: &str = "resharding";
 
-/// Version of the data in [`RESHARDING_TABLE`]. Need to be update in case of breaking changes
+/// Version of the data in [`RESHARDING_TABLE`]. Increase it on breaking changes.
 pub(crate) const FORMAT_VERSION: i32 = 1;
 
 /// Identifier of the specific resharding.
@@ -57,7 +57,7 @@ impl ReshardingKey {
     }
 }
 
-/// Defines the command that was ran, with the options of that command.
+/// The command that started the run, with its options.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub(crate) enum ReshardingCommand {
@@ -109,7 +109,7 @@ pub(crate) enum CommandKind {
     Replicate,
 }
 
-/// Specified the last known stage of the resharding execution.
+/// The last known stage of the resharding run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Display, FromStr)]
 #[display(rename_all = "snake_case")]
 #[from_str(rename_all = "snake_case")]
@@ -182,10 +182,6 @@ impl TaskOwner {
             task_id,
         }
     }
-
-    pub(crate) fn is_current_process(&self) -> bool {
-        self.instance_id.as_str() == crate::util::instance_id() && self.run_id == run_id()
-    }
 }
 
 /// A single row record for the one resharding process.
@@ -200,15 +196,8 @@ pub(crate) struct ReshardingRecord {
     pub(crate) config: ConfigSnapshot,
     pub(crate) owner: TaskOwner,
     pub(crate) format_version: i32,
-    pub(crate) updated_at: SystemTime,
-}
-
-impl ReshardingRecord {
-    pub(crate) fn since_update(&self) -> Duration {
-        SystemTime::now()
-            .duration_since(self.updated_at)
-            .unwrap_or_default()
-    }
+    pub(crate) started_at: SystemTime,
+    pub(crate) resumed_at: Option<SystemTime>,
 }
 
 pub(crate) async fn existing_slots(
@@ -282,5 +271,29 @@ mod test {
         }
         assert!(!create.owned());
         assert!(!RunObjects::resumed(Stage::Replication, Stage::Copy, false).owned());
+    }
+
+    #[test]
+    fn stage_round_trips_its_stored_text_in_pipeline_order() {
+        let stages = [
+            (Stage::PreData, "pre_data"),
+            (Stage::Copy, "copy"),
+            (Stage::PostData, "post_data"),
+            (Stage::TableSync, "table_sync"),
+            (Stage::Replication, "replication"),
+            (Stage::Cutover, "cutover"),
+            (Stage::ReverseReplication, "reverse_replication"),
+        ];
+        for (stage, text) in stages {
+            assert_eq!(stage.to_string(), text);
+            assert_eq!(text.parse::<Stage>().unwrap(), stage);
+        }
+        for pair in stages.windows(2) {
+            assert!(pair[0].0 < pair[1].0, "{} < {}", pair[0].1, pair[1].1);
+        }
+        assert!(matches!(
+            "new_stage".parse::<Stage>(),
+            Err(Error::ReshardingFormat(_))
+        ));
     }
 }

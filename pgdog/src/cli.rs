@@ -269,18 +269,15 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
             .build()?;
 
         if abort {
-            state
-                .check_record(CommandKind::Reshard, replication_slot.as_deref())
-                .await?;
             run_task(
-                AbortReshardingTask::builder()
-                    .state(state)
-                    .command(CommandKind::Reshard)
-                    .maybe_slot(replication_slot)
-                    .build(),
+                Box::pin(AbortReshardingTask::checked(
+                    state,
+                    CommandKind::Reshard,
+                    replication_slot,
+                ))
+                .await?,
             )
             .await?;
-            info!("resharding aborted");
             return Ok(());
         }
 

@@ -277,13 +277,15 @@ pub(crate) enum Error {
         source: Box<Error>,
     },
 
-    #[error("resharding {key} is owned by another session ({owner})")]
+    #[error("resharding {key} is owned by another session ({owner}); stop it with STOP_TASK first")]
     ReshardingLocked { key: String, owner: String },
 
     #[error("unsupported resharding state: {0}")]
     ReshardingFormat(String),
 
-    #[error("resharding {key} is unfinished at stage {stage}; abort it with WITH (abort)")]
+    #[error(
+        "resharding {key} is unfinished at stage {stage}; abort it with WITH (abort) or data-sync --abort"
+    )]
     ReshardingExists { key: String, stage: String },
 
     #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
@@ -298,9 +300,6 @@ pub(crate) enum Error {
         stored: String,
         given: String,
     },
-
-    #[error("resharding {0} did not stop in time")]
-    ReshardingBusy(String),
 
     #[error(
         "sharding config changed since the resharding started: {}",

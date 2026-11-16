@@ -11,7 +11,7 @@ use super::table_copies::poll;
 use super::{
     POLL, TEST_PUB, TEST_SCHEMA, TEST_TABLE, cleanup, create_publication, create_test_table,
     fail_if_task_errored, run_task_command, seed_rows, task_status_line, test_slot_names,
-    wait_for_task, wait_for_task_status, with_cleanup,
+    wait_for_source_slot, wait_for_task, wait_for_task_status, with_cleanup,
 };
 
 pub(super) async fn prepare_replication(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
@@ -33,6 +33,8 @@ pub(super) async fn start_replication(admin: &Pool<Postgres>, slot: Option<&str>
         task.id == Some(task_id) && task.inner_status == "replicating"
     })
     .await;
+
+    wait_for_source_slot(admin, task_id, slot).await;
 
     task_id
 }

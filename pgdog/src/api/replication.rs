@@ -170,6 +170,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
     /// and the operator ended the rollback window. The same signal during a
     /// forward phase returns [`Error::ReplicationAborted`].
     async fn run(mut self, ctx: &TaskContext<T>) -> Result<(), Error> {
+        let cancel = ctx.cancellation_token();
         let _active = match self.state.run_store() {
             Some(_) => None,
             None => {
@@ -189,7 +190,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         let result = self.replicate_loop(ctx, self.cutover).await;
         self.resume_traffic().await;
 
-        let cancelled = ctx.cancellation_token().is_cancelled();
+        let cancelled = cancel.is_cancelled();
         let stopped_in_rollback_window = cancelled
             && self.state.direction() == ReshardingDirection::Reverse
             && matches!(result, Err(Error::ReplicationAborted));
@@ -480,9 +481,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         warn!("cutting over");
         ctx.set_status(ReplicationStatus::PreparingReverseReplication.into());
 
-        self.state.finish_run().await?;
-        // remove slots on the current source
-        Box::pin(self.state.drop_slots()).await?;
+        Box::pin(self.state.complete_run()).await?;
         // create replication slots on the destination to allow rollback
         self.state
             .create_reverse_slots(&ctx.cancellation_token())

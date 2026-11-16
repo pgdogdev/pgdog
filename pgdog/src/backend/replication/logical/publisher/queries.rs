@@ -40,6 +40,7 @@ JOIN (
 LEFT JOIN pg_inherits i     ON i.inhrelid = c.oid           -- only present if c is a child partition
 LEFT JOIN pg_class    p     ON p.oid = i.inhparent          -- immediate parent partitioned table
 LEFT JOIN pg_namespace pn   ON pn.oid = p.relnamespace
+WHERE NOT (n.nspname = 'pgdog' AND c.relname = 'resharding')
 ORDER BY n.nspname, c.relname;";
 
 /// Table included in a publication.
@@ -406,6 +407,30 @@ mod test {
                 .unwrap();
             assert_eq!(columns.len(), 2);
         }
+        server.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_publication_tables_exclude_resharding_state_table() {
+        let mut server = test_server().await;
+
+        server.execute("BEGIN").await.unwrap();
+        for query in [
+            "SELECT pg_advisory_xact_lock(hashtext('pgdog.resharding'))",
+            "CREATE SCHEMA IF NOT EXISTS pgdog",
+            "CREATE TABLE IF NOT EXISTS pgdog.resharding (id UUID PRIMARY KEY)",
+            "CREATE TABLE users_logical_pub_state (id BIGINT PRIMARY KEY)",
+            "CREATE PUBLICATION users_logical_pub_state
+            FOR TABLE users_logical_pub_state, pgdog.resharding",
+        ] {
+            server.execute(query).await.unwrap();
+        }
+
+        let tables = PublicationTable::load("users_logical_pub_state", &mut server)
+            .await
+            .unwrap();
+        let names: Vec<_> = tables.iter().map(|table| table.name.as_str()).collect();
+        assert_eq!(names, ["users_logical_pub_state"]);
         server.execute("ROLLBACK").await.unwrap();
     }
 

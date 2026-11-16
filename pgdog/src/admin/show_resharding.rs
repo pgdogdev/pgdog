@@ -1,9 +1,15 @@
+use std::time::SystemTime;
+
+use chrono::{DateTime, Local};
+
 use crate::backend::replication::logical::run::scan::{
-    ObjectCount, ReshardingReport, ReshardingScan, scan,
+    ReshardingReport, ReshardingScan, count_text, scan,
 };
+use crate::util::format_time;
 
 use super::prelude::*;
 
+// W: do we have integration test for it in rust/admin?
 pub(crate) struct ShowResharding;
 
 #[async_trait]
@@ -25,12 +31,18 @@ impl Command for ShowResharding {
             Field::text("stage"),
             Field::text("state"),
             Field::text("owner"),
+            // W: what is it? improve the name or remove
             Field::text("last_task"),
             Field::text("replication_slot"),
+            // W: remove this
             Field::bool("slot_existed"),
+            // W: there is no point in counters
             Field::text("slots"),
             Field::text("origins"),
+            // W: remove - we have the tables directly, let's just preserve the host/shard to refer to
             Field::text("config"),
+            Field::text("started_at"),
+            Field::text("resumed_at"),
         ]);
         let mut messages = vec![rd.message()];
 
@@ -68,9 +80,11 @@ fn found_row(report: &ReshardingReport) -> DataRow {
         .add(record.owner.to_string())
         .add(record.slot_name.as_str())
         .add(record.slot_existed)
-        .add(count(report.slots))
-        .add(count(report.origins))
-        .add(report.config.to_string());
+        .add(count_text(report.slots))
+        .add(count_text(report.origins))
+        .add(report.config.to_string())
+        .add(local_time(record.started_at))
+        .add(record.resumed_at.map(local_time));
     row
 }
 
@@ -94,10 +108,12 @@ fn problem_row(
         .add(None::<bool>)
         .add(none)
         .add(none)
+        .add(none)
+        .add(none)
         .add(none);
     row
 }
 
-fn count(count: Option<ObjectCount>) -> String {
-    count.map_or_else(|| "unknown".into(), |count| count.to_string())
+fn local_time(time: SystemTime) -> String {
+    format_time(DateTime::<Local>::from(time))
 }

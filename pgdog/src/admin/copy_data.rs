@@ -57,7 +57,7 @@ impl Command for CopyData {
         let mode = options.run_mode()?;
         options.finish()?;
         if mode == RunMode::Abort && tables_only {
-            return Err(Error::InvalidOption("tables_only".into()));
+            return Err(Error::InvalidOption("abort with tables_only".into()));
         }
 
         Ok(Self {
@@ -78,6 +78,7 @@ impl Command for CopyData {
             .maybe_replication_slot(self.replication_slot.clone())
             .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
             .build()?;
+        // W: maybe we check it inside the api, not in admin? we duplicate right now it.
         if self.mode == RunMode::Abort {
             return abort(state, CommandKind::Reshard, self.replication_slot.clone()).await;
         }
@@ -153,27 +154,6 @@ mod test {
     #[test]
     fn parses_run_mode() {
         for (sql, slot, mode) in [
-            ("copy_data a b pub", None, RunMode::WithCleanup),
-            (
-                "copy_data a b pub (cleanup_on_cancel)",
-                None,
-                RunMode::WithCleanup,
-            ),
-            (
-                "copy_data a b pub (cleanup_on_cancel true)",
-                None,
-                RunMode::WithCleanup,
-            ),
-            (
-                "copy_data a b pub with (cleanup_on_cancel false)",
-                None,
-                RunMode::NoCleanup,
-            ),
-            (
-                "copy_data a b pub (cleanup_on_cancel off)",
-                None,
-                RunMode::NoCleanup,
-            ),
             (
                 "copy_data a b pub slot with (cleanup_on_cancel false)",
                 Some("slot"),
@@ -185,16 +165,9 @@ mod test {
             assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
             assert_eq!(cmd.mode, mode, "{sql}");
         }
-
-        for sql in [
-            "copy_data a b pub (cleanup_on_cancel maybe)",
-            "copy_data a b pub (cleanup_on_cancel false, abort)",
-            "copy_data a b pub (abort, tables_only)",
-        ] {
-            assert!(
-                matches!(CopyData::parse(sql), Err(Error::InvalidOption(_))),
-                "{sql}"
-            );
-        }
+        assert!(matches!(
+            CopyData::parse("copy_data a b pub (abort, tables_only)"),
+            Err(Error::InvalidOption(n)) if n == "abort with tables_only"
+        ));
     }
 }

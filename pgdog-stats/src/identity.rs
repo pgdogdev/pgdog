@@ -39,3 +39,29 @@ static RUN_ID: LazyLock<RunId> = LazyLock::new(RunId::generate);
 pub fn run_id() -> RunId {
     *RUN_ID
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_ids_round_trip_through_json() {
+        let run_id = RunId::generate();
+        let json = serde_json::to_string(&run_id).unwrap();
+        assert_eq!(json, format!("\"{run_id}\""));
+        assert_eq!(serde_json::from_str::<RunId>(&json).unwrap(), run_id);
+
+        let instance_id = InstanceId::from("pgdog-0".to_owned());
+        let json = serde_json::to_string(&instance_id).unwrap();
+        assert_eq!(json, r#""pgdog-0""#);
+        assert_eq!(
+            serde_json::from_str::<InstanceId>(&json).unwrap(),
+            instance_id
+        );
+    }
+
+    #[test]
+    fn test_run_id_is_stable_within_the_process() {
+        assert_eq!(run_id(), run_id());
+    }
+}

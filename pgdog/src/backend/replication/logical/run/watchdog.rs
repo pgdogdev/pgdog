@@ -7,8 +7,8 @@ use super::super::resharding_state::ReshardingState;
 use crate::tasks;
 use crate::util::safe_timeout;
 
-/// The heartbeat write also checks the state connection.
-pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+/// The heartbeat query checks the state connection.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct ActiveRun {
@@ -29,7 +29,7 @@ impl ActiveRun {
                         Ok(Ok(()))
                     ) {
                         warn!(
-                            "resharding {}: state connection lost, stopping",
+                            "resharding {}: heartbeat failed or timed out, stopping",
                             store.key()
                         );
                         on_lost();

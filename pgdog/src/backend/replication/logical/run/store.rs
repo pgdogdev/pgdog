@@ -1,6 +1,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pgdog_stats::{Databases, InstanceId};
 use serde::de::DeserializeOwned;
@@ -8,9 +8,8 @@ use tokio::sync::Mutex;
 
 use super::super::{Error, subscriber::connect_address};
 use super::queries::{
-    CREATE_TABLE, DeleteRow, Heartbeat, InsertRow, ListRows, LockHolder, OwnerUpdate, Query,
-    SelectRow, SetApplicationName, StageUpdate, TableExists, TryLock, Unlock, UpdateOwner,
-    UpdateStage,
+    CREATE_TABLE, DeleteRow, Heartbeat, InsertRow, ListRows, LockHolder, Query, ResumeRow,
+    ResumeUpdate, SelectRow, SetupSession, StageUpdate, TableExists, TryLock, Unlock, UpdateStage,
 };
 use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
@@ -19,36 +18,40 @@ use crate::net::{DataRow, Format};
 use crate::util::instance_id;
 
 const APPLICATION_NAME_PREFIX: &str = "pgdog_resharding:";
+const RELOCK_ATTEMPTS: usize = 20;
+const RELOCK_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 pub(crate) struct ReshardingStore {
     server: Mutex<Server>,
+    addr: Address,
     key: ReshardingKey,
 }
 
 impl ReshardingStore {
     pub(crate) async fn open(addr: &Address, key: ReshardingKey) -> Result<Self, Error> {
-        let mut server = connect_address(addr).await?;
-        let application_name = format!("{APPLICATION_NAME_PREFIX}{}", instance_id());
-        server
-            .execute_checked(SetApplicationName::request(&application_name))
-            .await?;
-        server.execute_checked(CREATE_TABLE).await?;
-
+        let mut server = connect_session(addr).await?;
         if !try_lock(&mut server, &key).await? {
-            let owner = Self::lock_owner(&mut server, &key)
-                .await?
-                .unwrap_or_else(|| "unknown".into());
-            return Err(Error::ReshardingLocked {
-                key: key.to_string(),
-                owner,
-            });
+            return Err(locked(&mut server, &key).await?);
         }
 
         Ok(Self {
             server: Mutex::new(server),
+            addr: addr.clone(),
             key,
         })
+    }
+
+    pub(crate) async fn reconnect(&self) -> Result<(), Error> {
+        let mut server = self.server.lock().await;
+        *server = connect_session(&self.addr).await?;
+        for _ in 0..RELOCK_ATTEMPTS {
+            if try_lock(&mut server, &self.key).await? {
+                return Ok(());
+            }
+            tokio::time::sleep(RELOCK_DELAY).await;
+        }
+        Err(locked(&mut server, &self.key).await?)
     }
 
     pub(crate) fn key(&self) -> &ReshardingKey {
@@ -79,10 +82,15 @@ impl ReshardingStore {
         .await
     }
 
-    pub(crate) async fn set_owner(&self, owner: &TaskOwner) -> Result<(), Error> {
-        self.execute(UpdateOwner::request(OwnerUpdate {
+    pub(crate) async fn resume(
+        &self,
+        owner: &TaskOwner,
+        resumed_at: SystemTime,
+    ) -> Result<(), Error> {
+        self.execute(ResumeRow::request(ResumeUpdate {
             key: &self.key,
             owner,
+            resumed_at,
         }))
         .await
     }
@@ -92,7 +100,7 @@ impl ReshardingStore {
     }
 
     pub(crate) async fn heartbeat(&self) -> Result<(), Error> {
-        self.execute(Heartbeat::request(&self.key)).await
+        self.execute(Heartbeat::request(())).await
     }
 
     pub(crate) async fn unlock(&self) -> Result<(), Error> {
@@ -142,11 +150,6 @@ impl ReshardingStore {
         server: &mut Server,
         key: &ReshardingKey,
     ) -> Result<Option<String>, Error> {
-        if try_lock(server, key).await? {
-            server.execute_checked(Unlock::request(key)).await?;
-            return Ok(None);
-        }
-
         let owner = server
             .fetch_all::<String>(LockHolder::request(key))
             .await?
@@ -154,16 +157,36 @@ impl ReshardingStore {
             .next()
             .map(|name| match name.strip_prefix(APPLICATION_NAME_PREFIX) {
                 Some(instance) => instance.to_owned(),
+                None if name.is_empty() => "unknown".into(),
                 None => name,
-            })
-            .unwrap_or_else(|| "unknown".into());
-        Ok(Some(owner))
+            });
+        Ok(owner)
     }
 }
 
 async fn try_lock(server: &mut Server, key: &ReshardingKey) -> Result<bool, Error> {
     let locked = server.fetch_all::<i32>(TryLock::request(key)).await?;
     Ok(locked.first() == Some(&1))
+}
+
+async fn connect_session(addr: &Address) -> Result<Server, Error> {
+    let mut server = connect_address(addr).await?;
+    let application_name = format!("{APPLICATION_NAME_PREFIX}{}", instance_id());
+    server
+        .execute_checked(SetupSession::request(&application_name))
+        .await?;
+    server.execute_checked(CREATE_TABLE).await?;
+    Ok(server)
+}
+
+async fn locked(server: &mut Server, key: &ReshardingKey) -> Result<Error, Error> {
+    let owner = ReshardingStore::lock_owner(server, key)
+        .await?
+        .unwrap_or_else(|| "unknown".into());
+    Ok(Error::ReshardingLocked {
+        key: key.to_string(),
+        owner,
+    })
 }
 
 #[derive(Debug)]
@@ -224,9 +247,16 @@ fn parse_record(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, E
             task_id: parsed(row, 10, "task_id")?,
         },
         format_version,
-        updated_at: UNIX_EPOCH
-            + Duration::from_millis(parsed::<i64>(row, 13, "updated_at")?.max(0) as u64),
+        started_at: millis(row, 13, "started_at")?,
+        resumed_at: match text(row, 14)?.as_str() {
+            "" => None,
+            _ => Some(millis(row, 14, "resumed_at")?),
+        },
     })
+}
+
+fn millis(row: &DataRow, index: usize, field: &str) -> Result<SystemTime, Error> {
+    Ok(UNIX_EPOCH + Duration::from_millis(parsed::<i64>(row, index, field)?.max(0) as u64))
 }
 
 #[cfg(test)]
@@ -268,6 +298,16 @@ mod test {
             .collect()
     }
 
+    fn now_millis() -> SystemTime {
+        UNIX_EPOCH
+            + Duration::from_millis(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            )
+    }
+
     fn row(key: ReshardingKey) -> ReshardingRecord {
         let config: ConfigSnapshot = serde_json::from_str(
             r#"{"source":{"shards":1,"sharded_tables":[],"sharded_mappings":[],"omnisharded_tables":[],"sharded_schemas":[]},
@@ -290,13 +330,8 @@ mod test {
             config,
             owner: TaskOwner::current(pgdog_stats::TaskId::new(7)),
             format_version: FORMAT_VERSION,
-            updated_at: UNIX_EPOCH
-                + Duration::from_millis(
-                    std::time::SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64,
-                ),
+            started_at: now_millis() - Duration::from_secs(3600),
+            resumed_at: None,
         }
     }
 
@@ -422,11 +457,9 @@ mod test {
         store.set_stage(Stage::Replication).await.unwrap();
         let loaded = store.load().await.unwrap().unwrap();
         assert_eq!(loaded.stage, Stage::Replication);
-        assert!(loaded.since_update() < Duration::from_secs(60));
         assert_eq!(
             ReshardingRecord {
                 stage: Stage::Copy,
-                updated_at: row.updated_at,
                 ..loaded
             },
             row
@@ -474,31 +507,25 @@ mod test {
     }
 
     #[tokio::test]
-    async fn writes_refresh_the_update_time() {
+    async fn resume_records_the_new_owner_and_time() {
         let addr = Address::new_test();
-        let key = key("store_heartbeat");
+        let key = key("store_resume");
         let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
         store.delete().await.unwrap();
-        store.insert(&row(key.clone())).await.unwrap();
+        let row = row(key.clone());
+        store.insert(&row).await.unwrap();
 
-        let mut server = test_server().await;
-        let backdate = format!(
-            "UPDATE pgdog.resharding SET updated_at = now() - interval '10 minutes' \
-             WHERE source_db = '{}'",
-            key.databases.source
-        );
-        for write in ["heartbeat", "stage"] {
-            server.execute_checked(backdate.as_str()).await.unwrap();
-            let before = store.load().await.unwrap().unwrap().since_update();
-            assert!(before >= Duration::from_secs(600), "{write}: {before:?}");
-
-            match write {
-                "heartbeat" => store.heartbeat().await.unwrap(),
-                _ => store.set_stage(Stage::Replication).await.unwrap(),
+        let owner = TaskOwner::current(pgdog_stats::TaskId::new(8));
+        let resumed_at = now_millis();
+        store.resume(&owner, resumed_at).await.unwrap();
+        assert_eq!(
+            store.load().await.unwrap().unwrap(),
+            ReshardingRecord {
+                owner,
+                resumed_at: Some(resumed_at),
+                ..row
             }
-            let after = store.load().await.unwrap().unwrap().since_update();
-            assert!(after < Duration::from_secs(60), "{write}: {after:?}");
-        }
+        );
 
         store.delete().await.unwrap();
     }

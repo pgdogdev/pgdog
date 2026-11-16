@@ -174,12 +174,11 @@ impl Task for ReshardTask {
 
         let stopped = result.is_err() || cancel.is_cancelled();
         if stopped {
-            // on error or cancellation make sure we drop the slots,
-            // but only the slots we're actually created during this run.
-            // If the slots were created outside or by calling pgdog
-            // separate runs, we leave the slots.
+            // With cleanup_on_cancel true, drop the slots this run created and
+            // all its origins, then delete the row. With false, keep them and
+            // pause the run. A slot that existed before the run always stays.
             if let Err(err) = state.cancel_run().await {
-                warn!("failed to clean up replication slots after resharding: {err}");
+                warn!("failed to clean up the resharding run: {err}");
             }
         } else {
             // on success we either already removed slots on replication,
@@ -187,7 +186,6 @@ impl Task for ReshardTask {
             // slots for the future calls
             state.detach_slots();
             if let Err(err) = state.finish_run().await {
-                state.release_run().await;
                 result = Err(err.into());
             }
         }
