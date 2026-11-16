@@ -229,7 +229,8 @@ mod test {
             "SELECT 1 LIMIT 5::numeric",
             "SELECT 1 LIMIT 5::int[]",
             "SELECT 1 LIMIT 10 / 2",
-            "SELECT 1 LIMIT -(2)",
+            // The parser folds `-(2)` into the constant -2, so use a parameter.
+            "SELECT 1 LIMIT -$1",
             "SELECT 1 LIMIT 5 OPERATOR(pg_catalog.+) 1",
         ] {
             assert!(!computable(sql), "{sql}");
