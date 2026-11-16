@@ -42,24 +42,31 @@ impl<'a> LimitClause<'a> {
                 IntegerType::of(cast).is_some() && Self::is_computable(cast.arg())
             }
             Node::A_Expr(expr) => Operator::of(expr).is_some_and(|operator| {
-                operands(expr).all(Self::is_computable)
-                    // `$1 / 2` is numeric division if the client declares `$1` as numeric.
-                    && (operator != Operator::Div || operands(expr).all(is_integer_typed))
+                operator.is_integer_arithmetic(expr) && operands(expr).all(Self::is_computable)
             }),
             _ => false,
         }
     }
 
+    /// Values PgDog can't compute are `None`, the same as no limit.
+    // FIXME: We should error and not silently treat as NULL
     fn decode(&self, node: Node<'_>) -> Result<Option<usize>, Error> {
-        if !Self::is_computable(node) {
-            return Ok(None); // FIXME: We should error and not silently treat as NULL
-        }
-        Ok(self
-            .evaluate(node)?
-            .and_then(|value| usize::try_from(value).ok()))
+        use pg_raw_parse::ConstValue;
+
+        // Plain integers and parameters are the common case: skip the
+        // expression evaluator, this runs on every routed request.
+        let value = match node {
+            Node::A_Const(constant) if let Some(ConstValue::Integer(value)) = constant.val() => {
+                Some(i64::from(value))
+            }
+            Node::ParamRef(param) => self.parameter(param.number as usize)?,
+            node => self.evaluate(node)?,
+        };
+        Ok(value.and_then(|value| usize::try_from(value).ok()))
     }
 
-    /// Compute a value accepted by [`Self::is_computable`]. `None` is no limit.
+    /// Compute a LIMIT or OFFSET value. `None` is no limit, and also any value
+    /// rejected by [`Self::is_computable`].
     ///
     /// Values Postgres rejects, e.g. an overflow or an out of range cast, are
     /// also `None`: every shard query still evaluates the original expression,
@@ -69,13 +76,20 @@ impl<'a> LimitClause<'a> {
             Node::A_Const(constant) => constant.val().and_then(|value| value.numeric_value()),
             Node::ParamRef(param) => self.parameter(param.number as usize)?,
             Node::TypeCast(cast) => {
-                let value = self.evaluate(cast.arg())?;
-                IntegerType::of(cast).and_then(|integer| value.filter(|&value| integer.fits(value)))
+                // Check the type first: `$1::numeric` may bind a non-integer.
+                let Some(integer) = IntegerType::of(cast) else {
+                    return Ok(None);
+                };
+                self.evaluate(cast.arg())?
+                    .filter(|&value| integer.fits(value))
             }
             Node::A_Expr(expr) => {
                 let Some(operator) = Operator::of(expr) else {
                     return Ok(None);
                 };
+                if !operator.is_integer_arithmetic(expr) {
+                    return Ok(None);
+                }
                 let right = self.evaluate(expr.rexpr())?;
                 match operator {
                     Operator::Negate => right.and_then(i64::checked_neg),
@@ -140,6 +154,13 @@ impl Operator {
             ("%", false) => Self::Modulo,
             _ => return None,
         })
+    }
+
+    /// Whether Postgres does integer arithmetic here, whatever type the client
+    /// declares for its parameters: `$1 / 2` is numeric division if `$1` is
+    /// declared numeric.
+    fn is_integer_arithmetic(self, expr: &nodes::A_Expr) -> bool {
+        self != Self::Div || operands(expr).all(is_integer_typed)
     }
 
     /// Integer arithmetic as Postgres does it: division truncates toward zero.
@@ -322,6 +343,20 @@ mod test {
             limit("SELECT 1 LIMIT $1::int", Some(&fractional)),
             Err(Error::ParameterNotInteger(1, _))
         ));
+    }
+
+    #[test]
+    fn uncomputable_parameters_are_no_limit() {
+        // Without `is_computable` guarding `decode`, these must not try to
+        // read `$1` as an integer: Postgres types it as numeric here.
+        let fractional = Bind::new_params("", &[Parameter::new(b"2.5")]);
+        for sql in [
+            "SELECT 1 LIMIT $1::numeric",
+            "SELECT 1 LIMIT $1 / 2",
+            "SELECT 1 LIMIT ($1 + 1) / 2",
+        ] {
+            assert_eq!(limit(sql, Some(&fractional)).unwrap().limit, None, "{sql}");
+        }
     }
 
     #[test]
