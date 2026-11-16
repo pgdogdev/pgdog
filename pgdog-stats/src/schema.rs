@@ -141,14 +141,12 @@ impl Relation {
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct SchemaInner {
-    pub search_path: Vec<String>,
     pub relations: Relations,
     pub aggregate_functions: HashSet<String>,
 }
 
 impl Hash for SchemaInner {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.search_path.hash(state);
         let mut entries: Vec<_> = self.relations.iter().collect();
         entries.sort_by_key(|(k, _)| *k);
         for (schema, tables) in entries {

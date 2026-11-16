@@ -136,8 +136,16 @@ impl Shard {
         // This is syncrhonized by database/shard number, so this prevents
         // a thundering herd with 100s of users, for example, all fetching
         // the same schema.
-        let (_, schema) = try_join!(self.oids.load(self), self.schema_cache.get(self))?;
-        self.schema.set(schema).expect("schema was not initialized");
+        // Relations are shared per database and shard, but the default
+        // search_path depends on the user, so it's loaded from this user's pool.
+        let (_, schema, search_path) = try_join!(
+            self.oids.load(self),
+            self.schema_cache.get(self),
+            self.fetch_search_path(),
+        )?;
+        self.schema
+            .set(schema.with_search_path(search_path))
+            .expect("schema was not initialized");
 
         Ok(true)
     }
@@ -156,6 +164,12 @@ impl Shard {
         );
 
         Ok(schema)
+    }
+
+    /// Fetch this user's default search_path from the shard.
+    async fn fetch_search_path(&self) -> Result<Vec<String>, crate::backend::Error> {
+        let mut server = self.primary_or_replica(&Request::default()).await?;
+        Schema::load_search_path(&mut server).await
     }
 
     /// Set the schema to its default value.

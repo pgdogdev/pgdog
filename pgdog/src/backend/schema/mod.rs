@@ -9,6 +9,7 @@ pub(crate) use pgdog_stats::{
 };
 use serde::{Deserialize, Serialize};
 use std::ops::DerefMut;
+use std::sync::Arc;
 use std::{collections::HashMap, ops::Deref};
 use tracing::info;
 
@@ -22,10 +23,24 @@ use sync::ShardConfig;
 
 static SETUP: &str = include_str!("setup.sql");
 
+/// Default when the server returns no search_path.
+const DEFAULT_SEARCH_PATH: &str = "\"$user\", public";
+
 /// Load schema from database.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Hash)]
 pub(crate) struct Schema {
+    /// Relations and aggregates, shared by all users of a database shard.
     inner: StatsSchema,
+    /// Default search_path of the user this schema was loaded for.
+    search_path: Arc<Vec<String>>,
+}
+
+/// Split a `search_path` setting into schema names, stripping quotes.
+fn parse_search_path(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|schema| schema.trim().replace('"', ""))
+        .collect()
 }
 
 impl Deref for Schema {
@@ -53,15 +68,6 @@ impl Schema {
                 .insert(relation.name.clone(), relation.into());
         }
 
-        let search_path = server
-            .fetch_all::<String>("SHOW search_path")
-            .await?
-            .pop()
-            .unwrap_or(String::from("$user, public"))
-            .split(",")
-            .map(|p| p.trim().replace("\"", ""))
-            .collect();
-
         let aggregate_functions = server
             .fetch_all::<String>(
                 "SELECT DISTINCT proname FROM pg_proc INNER JOIN pg_aggregate ON oid = aggfnoid",
@@ -71,14 +77,35 @@ impl Schema {
             .collect();
 
         let inner = SchemaInner {
-            search_path,
             relations,
             aggregate_functions,
         };
 
         Ok(Self {
             inner: StatsSchema::new(inner),
+            search_path: Arc::default(),
         })
+    }
+
+    /// Load the connected user's default search_path.
+    ///
+    /// Reads `reset_val`, not `SHOW search_path`: a pooled connection can
+    /// still hold a previous client's `SET search_path`.
+    pub(crate) async fn load_search_path(server: &mut Server) -> Result<Vec<String>, Error> {
+        let search_path = server
+            .fetch_all::<String>("SELECT reset_val FROM pg_settings WHERE name = 'search_path'")
+            .await?
+            .pop();
+
+        Ok(parse_search_path(
+            search_path.as_deref().unwrap_or(DEFAULT_SEARCH_PATH),
+        ))
+    }
+
+    /// Use this default search_path for unqualified table names.
+    pub(crate) fn with_search_path(mut self, search_path: Vec<String>) -> Self {
+        self.search_path = Arc::new(search_path);
+        self
     }
 
     /// The schema has been loaded from the database.
@@ -109,10 +136,10 @@ impl Schema {
         }
         Self {
             inner: StatsSchema::new(SchemaInner {
-                search_path,
                 relations: nested,
                 aggregate_functions: aggregate_functions.into_iter().collect(),
             }),
+            search_path: Arc::new(search_path),
         }
     }
 
@@ -222,7 +249,7 @@ impl Schema {
     ) -> Vec<&'a str> {
         let path: &[String] = match search_path {
             Some(ParameterValue::Tuple(overriden)) => overriden.as_slice(),
-            _ => &self.inner.search_path,
+            _ => &self.search_path,
         };
 
         path.iter()
@@ -242,7 +269,7 @@ impl Schema {
 
     /// Get search path components.
     pub(crate) fn search_path(&self) -> &[String] {
-        &self.inner.search_path
+        &self.search_path
     }
 }
 
@@ -397,6 +424,39 @@ mod test {
         let override_path = ParameterValue::Tuple(vec!["$user".into(), "app".into()]);
         let resolved = schema.resolve_search_path("bob", Some(&override_path));
         assert_eq!(resolved, vec!["bob", "app"]);
+    }
+
+    #[test]
+    fn test_with_search_path_shares_relations() {
+        let relations: HashMap<(String, String), Relation> = HashMap::from([
+            (
+                ("public".into(), "users".into()),
+                Relation::test_table("public", "users", IndexMap::new()),
+            ),
+            (
+                ("tenant_b".into(), "users".into()),
+                Relation::test_table("tenant_b", "users", IndexMap::new()),
+            ),
+        ]);
+        let shared = Schema::from_parts(vec![], relations);
+        let alice = shared
+            .clone()
+            .with_search_path(vec!["$user".into(), "public".into()]);
+        let bob = shared.with_search_path(vec!["tenant_b".into(), "public".into()]);
+        assert!(std::ptr::eq(&alice.relations, &bob.relations));
+
+        let users = Table {
+            name: "users",
+            schema: None,
+            alias: None,
+        };
+        assert_eq!(
+            alice.table(users, "alice", None).unwrap().schema(),
+            "public"
+        );
+        assert_eq!(bob.table(users, "bob", None).unwrap().schema(), "tenant_b");
+        assert_eq!(alice.search_path(), ["$user", "public"]);
+        assert_eq!(bob.search_path(), ["tenant_b", "public"]);
     }
 
     #[test]
@@ -567,6 +627,34 @@ mod test {
                 default.first(),
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_load_search_path_ignores_session_set() {
+        let mut server = test_server().await;
+        let default = Schema::load_search_path(&mut server).await.unwrap();
+        assert!(!default.is_empty());
+        assert!(default.iter().all(|schema| !schema.contains('"')));
+
+        server
+            .execute_checked("SET search_path TO pgdog_previous_client")
+            .await
+            .unwrap();
+        let after_set = Schema::load_search_path(&mut server).await.unwrap();
+        assert_eq!(after_set, default);
+    }
+
+    #[test]
+    fn test_parse_search_path() {
+        assert_eq!(
+            super::parse_search_path("\"$user\", public"),
+            vec!["$user", "public"]
+        );
+        assert_eq!(super::parse_search_path("tenant_b"), vec!["tenant_b"]);
+        assert_eq!(
+            super::parse_search_path(super::DEFAULT_SEARCH_PATH),
+            vec!["$user", "public"]
+        );
     }
 
     #[tokio::test]
