@@ -127,14 +127,15 @@ fn is_integer_cast(cast: &nodes::TypeCast) -> bool {
     if !type_name.array_bounds().is_empty() {
         return false;
     }
-    let names = type_name
-        .names()
-        .iter()
-        .map(|name| name.sval())
-        .collect::<Vec<_>>();
+    let mut names = type_name.names().iter().map(|name| name.sval());
     matches!(
-        names.as_slice(),
-        [Some("int2" | "int4" | "int8")] | [Some("pg_catalog"), Some("int2" | "int4" | "int8")]
+        (names.next(), names.next(), names.next()),
+        (Some(Some("int2" | "int4" | "int8")), None, _)
+            | (
+                Some(Some("pg_catalog")),
+                Some(Some("int2" | "int4" | "int8")),
+                None
+            )
     )
 }
 
