@@ -38,7 +38,7 @@ impl TestAdminContext {
         config::set(config.clone()).expect("failed to install test config");
 
         // Rebuild the in-process database registry from the supplied config.
-        replace_databases(from_config(&config), false).unwrap();
+        replace_databases(from_config(&config::cached_config()), false).unwrap();
     }
 }
 

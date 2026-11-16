@@ -1,6 +1,7 @@
 //! Configuration.
 
 // Submodules
+pub(crate) mod cached;
 pub(crate) mod changed;
 pub(crate) mod convert;
 pub(crate) mod core;
@@ -48,18 +49,25 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 
-static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
-    Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
+static CONFIG: Lazy<ArcSwap<cached::CachedConfig>> =
+    Lazy::new(|| ArcSwap::from_pointee(Default::default()));
 
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-/// Load configuration.
+/// Get a reference to the currently loaded config file.
 pub(crate) fn config() -> Arc<ConfigAndUsers> {
+    CONFIG.load().config.clone()
+}
+
+/// Get a reference to the currently loaded config file and pre-computed
+/// entities, that make working with the config mostly O(1).
+pub(crate) fn cached_config() -> Arc<cached::CachedConfig> {
     CONFIG.load_full()
 }
 
-/// Get the configuration quickly, but let go of this guard as quickly as possible.
-pub(crate) fn config_quick() -> arc_swap::Guard<Arc<ConfigAndUsers>> {
+/// Get a reference to the currently loaded config file,
+/// but the caller has to let go of this guard as quickly as possible.
+pub(crate) fn config_quick() -> arc_swap::Guard<Arc<cached::CachedConfig>> {
     CONFIG.load()
 }
 
@@ -77,8 +85,8 @@ pub(crate) fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
         // And also moved outside the configuration to the place of
         table.load_centroids()?;
     }
-    CONFIG.store(Arc::new(config.clone()));
-    changed::notify(CONFIG.load_full());
+    CONFIG.store(Arc::new(cached::CachedConfig::new(config.clone())));
+    changed::notify(CONFIG.load().config.clone());
     Ok(config)
 }
 
@@ -172,7 +180,7 @@ pub(crate) fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
     let _lock = LOCK.lock();
     let config = (*config()).clone();
     let config = config.databases_from_urls(urls)?;
-    CONFIG.store(Arc::new(config.clone()));
+    CONFIG.store(Arc::new(cached::CachedConfig::new(config.clone())));
     Ok(config)
 }
 
@@ -207,7 +215,7 @@ pub(crate) fn from_env() -> Result<ConfigAndUsers, Error> {
         config = config.mirroring_from_strings(&mirror_strs)?;
     }
 
-    CONFIG.store(Arc::new(config.clone()));
+    CONFIG.store(Arc::new(cached::CachedConfig::new(config.clone())));
     Ok(config)
 }
 
@@ -236,7 +244,7 @@ pub(crate) fn overrides(overrides: Overrides) {
         };
     }
 
-    CONFIG.store(Arc::new(config));
+    CONFIG.store(Arc::new(cached::CachedConfig::new(config.clone())));
 }
 
 // Test helper functions

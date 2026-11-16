@@ -7,7 +7,7 @@ use pgdog_config::{
 
 use crate::auth::AuthResult;
 use crate::backend::databases;
-use crate::config::{config, set};
+use crate::config::{cached_config, config, set};
 
 use super::{check_or_add, restore_after_reload};
 
@@ -49,8 +49,8 @@ fn setup(passthrough_auth: PassthroughAuth, users: Vec<User>) {
         },
         ..Default::default()
     };
-    let config = set(config).expect("set test config");
-    databases::replace_databases(databases::from_config(&config), false)
+    set(config).expect("set test config");
+    databases::replace_databases(databases::from_config(&cached_config()), false)
         .expect("replace test databases");
 }
 
