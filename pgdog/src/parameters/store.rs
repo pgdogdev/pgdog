@@ -303,7 +303,6 @@ impl ParameterStore {
             let reset_names: Vec<_> = self
                 .params
                 .tracked()
-                .into_iter()
                 .filter(|(name, _)| !other.params.contains_key(name.as_str()))
                 .map(|(name, _)| name.to_string())
                 .collect();

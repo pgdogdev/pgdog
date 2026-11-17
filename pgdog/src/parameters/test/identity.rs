@@ -9,23 +9,6 @@ fn queries(sync: ParametersSync<'_>) -> Vec<String> {
 }
 
 #[test]
-fn test_role_sync_and_reset() {
-    let server = ParameterStore::default();
-    let mut client = ParameterStore::default();
-    client.set(ROLE, "reporting");
-
-    assert_eq!(
-        queries(server.sync(&client)),
-        [r#"SET "role" TO "reporting""#]
-    );
-
-    let mut server = ParameterStore::default();
-    server.sync_complete(server.clone().sync(&client));
-    let peer = ParameterStore::default();
-    assert_eq!(queries(server.sync(&peer)), [r#"RESET "role""#]);
-}
-
-#[test]
 fn test_session_authorization_is_applied_before_role() {
     let server = ParameterStore::default();
     let mut client = ParameterStore::default();

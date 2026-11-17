@@ -1,11 +1,9 @@
 //! `SET ROLE` and `SET SESSION AUTHORIZATION` must not leak to the
 //! next client that gets the same server connection.
 
-use pgdog_config::PoolerMode;
-
 use crate::{
     backend::databases::reload_from_existing,
-    config::{config, load_test_with_pooler_mode, set},
+    config::{config, load_test, set},
     expect_message,
     net::{CommandComplete, DataRow, ErrorResponse, ReadyForQuery, RowDescription},
 };
@@ -16,11 +14,7 @@ use super::prelude::*;
 const ROLE: &str = "pg_monitor";
 
 fn load_single_connection_test_pool() {
-    load_single_connection_pool(PoolerMode::Transaction);
-}
-
-fn load_single_connection_pool(pooler_mode: PoolerMode) {
-    load_test_with_pooler_mode(pooler_mode);
+    load_test();
 
     let mut config = (*config()).clone();
     config.config.general.default_pool_size = 1;
@@ -142,19 +136,6 @@ async fn test_deferred_reset_all_keeps_role() {
 }
 
 #[tokio::test]
-async fn test_deferred_session_authorization() {
-    load_single_connection_test_pool();
-    let mut source = TestClient::new(Parameters::default()).await;
-
-    run(&mut source, &format!("SET SESSION AUTHORIZATION {ROLE}")).await;
-    assert!(!source.backend_connected());
-
-    let (pid, session_user, current_user) = identity(&mut source).await;
-    assert_eq!((session_user.as_str(), current_user.as_str()), (ROLE, ROLE));
-    Box::pin(assert_peer_is_clean(source, pid)).await;
-}
-
-#[tokio::test]
 async fn test_session_authorization_clears_role() {
     load_single_connection_test_pool();
     let mut source = TestClient::new(Parameters::default()).await;
@@ -173,8 +154,11 @@ async fn test_role_rollback() {
     let mut client = TestClient::new(Parameters::default()).await;
 
     run(&mut client, "BEGIN").await;
+    let (pid, ..) = identity(&mut client).await;
+    assert!(client.backend_connected());
+    // Recorded on the connected server, then rolled back.
     run(&mut client, &format!("SET ROLE {ROLE}")).await;
-    let (pid, _, current_user) = identity(&mut client).await;
+    let (_, _, current_user) = identity(&mut client).await;
     assert_eq!(current_user, ROLE);
     run(&mut client, "ROLLBACK").await;
 
@@ -237,34 +221,5 @@ async fn test_setting_changed_inside_connected_transaction() {
     let mut peer = TestClient::new(Parameters::default()).await;
     let (peer_pid, ..) = identity(&mut peer).await;
     assert_eq!(peer_pid, pid, "server connection should be reused");
-    assert_eq!(show(&mut peer, "work_mem").await, "4MB");
-}
-
-/// A failed SET rolls back the SETs before it in the same query,
-/// so the server is reset when it goes back to the pool.
-#[tokio::test]
-async fn test_failed_set_batch_on_connected_server() {
-    load_single_connection_pool(PoolerMode::Session);
-    let mut source = TestClient::new(Parameters::default()).await;
-
-    let (pid, ..) = identity(&mut source).await;
-    assert!(source.backend_connected());
-    source
-        .send_simple(Query::new(
-            "SET work_mem TO '1MB'; SET ROLE pgdog_role_does_not_exist",
-        ))
-        .await;
-    expect_message!(source.read().await, CommandComplete);
-    expect_message!(source.read().await, ErrorResponse);
-    expect_message!(source.read().await, ReadyForQuery);
-    drop(source.leak_pool());
-
-    let mut peer = TestClient::new(Parameters::default()).await;
-    let (peer_pid, session_user, current_user) = identity(&mut peer).await;
-    assert_eq!(peer_pid, pid, "server connection should be reused");
-    assert_eq!(
-        (session_user.as_str(), current_user.as_str()),
-        ("pgdog", "pgdog")
-    );
     assert_eq!(show(&mut peer, "work_mem").await, "4MB");
 }

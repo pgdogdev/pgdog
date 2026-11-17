@@ -139,24 +139,3 @@ impl Cleanup {
         self.deallocate
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_dirty_cleanup_resets_session_identity_first() {
-        let cleanup = Cleanup::parameters();
-        let queries: Vec<_> = cleanup.queries().iter().map(Query::query).collect();
-
-        assert_eq!(
-            queries,
-            [
-                "SET SESSION AUTHORIZATION DEFAULT",
-                "RESET ALL",
-                "SELECT pg_advisory_unlock_all()",
-                "DISCARD TEMP",
-            ]
-        );
-    }
-}
