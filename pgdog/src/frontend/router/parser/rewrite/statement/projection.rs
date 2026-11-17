@@ -326,18 +326,14 @@ fn build(
     let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
         if has_having {
-            let having = having::rewrite_select(&mut select.as_mut(), mem, schema)?;
-            let rewritten_aggregate = Aggregate::parse(&select, schema);
+            let (having, group_by) = having::rewrite_select(&mut select.as_mut(), mem, schema)?;
+            // Aggregate::parse skips GROUP BY items it cannot resolve. The
+            // rewrite has a position for every one of them, so unrelated
+            // groups are never merged together.
+            let rewritten_aggregate = Aggregate::parse(&select, schema).with_group_by(group_by);
             if rewritten_aggregate.targets().is_empty() {
                 return Err(Error::UnsupportedHaving(
                     "at least one aggregate function is required",
-                ));
-            }
-            // Aggregate::parse skips GROUP BY items it cannot resolve. Require
-            // every item here so unrelated groups are never merged together.
-            if rewritten_aggregate.group_by().len() != select.group_clause().len() {
-                return Err(Error::UnsupportedHaving(
-                    "every GROUP BY expression must be a selected column or ordinal",
                 ));
             }
             plan.having = Some(Box::new(HavingRewriteResult::new(
@@ -345,7 +341,8 @@ fn build(
                 rewritten_aggregate,
             )));
         } else if let Some(aggregate) = &aggregate {
-            plan.group_by = group_by::rewrite_select(&mut select, mem, aggregate)?.map(Box::new);
+            plan.group_by =
+                group_by::rewrite_select(&mut select, mem, aggregate, schema)?.map(Box::new);
         }
         let aggregate = plan
             .aggregate()
@@ -448,7 +445,10 @@ impl HiddenAliases {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::backend::schema::relation::Relation;
 
     #[test]
     fn rejects_count_sort_key() {
@@ -750,12 +750,143 @@ mod tests {
         }
     }
 
+    /// A schema with `items (id, category, region)`.
+    fn items_schema() -> Schema {
+        let columns = ["id", "category", "region"]
+            .into_iter()
+            .map(|name| {
+                let column = pgdog_stats::Column {
+                    column_name: name.into(),
+                    ..Default::default()
+                };
+                (name.to_owned(), column.into())
+            })
+            .collect();
+        let relation = Relation::test_table("public", "items", columns);
+        Schema::from_parts(
+            vec!["public".into()],
+            HashMap::from([(("public".into(), "items".into()), relation)]),
+        )
+    }
+
+    #[test]
+    fn group_by_select_alias_is_merged_by_position() {
+        let schema = items_schema();
+        // (query, shard query if rewritten, merged GROUP BY columns)
+        for (sql, shard_sql, group_by) in [
+            // No table has a column `c`, so it's the SELECT alias.
+            (
+                "SELECT lower(category) AS c, count(*) FROM items GROUP BY c",
+                None,
+                vec![0],
+            ),
+            (
+                "SELECT count(*), category AS c, region AS r FROM items i JOIN items j USING (id) GROUP BY r, c",
+                None,
+                vec![2, 1],
+            ),
+            // `items.category` wins over the alias, so the key is hidden.
+            (
+                "SELECT lower(category) AS category, count(*) FROM items GROUP BY category",
+                Some(
+                    "SELECT lower(category) AS category, count(*), category AS __pgdog_group_0 \
+                     FROM items GROUP BY category",
+                ),
+                vec![2],
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
+                panic!("expected SELECT")
+            };
+            let rewrite = build(&ast, &schema, false).unwrap();
+            assert_eq!(
+                rewrite.as_ref().map(|rewrite| rewrite.sql.as_ref()),
+                shard_sql,
+                "{sql}"
+            );
+            let aggregate = match rewrite.as_ref().and_then(|rewrite| rewrite.plan.as_ref()) {
+                Some(plan) => plan.aggregate().expect("GROUP BY plan").clone(),
+                None => Aggregate::parse(select, &schema),
+            };
+            assert_eq!(aggregate.group_by(), group_by, "{sql}");
+        }
+    }
+
+    #[test]
+    fn group_by_select_alias_is_rejected_when_from_is_not_known() {
+        let loaded = items_schema();
+        let not_loaded = Schema::default();
+        for (sql, schema) in [
+            (
+                "SELECT lower(category) AS c, count(*) FROM unknown GROUP BY c",
+                &loaded,
+            ),
+            (
+                "SELECT lower(category) AS c, count(*) FROM (SELECT * FROM items) i GROUP BY c",
+                &loaded,
+            ),
+            (
+                "WITH items AS (SELECT 1 AS c) SELECT c + 1 AS c, count(*) FROM items GROUP BY c",
+                &loaded,
+            ),
+            (
+                "SELECT lower(category) AS c, count(*) FROM items AS i (c, d, e) GROUP BY c",
+                &loaded,
+            ),
+            (
+                "SELECT lower(category) AS ctid, count(*) FROM items GROUP BY ctid",
+                &loaded,
+            ),
+            (
+                "SELECT lower(category) AS c, count(*) FROM items GROUP BY c HAVING count(*) > 1",
+                &not_loaded,
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let error = build(&ast, schema, false).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    Error::UnsupportedGroupBy(_) | Error::UnsupportedHaving(_)
+                ),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn having_groups_by_alias_and_expression() {
+        let schema = items_schema();
+        // (query, shard query, merged GROUP BY columns)
+        for (sql, shard_sql, group_by) in [
+            (
+                "SELECT lower(category) AS c, count(*) FROM items GROUP BY c HAVING count(*) > 1",
+                "SELECT lower(category) AS c, count(*), count(*) AS __pgdog_having_0 \
+                 FROM items GROUP BY c HAVING count(*) > 1 OR true",
+                vec![0],
+            ),
+            (
+                "SELECT count(*) FROM items GROUP BY lower(category), 1 HAVING count(*) > 1",
+                "SELECT count(*), count(*) AS __pgdog_having_0, lower(category) AS __pgdog_having_1 \
+                 FROM items GROUP BY lower(category), 1 HAVING count(*) > 1 OR true",
+                vec![2, 0],
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let rewrite = build(&ast, &schema, false)
+                .unwrap()
+                .expect("HAVING requires a rewrite");
+            assert_eq!(rewrite.sql.as_ref(), shard_sql, "{sql}");
+            let plan = rewrite.plan.expect("projection plan");
+            let aggregate = plan.having.as_ref().expect("HAVING plan").aggregate();
+            assert_eq!(aggregate.group_by(), group_by, "{sql}");
+        }
+    }
+
     #[test]
     fn unsupported_having_queries_fail_closed() {
         for sql in [
-            // Groups can only be matched across shards on columns and ordinals.
-            "SELECT lower(customer_id), COUNT(*) FROM purchases \
-             GROUP BY lower(customer_id) HAVING COUNT(*) > 2",
             // Star expansion shifts the positions aggregates are merged by.
             "SELECT * FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT p.*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",

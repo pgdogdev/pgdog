@@ -33,7 +33,7 @@ mod table;
 pub(crate) mod value;
 mod where_clause;
 
-pub(crate) use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
+pub(crate) use aggregate::{Aggregate, AggregateFunction, AggregateTarget, GroupByAlias};
 pub(crate) use binary::BinaryStream;
 pub(crate) use cache::{Ast, AstContext, Cache};
 pub(crate) use column::Column;

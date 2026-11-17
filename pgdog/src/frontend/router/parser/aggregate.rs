@@ -1,6 +1,8 @@
 use pg_raw_parse::{Node, nodes};
 use std::fmt;
 
+use pgdog_stats::Relation as StatsRelation;
+
 use super::Function;
 use crate::backend::schema::Schema;
 
@@ -93,6 +95,108 @@ fn index_of_column(stmt: &nodes::SelectStmt, qualified_column_name: &[&str]) -> 
     })
 }
 
+/// Columns every table has without listing them in its definition.
+const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "xmin", "cmin", "xmax", "cmax", "ctid"];
+
+/// What a bare `GROUP BY` name that matches a `SELECT` alias refers to.
+///
+/// Postgres looks for a column of the `FROM` tables first and falls back to
+/// the `SELECT` alias, so the schema decides which one it is:
+///
+/// ```sql
+/// SELECT lower(name) AS name, count(*) FROM users GROUP BY name -- users.name
+/// SELECT lower(name) AS n, count(*) FROM users GROUP BY n -- lower(name)
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum GroupByAlias {
+    /// A table in `FROM` has a column with this name.
+    InputColumn,
+    /// No table has one. The name is the `SELECT` list item at this position.
+    Output(usize),
+    /// `FROM` has something other than tables found in the schema.
+    Unknown,
+}
+
+impl GroupByAlias {
+    /// Returns `None` if the column isn't a bare name matching a `SELECT` alias.
+    pub(crate) fn resolve(
+        stmt: &nodes::SelectStmt,
+        column: &nodes::ColumnRef,
+        schema: &Schema,
+    ) -> Option<Self> {
+        let mut fields = column.fields().into_iter();
+        let (Some(name), None) = (fields.next().and_then(Node::as_str), fields.next()) else {
+            return None;
+        };
+        let index = stmt
+            .target_list()
+            .iter()
+            .position(|target| target.name() == Some(name))?;
+
+        if SYSTEM_COLUMNS.contains(&name) {
+            return Some(Self::Unknown);
+        }
+
+        let ctes: Vec<&str> = stmt
+            .with_clause()
+            .map(|with| with.ctes().iter().filter_map(|cte| cte.ctename()).collect())
+            .unwrap_or_default();
+        let mut is_input_column = false;
+        for from in stmt.from_clause().iter() {
+            match from_has_column(from, name, schema, &ctes) {
+                Some(has_column) => is_input_column |= has_column,
+                None => return Some(Self::Unknown),
+            }
+        }
+
+        Some(if is_input_column {
+            Self::InputColumn
+        } else {
+            Self::Output(index)
+        })
+    }
+}
+
+/// Whether a `FROM` item has a column with this name. `None` if it isn't made
+/// of tables found in the schema, e.g., a subquery, a function or a CTE.
+fn from_has_column(from: Node<'_>, name: &str, schema: &Schema, ctes: &[&str]) -> Option<bool> {
+    // `AS t(a, b)` renames the columns.
+    let renames_columns =
+        |alias: Option<&nodes::Alias>| alias.is_some_and(|alias| !alias.colnames().is_empty());
+
+    match from {
+        Node::RangeVar(table) => {
+            let relname = table.relname()?;
+            if renames_columns(table.alias()) {
+                return None;
+            }
+            let has_column = |relation: &StatsRelation| relation.columns.contains_key(name);
+            match table.schemaname() {
+                Some(schemaname) => schema.get(schemaname, relname).map(has_column),
+                None if ctes.contains(&relname) => None,
+                // The search path isn't known here. A column in any table
+                // with this name counts, which only ever picks the hidden
+                // column the shards check themselves.
+                None => schema
+                    .relations
+                    .values()
+                    .filter_map(|relations| relations.get(relname))
+                    .map(has_column)
+                    .reduce(|a, b| a || b),
+            }
+        }
+        Node::JoinExpr(join) => {
+            if renames_columns(join.alias()) {
+                return None;
+            }
+            let left = from_has_column(join.larg(), name, schema, ctes)?;
+            let right = from_has_column(join.rarg(), name, schema, ctes)?;
+            Some(left || right)
+        }
+        _ => None,
+    }
+}
+
 fn columns_match(group_by_names: &[&str], select_names: &[&str]) -> bool {
     if group_by_names == select_names {
         return true;
@@ -127,7 +231,7 @@ impl Aggregate {
         let group_by = stmt
             .group_clause()
             .iter()
-            .filter_map(|node| Self::group_by_column(stmt, node))
+            .filter_map(|node| Self::group_by_column(stmt, node, schema))
             .collect();
 
         let targets = stmt
@@ -156,9 +260,13 @@ impl Aggregate {
         Self { group_by, targets }
     }
 
-    /// Position of a GROUP BY item in the SELECT list, if it's an ordinal
-    /// or a selected column.
-    pub(crate) fn group_by_column(stmt: &nodes::SelectStmt, node: Node<'_>) -> Option<usize> {
+    /// Position of a GROUP BY item in the SELECT list, if it's an ordinal,
+    /// a selected column or a SELECT alias.
+    pub(crate) fn group_by_column(
+        stmt: &nodes::SelectStmt,
+        node: Node<'_>,
+        schema: &Schema,
+    ) -> Option<usize> {
         match node {
             // We use 0-indexed arrays, Postgres uses 1-indexed.
             Node::A_Const(c) => c
@@ -171,7 +279,11 @@ impl Aggregate {
                     .iter()
                     .filter_map(Node::as_str)
                     .collect::<Vec<_>>(),
-            ),
+            )
+            .or_else(|| match GroupByAlias::resolve(stmt, c, schema) {
+                Some(GroupByAlias::Output(index)) => Some(index),
+                _ => None,
+            }),
             _ => None,
         }
     }

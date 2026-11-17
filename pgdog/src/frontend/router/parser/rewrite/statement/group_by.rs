@@ -4,11 +4,17 @@ use pg_raw_parse::{Node, make, nodes};
 
 use super::{
     Error,
-    projection::{HiddenAliases, column_name, expands_star},
+    projection::{HiddenAliases, expands_star},
 };
-use crate::frontend::router::parser::Aggregate;
+use crate::{
+    backend::schema::Schema,
+    frontend::router::parser::{Aggregate, GroupByAlias},
+};
 
 const ALIAS_PREFIX: &str = "__pgdog_group_";
+
+pub(super) const UNRESOLVED_ALIAS: &str = "GROUP BY on a SELECT alias is only supported when FROM has just tables \
+     PgDog has loaded the schema for";
 
 /// GROUP BY keys added to the shard query as hidden columns.
 #[derive(Debug, PartialEq)]
@@ -50,6 +56,7 @@ pub(super) fn rewrite_select<'a>(
     select: &mut make::Unique<'a, &'a nodes::SelectStmt>,
     mem: make::MemoryToken<'a>,
     aggregate: &Aggregate,
+    schema: &Schema,
 ) -> Result<Option<GroupByRewrite>, Error> {
     if aggregate.group_by().len() == select.group_clause().len() {
         return Ok(None);
@@ -67,7 +74,7 @@ pub(super) fn rewrite_select<'a>(
     let mut group_by = vec![];
 
     for node in select.group_clause().iter() {
-        if let Some(column) = Aggregate::group_by_column(select, node) {
+        if let Some(column) = Aggregate::group_by_column(select, node, schema) {
             group_by.push(column);
             continue;
         }
@@ -78,11 +85,12 @@ pub(super) fn rewrite_select<'a>(
                     "GROUPING SETS, ROLLUP and CUBE are unsupported",
                 ));
             }
-            // Shards can't resolve a SELECT alias inside the hidden column.
-            Node::ColumnRef(column) if groups_by_output_alias(select, column) => {
-                return Err(Error::UnsupportedGroupBy(
-                    "GROUP BY on a SELECT alias is unsupported",
-                ));
+            // Shards can't resolve a SELECT alias inside the hidden column,
+            // so the name has to be a known column of the FROM tables.
+            Node::ColumnRef(column)
+                if GroupByAlias::resolve(select, column, schema) == Some(GroupByAlias::Unknown) =>
+            {
+                return Err(Error::UnsupportedGroupBy(UNRESOLVED_ALIAS));
             }
             _ => {}
         }
@@ -101,13 +109,4 @@ pub(super) fn rewrite_select<'a>(
         aliases,
         aggregate.clone().with_group_by(group_by),
     )))
-}
-
-fn groups_by_output_alias(select: &nodes::SelectStmt, column: &nodes::ColumnRef) -> bool {
-    column.fields().len() == 1
-        && select.target_list().iter().any(|target| {
-            target
-                .name()
-                .is_some_and(|name| Some(name) == column_name(column))
-        })
 }
