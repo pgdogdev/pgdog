@@ -169,6 +169,8 @@ fn same_rules<T: DeserializeOwned + PartialEq>(stored: &[Value], current: &[Valu
 mod test {
     use serde_json::json;
 
+    use super::super::super::RecordMismatch;
+
     use super::*;
 
     fn table(name: &str) -> ShardedTableConfig {
@@ -280,7 +282,7 @@ mod test {
         right.source.shards = 2;
         right.destination.sharded_tables = vec![];
 
-        let error = Error::ConfigChanged(left.validate_equal(&right).unwrap_err());
+        let error = RecordMismatch::Config(left.validate_equal(&right).unwrap_err());
         assert_eq!(
             error.to_string(),
             "sharding config changed since the resharding started: source.shards, destination.sharded_tables"

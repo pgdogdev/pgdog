@@ -32,7 +32,7 @@ impl ReshardingStore {
     pub(crate) async fn open(addr: &Address, key: ReshardingKey) -> Result<Self, Error> {
         let mut server = connect_session(addr).await?;
         if !try_lock(&mut server, &key).await? {
-            return Err(locked(&mut server, &key).await?);
+            return Err(locked_error(&mut server, &key).await);
         }
 
         Ok(Self {
@@ -51,23 +51,19 @@ impl ReshardingStore {
             }
             tokio::time::sleep(RELOCK_DELAY).await;
         }
-        Err(locked(&mut server, &self.key).await?)
+        Err(locked_error(&mut server, &self.key).await)
     }
 
     pub(crate) fn key(&self) -> &ReshardingKey {
         &self.key
     }
 
+    pub(crate) fn address(&self) -> &Address {
+        &self.addr
+    }
+
     pub(crate) async fn load(&self) -> Result<Option<ReshardingRecord>, Error> {
-        let rows = self
-            .server
-            .lock()
-            .await
-            .fetch_all::<DataRow>(SelectRow::request(&self.key))
-            .await?;
-        rows.first()
-            .map(|row| parse_record(row, self.key.clone()))
-            .transpose()
+        Self::read(&mut *self.server.lock().await, &self.key).await
     }
 
     pub(crate) async fn insert(&self, row: &ReshardingRecord) -> Result<(), Error> {
@@ -112,7 +108,6 @@ impl ReshardingStore {
         Ok(())
     }
 
-    // W: why do we need separate load and read?
     pub(crate) async fn read(
         server: &mut Server,
         key: &ReshardingKey,
@@ -128,7 +123,7 @@ impl ReshardingStore {
             .transpose()
     }
 
-    pub(crate) async fn list(
+    pub(super) async fn list(
         server: &mut Server,
     ) -> Result<Vec<Result<ReshardingRecord, UnreadableRecord>>, Error> {
         let exists = server.fetch_all::<i32>(TableExists::request(())).await?;
@@ -180,22 +175,20 @@ async fn connect_session(addr: &Address) -> Result<Server, Error> {
     Ok(server)
 }
 
-// W: wtf result<error, error>?
-async fn locked(server: &mut Server, key: &ReshardingKey) -> Result<Error, Error> {
-    let owner = ReshardingStore::lock_owner(server, key)
-        .await?
-        .unwrap_or_else(|| "unknown".into());
-    Ok(Error::ReshardingLocked {
-        key: key.to_string(),
-        owner,
-    })
+async fn locked_error(server: &mut Server, key: &ReshardingKey) -> Error {
+    match ReshardingStore::lock_owner(server, key).await {
+        Ok(owner) => Error::ReshardingLocked {
+            key: key.to_string(),
+            owner: owner.unwrap_or_else(|| "unknown".into()),
+        },
+        Err(err) => err,
+    }
 }
 
-// W: verify pub exports everywhere
 #[derive(Debug)]
-pub(crate) struct UnreadableRecord {
-    pub(crate) key: ReshardingKey,
-    pub(crate) error: Error,
+pub(super) struct UnreadableRecord {
+    pub(super) key: ReshardingKey,
+    pub(super) error: Error,
 }
 
 fn text(row: &DataRow, index: usize) -> Result<String, Error> {

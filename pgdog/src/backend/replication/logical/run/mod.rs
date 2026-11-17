@@ -17,7 +17,7 @@ use crate::backend::{
 mod queries;
 pub(crate) mod scan;
 pub(crate) mod snapshot;
-pub(crate) mod store;
+mod store;
 pub(crate) mod watchdog;
 
 pub(crate) use snapshot::ConfigSnapshot;
@@ -80,16 +80,6 @@ impl ReshardingCommand {
             Self::Replicate { .. } => CommandKind::Replicate,
         }
     }
-
-    pub(crate) fn first_stage(&self) -> Stage {
-        match self {
-            Self::Reshard {
-                replicate_only: false,
-                ..
-            } => Stage::CopyTables,
-            Self::Reshard { .. } | Self::Replicate { .. } => Stage::Replication,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
@@ -105,34 +95,13 @@ pub(crate) enum CommandKind {
 #[from_str(rename_all = "snake_case")]
 #[from_str(error(Error, format_error))]
 pub(crate) enum Stage {
+    Initializing,
     CopyTables,
     Replication,
 }
 
 fn format_error(err: FromStrError) -> Error {
     Error::ReshardingFormat(err.to_string())
-}
-
-/// Defines how the replication objects should be handled.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum RunObjects {
-    #[default]
-    Create,
-    Reuse {
-        owned: bool,
-    },
-    Load {
-        owned: bool,
-    },
-}
-
-impl RunObjects {
-    pub(crate) fn owned(self) -> bool {
-        match self {
-            Self::Create => false,
-            Self::Reuse { owned } | Self::Load { owned } => owned,
-        }
-    }
 }
 
 // W: move to pgdog-stats
@@ -206,6 +175,7 @@ mod test {
     #[test]
     fn stage_round_trips_its_stored_text_in_pipeline_order() {
         let stages = [
+            (Stage::Initializing, "initializing"),
             (Stage::CopyTables, "copy_tables"),
             (Stage::Replication, "replication"),
         ];

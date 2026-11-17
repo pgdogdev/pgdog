@@ -28,7 +28,7 @@ lock_holders() {
 
 initialize_resharding
 RESHARD_TASK_ID=$(psql admin -tAc 'RESHARD source destination pgdog WITH (cleanup_on_cancel false)')
-# The record is written inside the task, after the slots exist.
+# The record is written inside the task.
 wait_for_value 1 resharding_records
 SLOT=$(pg_sql 15434 'SELECT slot_name FROM pgdog.resharding')
 prepare_resharding_verification

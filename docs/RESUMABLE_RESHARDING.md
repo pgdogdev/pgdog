@@ -92,7 +92,7 @@ Rule: store a fact only when Postgres does not store it and resume needs it.
 |Source and destination names, publication|Run key. One unfinished run per key.|1|
 |Command with its options, format version|Rebuild the run. Refuse a newer format.|1|
 |Slot name|Find the slots and origins. A generated name is lost on crash.|1|
-|Stage: `copy_tables` or `replication`|Tells which slots and origins the row describes, and whether the copy is finished.|1|
+|Stage: `initializing`, `copy_tables` or `replication`|Tells which slots and origins the row describes, and whether the copy is finished.|1|
 |Config snapshot: shard counts and sharding rules of both clusters|Detect a config change before resume|1|
 |Copy progress per table part: copy LSN and completion|Skip complete parts. Resolve prepared transactions. Give watermarks to table sync and replication.|3|
 |Cutover step: `none`, `started`, `swap_done`|Recover a crash inside cutover.|5|
@@ -191,7 +191,7 @@ The primary key of `RESHARDING` is `id`, a UUID v7 that pgdog generates when it 
 
 `RESHARDING` is the table `pgdog.resharding`. It has one row per unfinished resharding, on destination shard 0. The row describes the resharding and every object it keeps.
 
-Stage values: `copy_tables`, `replication`. The row is inserted right after all forward slots exist, with `copy_tables` for a RESHARD that copies data and `replication` for REPLICATE and `replicate_only`. A copy run writes `replication` when replication starts. Cutover deletes the row, so the reverse phase has no row and is never resumed. Because the row exists only when its slots exist, a resume never creates a slot: a missing slot is an error.
+Stage values: `initializing`, `copy_tables`, `replication`. The row is inserted when the run starts, with `initializing`. The copy path writes `copy_tables` after all forward slots exist. Replication writes `replication` after all forward slots and origins exist. While the stage is `initializing`, a stop or an error drops the slots that the run created and all its origins, and deletes the row, also with `cleanup_on_cancel false`. Cutover deletes the row, so the reverse phase has no row and is never resumed. A resume refuses a row in `initializing`, so a resume never creates a slot: a missing slot is an error.
 
 All slots use the stored name: one forward slot per source shard. Reverse slots use the same name, but no row describes them. Each slot has one origin on each shard of the other side. Each table part is its own redo unit.
 
@@ -243,7 +243,7 @@ flowchart LR
 
 |Job|Where it happens|
 |---|---|
-|Take the lock, check the key, insert the row after the slots|The first step of the reshard or replication task takes the lock and refuses a key with a row. The row is inserted right after all forward slots exist. The start command replies with the task id first, so a duplicate key fails the task with `ReshardingExists`, visible in `SHOW TASKS`. The task puts the resumable state into the shared run state.|
+|Take the lock, check the key, insert the row|The first step of the reshard or replication task takes the lock and refuses a key with a row. Then it inserts the row with stage `initializing`. The start command replies with the task id first, so a duplicate key fails the task with `ReshardingExists`, visible in `SHOW TASKS`. The task puts the resumable state into the shared run state.|
 |Hold the lock and the state connection|The shared run state. The lock lives until the run ends or pauses, not until the last copy of the state is dropped.|
 |Skip finished phases|The resharding pipeline reads the stored stage. A row at `copy_tables` cannot resume until copy progress exists (Stage 3).|
 |Skip done parts, adopt slots, keep origins|Each phase task reads its part of the resumable state.|
@@ -265,9 +265,10 @@ stateDiagram-v2
 ```mermaid
 flowchart TD
   A[Start or resume] --> B{Row exists?}
-  B -- no --> B1[Fresh run: pre-data, slots, row insert] --> C
+  B -- no --> B1[Fresh run: row insert, pre-data, slots] --> C
   B -- yes --> G{Stage}
   C[copy_tables: copy, post-data, table sync] --> G1
+  G -- initializing --> XI[Refused: abort only]
   G -- copy_tables --> X[Refused until Stage 3]
   G -- replication --> G1[S2: forward replication] --> H[Cutover in one go]
   H --> R[Reverse replication, not recorded]
@@ -296,7 +297,7 @@ Abort and resume search shard 0 of the destination. A cutover deletes the row, s
 - Each resharding needs its own slot name. Two reshardings with the same explicit slot name on one source share the slots: one run can consume changes the other needs, and abort or cleanup of one drops the slots of the other. Their origins also share names on a destination server, so they share apply progress. Generated slot names never collide.
 - `data-sync --abort` always aborts a RESHARD row. Abort a REPLICATE run with the admin command `REPLICATE ... WITH (abort)`.
 - Abort builds the slot and origin names from the current shard counts. If the shard count changed during a pause, drop the remaining slots and origins by hand.
-- A hard crash between the last slot creation and the row insert, or inside cutover after the row delete, can leave slots with no row. Drop them by hand.
+- A hard crash inside cutover, after the row delete, can leave slots with no row. Drop them by hand.
 - The reverse phase after a cutover is not resumable. A stop or an error in the reverse phase drops the reverse slots and origins, also with `cleanup_on_cancel false`. To replicate in the reverse direction again, start REPLICATE.
 
 # Part 3. Stages
@@ -313,8 +314,8 @@ In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Canc
 2. Open a dedicated state connection to destination shard 0. Create `pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication). Fail if the key has a row.
 3. Probe the slots before the run creates them. If all slots exist, the run reuses them, and a live run keeps them on stop. If only some slots exist, refuse.
 4. Capture the config snapshot: the shard counts and sharding rules of both clusters.
-5. Insert the row right after all forward slots exist: command with its options, publication, slot name, stage, config snapshot, owner task (instance id, run id, task id), format version, start time. Before the insert, a stop or error always drops the slots that the run created, also with `cleanup_on_cancel false`, and the next start is a fresh run. A hard crash between the last slot creation and the insert can leave the slots with no row; drop them by hand.
-6. Write `replication` when a copy run starts replication. A write never moves the stored stage back.
+5. Insert the row right after the key check: command with its options, publication, slot name, stage `initializing`, config snapshot, owner task (instance id, run id, task id), format version, start time. While the stage is `initializing`, a stop or error always drops the slots that the run created and all its origins, deletes the row and releases the lock, also with `cleanup_on_cancel false`. After a crash in `initializing`, the row stays, and abort drops every slot with the run's name.
+6. Write `copy_tables` when the copy path has created all forward slots. Write `replication` when replication has all forward slots and origins. A write never moves the stored stage back.
 7. Every 5 s the owner runs a query on its state connection (heartbeat, lock watchdog). If the query fails, the connection and the lock are lost, and the run stops.
 8. On stop, error, shutdown or lock loss, with `cleanup_on_cancel false`: stop tasks, keep slots and origins, release the lock. With `true`: drop the slots that the run created and all its origins, then delete the row and release the lock. If the state connection is broken, the delete opens a new connection and takes the lock again. If the drop fails, or another instance holds the lock, the row stays, so abort can finish the cleanup. After a crash, Postgres frees the lock and the row stays.
 9. Cutover ends the run, with no resume point inside it: drop the forward slots and origins, delete the row and release the lock, then create the reverse slots. A crash inside cutover is not resumable. The reverse phase has no row and no lock, so abort and resume after the cutover fail with `NoResharding`. A stop or an error during reverse replication drops the reverse slots and origins, also with `cleanup_on_cancel false`.
@@ -378,7 +379,7 @@ How resume rebuilds the run:
 
 1. Find the run row and take the lock. If another instance holds the lock, refuse. Write the new owner and `resumed_at`.
 2. Validate: known format, config snapshot with no critical mismatch, matching shard counts, every slot present with its WAL.
-3. Build the shared run state from the stored data: same publication, slot name and command options. The resumed run owns every slot with its name.
+3. Build the shared run state from the stored data: same publication, slot name and command options. A resumed run is always resumable: a stop or an error keeps its slots, origins and row, whatever `cleanup_on_cancel` is. Only abort and the normal run end drop them.
 4. Adopt the slots by name. The row exists only when all slots exist, so a missing slot is an error and is never created. Create missing origins and never reset the progress of an existing origin.
 5. Load the publication tables. Set each table's watermark from its stored copy LSN (Stage 3). A REPLICATE run has no copy, so its watermarks start at zero.
 6. Start a new task with the "resumed" flag, at the stored stage.
@@ -390,11 +391,11 @@ How replication continues without duplicates:
 - Each shard updates its origin in the same transaction as the applied changes. Origin progress and data therefore always agree on each shard.
 - Changes for a table at or below its copy LSN are skipped, because the copy already has them.
 
-The row is inserted only after the slots exist, so a resume never needs to create a slot.
+A resume refuses a row in `initializing`, so a resume never needs to create a slot.
 
 ### Interface changes
 
-- RESHARD, COPY_DATA and REPLICATE accept `WITH (resume)`. No new command. The command, the publication and the slot name must match the stored row, or the command refuses.
+- RESHARD, COPY_DATA and REPLICATE accept `WITH (resume)`. No new command. The command, the publication and the slot name must match the stored row, or the command refuses. `resume` together with `cleanup_on_cancel` is refused.
 - CLI `data-sync --resume`.
 - Origins of resumable runs keep their progress across restarts.
 - A resumed task shows a "resumed" flag in the UI. Its subtasks show it too.

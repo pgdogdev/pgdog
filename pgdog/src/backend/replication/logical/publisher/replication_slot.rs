@@ -174,7 +174,10 @@ impl ReplicationSlot<Permanent> {
 
     pub(crate) async fn reuse_or_create(&self) -> Result<(), Error> {
         match self.verify_exists().await {
-            Err(Error::MissingReplicationSlot(_)) => self.create().await,
+            Err(Error::MissingReplicationSlot(_)) => {
+                self.mark_owned();
+                self.create().await
+            }
             result => result,
         }
     }
@@ -433,8 +436,7 @@ impl ReplicationSlotInner {
         self.existing.store(true, Ordering::Release);
     }
 
-    /// The slot is on the backend because an earlier attempt of this run
-    /// created it, so cleanup may drop it.
+    /// This run creates the slot, so cleanup may drop it.
     pub(crate) fn mark_owned(&self) {
         self.existing.store(false, Ordering::Release);
     }

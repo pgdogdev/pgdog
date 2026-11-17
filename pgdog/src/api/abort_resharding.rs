@@ -42,11 +42,10 @@ impl Task for AbortReshardingTask {
     }
 
     async fn run(self, _ctx: TaskContext<Self>) -> Result<(), Error> {
-        let (store, record) = self
+        let record = self
             .state
-            .open_for_abort(self.command, self.slot.as_deref())
+            .abort_run(self.command, self.slot.as_deref())
             .await?;
-        self.state.abort_run(&store, &record).await?;
         info!("resharding {} aborted", record.key);
         Ok(())
     }

@@ -12,6 +12,8 @@ origin_count() {
     pg_sql "$1" "SELECT count(*) FROM pg_replication_origin WHERE starts_with(roname, '__pgdog_origin_$2')"
 }
 
+# W: in tests we should not verify all these details.
+# we should verify the behaviour - we can stop and resume the task, that's it
 resharding_rows() {
     local exists
     exists=$(pg_sql 15434 "SELECT to_regclass('pgdog.resharding') IS NOT NULL") || return 1

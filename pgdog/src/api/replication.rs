@@ -24,7 +24,7 @@ use crate::backend::replication::logical::publisher::replication_stream::{
 };
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand, Stage};
+use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand};
 use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
@@ -228,7 +228,6 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             self.state.databases(),
             self.validation_stage
         );
-        self.state.set_stage(Stage::Replication).await?;
         self.replicate_until_cutover(ctx, cutover, PostDataValidationStage::DuringReplication)
             .await?;
         self.sync_schema(

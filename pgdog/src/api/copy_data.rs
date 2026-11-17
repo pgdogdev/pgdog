@@ -13,6 +13,7 @@ use crate::backend::replication::data_sync::{
 };
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::run::Stage;
 use crate::backend::replication::publisher::{Table, resolve_resharding_replicas};
 use crate::tasks;
 use crate::util::safe_sleep;
@@ -73,6 +74,7 @@ impl Task for CopyDataTask {
 
         ctx.set_status(CopyDataStage::CreatingSlots.into());
         state.create_slots(&cancel).await?;
+        state.set_stage(Stage::CopyTables).await?;
 
         let mut tables = state.tables();
         ctx.set_status(CopyDataStatus {

@@ -11,12 +11,26 @@ use crate::{
 };
 
 use super::run::CommandKind;
+use super::run::snapshot::ConfigMismatch;
 
 fn abort_hint(command: CommandKind) -> &'static str {
     match command {
         CommandKind::Reshard => "abort it with WITH (abort) or data-sync --abort",
         CommandKind::Replicate => "abort it with REPLICATE ... WITH (abort)",
     }
+}
+
+#[derive(Debug, Display, Error)]
+pub(crate) enum RecordMismatch {
+    #[display("resharding command is \"{stored}\", not \"{given}\"")]
+    Command { stored: String, given: String },
+    #[display("resharding slot is \"{stored}\", not \"{given}\"")]
+    Slot { stored: String, given: String },
+    #[display(
+        "sharding config changed since the resharding started: {}",
+        _0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    Config(#[error(ignore)] Vec<ConfigMismatch>),
 }
 
 /// The kind of validation failure, decoupled from which table it occurred on.
@@ -302,27 +316,16 @@ pub(crate) enum Error {
     #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
     ReshardingSlotsPartial(String),
 
-    // W: remove this for now, we can't resume anything right now
     #[error(
-        "resharding {0} stopped while copying tables and cannot resume; abort it with WITH (abort) and start again"
+        "resharding {key} stopped at stage {stage} and cannot resume; abort it with WITH (abort) and start again"
     )]
-    ReshardingCopyResume(String),
+    ReshardingNotResumable { key: String, stage: String },
 
     #[error("no unfinished resharding {0}")]
     NoResharding(String),
 
-    #[error("resharding {field} is \"{stored}\", not \"{given}\"")]
-    ReshardingMismatch {
-        field: &'static str,
-        stored: String,
-        given: String,
-    },
-
-    #[error(
-        "sharding config changed since the resharding started: {}",
-        .0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
-    )]
-    ConfigChanged(Vec<super::run::snapshot::ConfigMismatch>),
+    #[error(transparent)]
+    RecordMismatch(#[from] RecordMismatch),
 }
 
 impl From<ErrorResponse> for Error {
