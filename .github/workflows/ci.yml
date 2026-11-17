@@ -136,8 +136,8 @@ jobs:
               needs_docker: true,
             }
           - {
-              name: resharding-resumable-cutover,
-              script: integration/resharding/resumable_cutover.sh,
+              name: resharding-cutover,
+              script: integration/resharding/cutover.sh,
               needs_docker: true,
             }
           - {

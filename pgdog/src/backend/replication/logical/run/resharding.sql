@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS pgdog.resharding (
     publication TEXT NOT NULL,
     command JSONB NOT NULL,
     slot_name TEXT NOT NULL,
-    slot_existed BOOLEAN NOT NULL,
     stage TEXT NOT NULL,
     config JSONB NOT NULL,
     instance_id TEXT NOT NULL,

@@ -16,6 +16,7 @@ pub(crate) struct ActiveRun {
 }
 
 impl ActiveRun {
+    // W: let's just wrap the task root_id explicitly here, instead of on_lost and let's name it somehow better
     pub(crate) fn start(state: &ReshardingState, on_lost: impl FnOnce() + Send + 'static) -> Self {
         let watchdog = state.run_store().map(|store| {
             AbortOnDropHandle::new(tasks::spawn("resharding lock watchdog", async move {

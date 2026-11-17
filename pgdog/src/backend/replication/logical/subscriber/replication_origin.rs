@@ -73,6 +73,7 @@ impl ReplicationOrigin {
     }
 
     /// Create the origin if it does not exist.
+    // W: can we use better name?
     pub(crate) async fn create_origin(&self) -> Result<(), Error> {
         let mut server = connect_address(&self.address).await?;
         let created = self.create_if_missing(&mut server).await?;

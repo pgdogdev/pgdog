@@ -114,13 +114,15 @@ pub(crate) enum Commands {
         #[arg(long)]
         skip_schema_sync: bool,
 
-        /// Drop the replication slots and origins when the run stops before
-        /// it ends. With `false`, the run keeps them and can be aborted later.
+        /// Drop the replication slots that the run created, and all its origins,
+        /// when the run stops before it ends. Slots that existed before the run
+        /// stay. With `false`, the run keeps them and can be aborted later.
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         cleanup_on_cancel: bool,
 
         /// Abort the unfinished resharding from source to destination: drop
-        /// the slots it created, its origins and its state.
+        /// every slot with its slot name, also slots that existed before the
+        /// run, all its origins and its state.
         #[arg(
             long,
             conflicts_with_all = ["cleanup_on_cancel", "replicate_only", "tables_only", "sync_only", "skip_schema_sync"]

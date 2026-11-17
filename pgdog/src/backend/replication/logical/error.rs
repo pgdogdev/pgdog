@@ -10,6 +10,15 @@ use crate::{
     net::ErrorResponse,
 };
 
+use super::run::CommandKind;
+
+fn abort_hint(command: CommandKind) -> &'static str {
+    match command {
+        CommandKind::Reshard => "abort it with WITH (abort) or data-sync --abort",
+        CommandKind::Replicate => "abort it with REPLICATE ... WITH (abort)",
+    }
+}
+
 /// The kind of validation failure, decoupled from which table it occurred on.
 #[derive(Debug, Display)]
 pub(crate) enum TableValidationErrorKind {
@@ -283,13 +292,21 @@ pub(crate) enum Error {
     #[error("unsupported resharding state: {0}")]
     ReshardingFormat(String),
 
-    #[error(
-        "resharding {key} is unfinished at stage {stage}; abort it with WITH (abort) or data-sync --abort"
-    )]
-    ReshardingExists { key: String, stage: String },
+    #[error("resharding {key} is unfinished at stage {stage}; {}", abort_hint(*command))]
+    ReshardingExists {
+        key: String,
+        stage: String,
+        command: CommandKind,
+    },
 
     #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
     ReshardingSlotsPartial(String),
+
+    // W: remove this for now, we can't resume anything right now
+    #[error(
+        "resharding {0} stopped while copying tables and cannot resume; abort it with WITH (abort) and start again"
+    )]
+    ReshardingCopyResume(String),
 
     #[error("no unfinished resharding {0}")]
     NoResharding(String),

@@ -101,7 +101,7 @@ pub(crate) struct SelectRow;
 impl Query for SelectRow {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
-               slot_existed::text, stage, config::text, instance_id, run_id::text,
+               stage, config::text, instance_id, run_id::text,
                task_id::text, format_version::text, id::text,
                (extract(epoch FROM started_at) * 1000)::bigint::text,
                coalesce((extract(epoch FROM resumed_at) * 1000)::bigint::text, '')
@@ -120,7 +120,7 @@ pub(crate) struct ListRows;
 impl Query for ListRows {
     const SQL: &'static str = "
         SELECT source_db, destination_db, publication, command::text, slot_name,
-               slot_existed::text, stage, config::text, instance_id, run_id::text,
+               stage, config::text, instance_id, run_id::text,
                task_id::text, format_version::text, id::text,
                (extract(epoch FROM started_at) * 1000)::bigint::text,
                coalesce((extract(epoch FROM resumed_at) * 1000)::bigint::text, '')
@@ -161,15 +161,16 @@ impl Query for CountOrigins {
 
 pub(crate) struct InsertRow;
 
+// W: maybe add unit test for this?
 impl Query for InsertRow {
     const SQL: &'static str = "
         INSERT INTO pgdog.resharding (
             source_db, destination_db, publication, command, slot_name,
-            slot_existed, stage, config, instance_id, run_id, task_id, format_version, id,
+            stage, config, instance_id, run_id, task_id, format_version, id,
             started_at
         )
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6::boolean, $7, $8::jsonb, $9, $10::uuid,
-                $11::bigint, $12::integer, $13::uuid, to_timestamp($14::bigint / 1000.0))";
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9::uuid,
+                $10::bigint, $11::integer, $12::uuid, to_timestamp($13::bigint / 1000.0))";
 
     type Params<'a> = &'a ReshardingRecord;
 
@@ -181,7 +182,6 @@ impl Query for InsertRow {
             publication,
             text(&serde_json::to_string(&row.command).expect("command is valid JSON")),
             text(&row.slot_name),
-            text(&row.slot_existed.to_string()),
             text(&row.stage.to_string()),
             text(&serde_json::to_string(&row.config).expect("config snapshot is valid JSON")),
             text(row.owner.instance_id.as_str()),
@@ -194,6 +194,7 @@ impl Query for InsertRow {
     }
 }
 
+// W: collect and move all helpers at the end of the file
 fn unix_millis(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_millis() as i64)

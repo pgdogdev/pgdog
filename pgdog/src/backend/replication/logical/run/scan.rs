@@ -33,6 +33,7 @@ pub(crate) struct ReshardingReport {
     pub(crate) record: ReshardingRecord,
     pub(crate) state: RunState,
     /// `None` when the objects could not be counted.
+    // W: rename to _count maybe?
     pub(crate) slots: Option<ObjectCount>,
     pub(crate) origins: Option<ObjectCount>,
     pub(crate) config: ConfigCheck,
@@ -75,6 +76,7 @@ pub(crate) enum ConfigCheck {
     Unknown(String),
 }
 
+// W: let's add at least some unit test
 pub(crate) async fn scan() -> Vec<ReshardingScan> {
     let clusters = databases().schema_owners();
     let addresses = join_all(clusters.iter().map(state_address)).await;
@@ -121,6 +123,7 @@ pub(crate) async fn scan() -> Vec<ReshardingScan> {
 /// Never fails the run: other reshardings on the destination are only logged.
 pub(crate) async fn check_other_runs(address: &Address, own: &ReshardingKey) {
     info!("resharding {own}: checking {address} for other unfinished reshardings");
+    // W: let's reuse it with  the code above
     let found = match safe_timeout(SCAN_TIMEOUT, list_table(address)).await {
         Ok(Ok(mut listed)) => {
             listed.found.retain(|(record, _)| record.key != *own);
@@ -246,11 +249,7 @@ async fn report(record: ReshardingRecord, owner: Option<String>) -> ReshardingRe
                 counted(count_slots(source, &record.slot_name)),
                 counted(count_origins(source, destination, &record.slot_name)),
             );
-            (
-                slots,
-                origins,
-                check_config(&record, source, destination),
-            )
+            (slots, origins, check_config(&record, source, destination))
         }
         (Ok(source), Err(err)) => (
             counted(count_slots(source, &record.slot_name)).await,
@@ -282,9 +281,7 @@ fn check_config(record: &ReshardingRecord, source: &Cluster, destination: &Clust
     }
 }
 
-async fn counted(
-    count: impl Future<Output = Result<ObjectCount, Error>>,
-) -> Option<ObjectCount> {
+async fn counted(count: impl Future<Output = Result<ObjectCount, Error>>) -> Option<ObjectCount> {
     safe_timeout(COUNT_TIMEOUT, count).await.ok()?.ok()
 }
 

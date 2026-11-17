@@ -25,7 +25,10 @@ use crate::backend::Error as BackendError;
 use crate::backend::pool::{Address, Request};
 use crate::tasks;
 use crate::util::safe_timeout;
-use crate::{backend::Cluster, util::random_string};
+use crate::{
+    backend::{Cluster, Server},
+    util::random_string,
+};
 
 const SLOT_DROP_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -72,7 +75,28 @@ struct ReshardingStateInner {
     origin_objects: RunObjects,
     #[builder(skip)]
     store: Option<Arc<ReshardingStore>>,
+    // W: why do we need to track this?
+    // verify all the fields here and let's not introduce
+    // them if we don't use them
     #[builder(skip)]
+    pending: Option<PendingRun>,
+    #[builder(skip)]
+    recorded: bool,
+    #[builder(skip)]
+    stage: Option<Stage>,
+}
+
+#[derive(Debug)]
+struct PendingRun {
+    command: ReshardingCommand,
+    task_id: TaskId,
+    started_at: std::time::SystemTime,
+}
+
+struct StartedRun {
+    slots: RunObjects,
+    origins: RunObjects,
+    pending: Option<PendingRun>,
     stage: Option<Stage>,
 }
 
@@ -99,7 +123,7 @@ impl ReshardingStateInner {
     }
 
     fn keeps_slots(&self) -> bool {
-        !self.cleanup_on_cancel && self.store.is_some()
+        !self.cleanup_on_cancel && self.recorded && self.store.is_some()
     }
 }
 
@@ -259,14 +283,50 @@ impl ReshardingState {
     /// TODO: Add support for 2-phase commit.
     pub(crate) async fn create_slots(&self, cancel: &CancellationToken) -> Result<(), Error> {
         let objects = self.inner.lock().slot_objects;
-        self.create_slots_on(&self.source, objects, cancel).await
+        self.create_slots_on(&self.source, objects, cancel).await?;
+        self.record_run_slots().await
     }
 
-    /// Create the slots a rollback would replicate from, on the destination.
-    pub(crate) async fn create_reverse_slots(
+    async fn record_run_slots(&self) -> Result<(), Error> {
+        let (store, pending) = {
+            let mut inner = self.inner.lock();
+            match (inner.store.clone(), inner.pending.take()) {
+                (Some(store), Some(pending)) => (store, pending),
+                (_, pending) => {
+                    inner.pending = pending;
+                    return Ok(());
+                }
+            }
+        };
+        // W: maybe pass it as parameter explicitly?
+        let stage = pending.command.first_stage();
+        store
+            .insert(&ReshardingRecord {
+                id: ReshardingId::generate(),
+                key: store.key().clone(),
+                command: pending.command,
+                slot_name: self.slot_name.clone(),
+                stage,
+                config: self.config_snapshot()?,
+                owner: TaskOwner::current(pending.task_id),
+                format_version: FORMAT_VERSION,
+                started_at: pending.started_at,
+                resumed_at: None,
+            })
+            .await?;
+        let mut inner = self.inner.lock();
+        inner.recorded = true;
+        inner.stage = Some(stage);
+        Ok(())
+    }
+
+    /// End the run, then create the slots a rollback would replicate from, on the destination.
+    pub(crate) async fn prepare_reverse_replication(
         &self,
         cancel: &CancellationToken,
     ) -> Result<(), Error> {
+        Box::pin(self.drop_slots()).await?;
+        self.finish_run().await?;
         self.create_slots_on(&self.destination, RunObjects::Create, cancel)
             .await
     }
@@ -437,36 +497,35 @@ impl ReshardingState {
     pub(crate) async fn start_run(
         &self,
         command: ReshardingCommand,
-        stage: Stage,
         task_id: TaskId,
     ) -> Result<(), Error> {
+        let resume = self.inner.lock().resume;
         let address = self.state_address().await?;
         let store = ReshardingStore::open(&address, self.run_key()).await?;
         let key = store.key();
-        let (slot_objects, origin_objects, stored_stage) =
-            match self.record_run(&store, command, stage, task_id).await {
-                Ok(recorded) => recorded,
-                Err(err) => {
-                    warn!("resharding {key}: refused to start: {err}");
-                    unlock(&store).await;
-                    return Err(err);
-                }
-            };
+        let started = match self.record_run(&store, command, task_id).await {
+            Ok(started) => started,
+            Err(err) => {
+                warn!("resharding {key}: refused to start: {err}");
+                unlock(&store).await;
+                return Err(err);
+            }
+        };
         info!(
-            "resharding {key}: {} ({command}, slots {slot_objects:?}, origins {origin_objects:?})",
-            if self.inner.lock().resume {
-                "resumed"
-            } else {
-                "started"
-            },
+            "resharding {key}: {} ({command}, slots {:?}, origins {:?})",
+            if resume { "resumed" } else { "started" },
+            started.slots,
+            started.origins,
         );
         run::scan::check_other_runs(&address, key).await;
 
         let mut inner = self.inner.lock();
         inner.store = Some(Arc::new(store));
-        inner.slot_objects = slot_objects;
-        inner.origin_objects = origin_objects;
-        inner.stage = Some(stored_stage);
+        inner.slot_objects = started.slots;
+        inner.origin_objects = started.origins;
+        inner.recorded = started.pending.is_none();
+        inner.pending = started.pending;
+        inner.stage = started.stage;
         Ok(())
     }
 
@@ -474,31 +533,31 @@ impl ReshardingState {
         &self,
         store: &ReshardingStore,
         command: ReshardingCommand,
-        stage: Stage,
         task_id: TaskId,
-    ) -> Result<(RunObjects, RunObjects, Stage), Error> {
+    ) -> Result<StartedRun, Error> {
         let key = store.key();
         let resume = self.inner.lock().resume;
         match (resume, store.load().await?) {
             (false, Some(record)) => Err(Error::ReshardingExists {
                 key: key.to_string(),
                 stage: record.stage.to_string(),
+                command: record.command.kind(),
             }),
             (true, None) => Err(Error::NoResharding(key.to_string())),
             (true, Some(record)) => {
                 self.check_resumed(&record, command)?;
+                if record.stage == Stage::CopyTables {
+                    return Err(Error::ReshardingCopyResume(key.to_string()));
+                }
                 store
                     .resume(&TaskOwner::current(task_id), std::time::SystemTime::now())
                     .await?;
-                Ok((
-                    RunObjects::resumed(
-                        record.stage,
-                        record.command.slots_stage(),
-                        !record.slot_existed,
-                    ),
-                    RunObjects::resumed(record.stage, record.command.origins_stage(), false),
-                    record.stage,
-                ))
+                Ok(StartedRun {
+                    slots: RunObjects::Load { owned: true },
+                    origins: RunObjects::Reuse { owned: false },
+                    pending: None,
+                    stage: Some(record.stage),
+                })
             }
             (false, None) => {
                 let existing = existing_slots(&self.source, &self.publication, &self.slot_name)
@@ -511,28 +570,20 @@ impl ReshardingState {
                 } else {
                     return Err(Error::ReshardingSlotsPartial(self.slot_name.clone()));
                 };
-
-                store
-                    .insert(&ReshardingRecord {
-                        id: ReshardingId::generate(),
-                        key: key.clone(),
+                Ok(StartedRun {
+                    slots: if slot_existed {
+                        RunObjects::Reuse { owned: false }
+                    } else {
+                        RunObjects::Create
+                    },
+                    origins: RunObjects::Create,
+                    pending: Some(PendingRun {
                         command,
-                        slot_name: self.slot_name.clone(),
-                        slot_existed,
-                        stage,
-                        config: self.config_snapshot()?,
-                        owner: TaskOwner::current(task_id),
-                        format_version: FORMAT_VERSION,
+                        task_id,
                         started_at: std::time::SystemTime::now(),
-                        resumed_at: None,
-                    })
-                    .await?;
-                let slots = if slot_existed {
-                    RunObjects::Reuse { owned: false }
-                } else {
-                    RunObjects::Create
-                };
-                Ok((slots, RunObjects::Create, stage))
+                    }),
+                    stage: None,
+                })
             }
         }
     }
@@ -550,6 +601,8 @@ impl ReshardingState {
         record: &ReshardingRecord,
         command: ReshardingCommand,
     ) -> Result<(), Error> {
+        // W: I guess here should be a specific struct error with multiple variants
+        // that could be converted to shared error
         if record.command != command {
             return Err(Error::ReshardingMismatch {
                 field: "command",
@@ -570,7 +623,7 @@ impl ReshardingState {
             .map_err(Error::ConfigChanged)
     }
 
-    pub(crate) fn keeps_slots(&self) -> bool {
+    fn keeps_slots(&self) -> bool {
         self.inner.lock().keeps_slots()
     }
 
@@ -581,10 +634,10 @@ impl ReshardingState {
     pub(crate) async fn set_stage(&self, stage: Stage) -> Result<(), Error> {
         let store = {
             let inner = self.inner.lock();
-            match (&inner.store, inner.stage) {
-                (Some(_), Some(stored)) if stage <= stored => return Ok(()),
-                (Some(store), _) => store.clone(),
-                (None, _) => return Ok(()),
+            match (&inner.store, inner.recorded, inner.stage) {
+                (Some(_), true, Some(stored)) if stage <= stored => return Ok(()),
+                (Some(store), true, _) => store.clone(),
+                _ => return Ok(()),
             }
         };
         store.set_stage(stage).await?;
@@ -644,12 +697,14 @@ impl ReshardingState {
         cleanup
     }
 
-    pub(crate) async fn release_run(&self) {
+    async fn release_run(&self) {
         let store = {
             let mut inner = self.inner.lock();
             inner.slot_objects = RunObjects::Create;
             inner.origin_objects = RunObjects::Create;
             inner.stage = None;
+            inner.pending = None;
+            inner.recorded = false;
             inner.store.take()
         };
         if let Some(store) = store {
@@ -662,7 +717,7 @@ impl ReshardingState {
         let Some(store) = store else {
             return Ok(());
         };
-        store.delete().await?;
+        delete_row(&store).await?;
         self.release_run().await;
         Ok(())
     }
@@ -675,16 +730,23 @@ impl ReshardingState {
         run::state_address(&self.destination).await
     }
 
+    async fn find_record(&self) -> Result<(Address, Server, ReshardingRecord), Error> {
+        let key = self.run_key();
+        let address = self.state_address().await?;
+        let mut server = connect_address(&address).await?;
+        match ReshardingStore::read(&mut server, &key).await? {
+            Some(record) => Ok((address, server, record)),
+            None => Err(Error::NoResharding(key.to_string())),
+        }
+    }
+
     pub(crate) async fn check_record(
         &self,
         command: CommandKind,
         slot: Option<&str>,
     ) -> Result<ReshardingRecord, Error> {
         let key = self.run_key();
-        let mut server = connect_address(&self.state_address().await?).await?;
-        let record = ReshardingStore::read(&mut server, &key)
-            .await?
-            .ok_or_else(|| Error::NoResharding(key.to_string()))?;
+        let (_, mut server, record) = self.find_record().await?;
         record_matches(&record, command, slot)?;
         if let Some(owner) = ReshardingStore::lock_owner(&mut server, &key).await? {
             return Err(Error::ReshardingLocked {
@@ -701,7 +763,8 @@ impl ReshardingState {
         slot: Option<&str>,
     ) -> Result<(ReshardingStore, ReshardingRecord), Error> {
         let key = self.run_key();
-        let store = ReshardingStore::open(&self.state_address().await?, key.clone()).await?;
+        let (address, _, _) = self.find_record().await?;
+        let store = ReshardingStore::open(&address, key.clone()).await?;
         let record = match store.load().await {
             Ok(Some(record)) => record_matches(&record, command, slot).map(|()| record),
             Ok(None) => Err(Error::NoResharding(key.to_string())),
@@ -722,11 +785,7 @@ impl ReshardingState {
         record: &ReshardingRecord,
     ) -> Result<(), Error> {
         let result = async {
-            let slots = if record.slot_existed {
-                Slots::new()
-            } else {
-                existing_slots(&self.source, &self.publication, &record.slot_name).await?
-            };
+            let slots = existing_slots(&self.source, &self.publication, &record.slot_name).await?;
             let names = (0..self.source.shards().len())
                 .map(|number| (number, permanent_slot_name(&record.slot_name, number)))
                 .collect();
@@ -782,6 +841,10 @@ async fn remove_objects(slots: Slots, origins: Origins) -> Result<(), Error> {
 
 async fn remove_run(store: &ReshardingStore, slots: Slots, origins: Origins) -> Result<(), Error> {
     remove_objects(slots, origins).await?;
+    delete_row(store).await
+}
+
+async fn delete_row(store: &ReshardingStore) -> Result<(), Error> {
     if let Err(err) = store.delete().await {
         warn!(
             "resharding {}: state connection failed, reconnecting: {err}",
@@ -1163,13 +1226,15 @@ mod test {
         let state = state_for(&source, name);
         state.inner.lock().cleanup_on_cancel = false;
         start(&state, 1).await.unwrap();
-        assert!(state.keeps_slots());
-        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        assert!(!state.keeps_slots());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
 
         state
             .prepare_replication(&CancellationToken::new())
             .await
             .unwrap();
+        assert!(state.keeps_slots());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
         state.cancel_run().await.unwrap();
         assert!(!state.keeps_slots());
         assert!(state.run_store().is_none());
@@ -1226,9 +1291,7 @@ mod test {
     }
 
     async fn start(state: &ReshardingState, task_id: u64) -> Result<(), Error> {
-        state
-            .start_run(REPLICATE, Stage::Replication, TaskId::new(task_id))
-            .await
+        state.start_run(REPLICATE, TaskId::new(task_id)).await
     }
 
     async fn recreate_keyed_publication(server: &mut Server, name: &str, create: bool) {
@@ -1247,13 +1310,12 @@ mod test {
     }
 
     #[tokio::test]
-    async fn failed_finish_keeps_a_resumable_run_paused() {
+    async fn finish_reconnects_after_state_connection_loss() {
         crate::logger();
         let mut publication = setup_publication().await;
-        let name = "state_finish_fails";
+        let name = "state_finish_reconnects";
         let source = Cluster::new_test(&config());
         source.launch();
-        let shards = source.shards().len() as i64;
         remove_resumable(&mut publication.server, name).await;
         recreate_keyed_publication(&mut publication.server, name, true).await;
 
@@ -1263,21 +1325,16 @@ mod test {
             .prepare_replication(&CancellationToken::new())
             .await
             .unwrap();
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
 
         terminate_state_backend(&mut publication.server, &state.run_key()).await;
 
-        assert!(state.finish_run().await.is_err());
-        assert!(state.keeps_slots());
-        state.cancel_run().await.unwrap();
-        assert_paused_state_is_empty(&state);
+        state.finish_run().await.unwrap();
+        assert!(!state.keeps_slots());
+        assert!(state.run_store().is_none());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
         drop(state);
-
-        assert_eq!(slot_count(&mut publication.server, name).await, shards);
-        assert_eq!(
-            origin_count(&mut publication.server, name).await,
-            shards * shards
-        );
-        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        wait_until_removed(&mut publication.server, name).await;
 
         remove_resumable(&mut publication.server, name).await;
         recreate_keyed_publication(&mut publication.server, name, false).await;
@@ -1332,10 +1389,16 @@ mod test {
 
         let paused = keyed_state(&source, paused_name, false);
         start(&paused, 1).await.unwrap();
+        paused
+            .create_slots(&CancellationToken::new())
+            .await
+            .unwrap();
         paused.cancel_run().await.unwrap();
 
         let other = keyed_state(&source, new_name, false);
         start(&other, 3).await.unwrap();
+        assert_eq!(resharding_rows(&mut publication.server, new_name).await, 0);
+        other.create_slots(&CancellationToken::new()).await.unwrap();
         assert_eq!(
             resharding_rows(&mut publication.server, paused_name).await,
             1
@@ -1369,7 +1432,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn abort_drops_only_what_the_run_created() {
+    async fn abort_drops_every_slot_of_the_run() {
         crate::logger();
         let name = "state_abort";
         let mut publication =
@@ -1381,6 +1444,10 @@ mod test {
 
         let state = keyed_state(&source, name, false);
         start(&state, 1).await.unwrap();
+        state
+            .prepare_replication(&CancellationToken::new())
+            .await
+            .unwrap();
         for locked in [
             state
                 .check_record(CommandKind::Replicate, None)
@@ -1396,10 +1463,6 @@ mod test {
                 "{locked:?}"
             );
         }
-        state
-            .prepare_replication(&CancellationToken::new())
-            .await
-            .unwrap();
         state.cancel_run().await.unwrap();
         assert_eq!(slot_count(&mut publication.server, name).await, shards);
 
@@ -1418,7 +1481,7 @@ mod test {
             .await
             .unwrap();
 
-        assert!(!abort(&state).await.slot_existed);
+        abort(&state).await;
         wait_until_removed(&mut publication.server, name).await;
         assert_eq!(origin_count(&mut publication.server, name).await, 0);
         assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
@@ -1433,8 +1496,8 @@ mod test {
 
         let state = keyed_state(&source, name, false);
         pause_after_replication(&state).await;
-        assert!(abort(&state).await.slot_existed);
-        assert_eq!(slot_count(&mut publication.server, name).await, shards);
+        abort(&state).await;
+        wait_until_removed(&mut publication.server, name).await;
         assert_eq!(origin_count(&mut publication.server, name).await, 0);
         assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
 
@@ -1454,6 +1517,7 @@ mod test {
         let state = keyed_state(&source, name, false);
 
         start(&state, 1).await.unwrap();
+        state.create_slots(&CancellationToken::new()).await.unwrap();
 
         let parallel = start(&keyed_state(&source, name, false), 2).await;
         assert!(
@@ -1485,6 +1549,8 @@ mod test {
         let state = keyed_state(&source, name, false);
 
         start(&state, 1).await.unwrap();
+        assert!(!state.keeps_slots());
+        state.create_slots(&CancellationToken::new()).await.unwrap();
         assert!(state.keeps_slots());
 
         state.finish_run().await.unwrap();
@@ -1492,9 +1558,12 @@ mod test {
         assert!(state.run_store().is_none());
         assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
 
-        start(&state, 2).await.unwrap();
-        assert!(state.keeps_slots());
-        state.finish_run().await.unwrap();
+        remove_resumable(&mut publication.server, name).await;
+        let again = keyed_state(&source, name, false);
+        start(&again, 2).await.unwrap();
+        again.create_slots(&CancellationToken::new()).await.unwrap();
+        assert!(again.keeps_slots());
+        again.finish_run().await.unwrap();
 
         remove_resumable(&mut publication.server, name).await;
         source.shutdown();
@@ -1515,13 +1584,14 @@ mod test {
         start(&state, 1).await.unwrap();
         assert!(!state.keeps_slots());
         assert!(state.run_store().is_some());
-        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
 
         state
             .prepare_replication(&CancellationToken::new())
             .await
             .unwrap();
         assert!(slot_count(&mut publication.server, name).await > 0);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
 
         state.cancel_run().await.unwrap();
         assert_eq!(slot_count(&mut publication.server, name).await, 0);
@@ -1601,15 +1671,17 @@ mod test {
         remove_resumable(&mut publication.server, name).await;
 
         let state = keyed_state(&source, name, true);
-        state
-            .start_run(RESHARD, Stage::PreData, TaskId::new(1))
-            .await
-            .unwrap();
+        state.start_run(RESHARD, TaskId::new(1)).await.unwrap();
+        state.set_stage(Stage::Replication).await.unwrap();
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+        state.create_slots(&CancellationToken::new()).await.unwrap();
+        assert_eq!(
+            stored_stage(&mut publication.server, name).await,
+            Stage::CopyTables.to_string()
+        );
         for (write, stored) in [
-            (Stage::Copy, Stage::Copy),
-            (Stage::PreData, Stage::Copy),
             (Stage::Replication, Stage::Replication),
-            (Stage::TableSync, Stage::Replication),
+            (Stage::CopyTables, Stage::Replication),
         ] {
             state.set_stage(write).await.unwrap();
             assert_eq!(
@@ -1618,7 +1690,7 @@ mod test {
                 "after writing {write}"
             );
         }
-        state.finish_run().await.unwrap();
+        state.complete_run().await.unwrap();
 
         remove_resumable(&mut publication.server, name).await;
         source.shutdown();
@@ -1697,12 +1769,12 @@ mod test {
 
         let state = keyed_state(&source, name, false);
         start(&state, 1).await.unwrap();
+        state.create_slots(&CancellationToken::new()).await.unwrap();
         state.cancel_run().await.unwrap();
 
         let other_command = resumed_state(&source, name, false)
             .start_run(
                 ReshardingCommand::Replicate { auto_cutover: true },
-                Stage::Replication,
                 TaskId::new(2),
             )
             .await;
@@ -1748,7 +1820,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn resumed_run_loads_slots_and_origins_after_their_stage() {
+    async fn resumed_run_loads_slots_and_never_recreates_them() {
         crate::logger();
         let name = "state_resume_load";
         let mut publication =
@@ -1757,60 +1829,22 @@ mod test {
         source.launch();
         let shards = source.shards().len() as i64;
         remove_resumable(&mut publication.server, name).await;
-        let origin = format!("__pgdog_origin_{name}_0_0");
         let cancel = CancellationToken::new();
 
         let state = keyed_state(&source, name, false);
-        state
-            .start_run(RESHARD, Stage::Replication, TaskId::new(1))
-            .await
-            .unwrap();
+        start(&state, 1).await.unwrap();
         state.prepare_replication(&cancel).await.unwrap();
         state.cancel_run().await.unwrap();
-        publication
-            .server
-            .execute_checked(format!(
-                "SELECT pg_replication_origin_advance('{origin}', '0/1000')"
-            ))
-            .await
-            .unwrap();
 
         let resumed = resumed_state(&source, name, false);
-        resumed
-            .start_run(RESHARD, Stage::Replication, TaskId::new(2))
-            .await
-            .unwrap();
+        start(&resumed, 2).await.unwrap();
+        {
+            let inner = resumed.inner.lock();
+            assert_eq!(inner.slot_objects, RunObjects::Load { owned: true });
+            assert_eq!(inner.origin_objects, RunObjects::Reuse { owned: false });
+        }
         resumed.prepare_replication(&cancel).await.unwrap();
-        assert_eq!(
-            origin_progress(&mut publication.server, &origin).await,
-            "0/1000"
-        );
         assert_eq!(slot_count(&mut publication.server, name).await, shards);
-        assert_eq!(
-            origin_count(&mut publication.server, name).await,
-            shards * shards
-        );
-        resumed.cancel_run().await.unwrap();
-
-        publication
-            .server
-            .execute_checked(format!("SELECT pg_replication_origin_drop('{origin}')"))
-            .await
-            .unwrap();
-        let resumed = resumed_state(&source, name, false);
-        resumed
-            .start_run(RESHARD, Stage::Replication, TaskId::new(3))
-            .await
-            .unwrap();
-        let missing_origin = resumed.prepare_replication(&cancel).await;
-        assert!(
-            matches!(missing_origin, Err(Error::MissingReplicationOrigin(_))),
-            "{missing_origin:?}"
-        );
-        assert_eq!(
-            origin_count(&mut publication.server, name).await,
-            shards * shards - 1
-        );
         resumed.cancel_run().await.unwrap();
 
         publication
@@ -1818,18 +1852,18 @@ mod test {
             .execute_checked(format!("SELECT pg_drop_replication_slot('{name}_0')"))
             .await
             .unwrap();
-        let resumed = resumed_state(&source, name, false);
-        resumed
-            .start_run(RESHARD, Stage::Replication, TaskId::new(4))
-            .await
-            .unwrap();
-        let missing_slot = resumed.prepare_replication(&cancel).await;
-        assert!(
-            matches!(missing_slot, Err(Error::MissingReplicationSlot(_))),
-            "{missing_slot:?}"
-        );
-        assert_eq!(slot_count(&mut publication.server, name).await, shards - 1);
-        resumed.cancel_run().await.unwrap();
+        for task_id in [3, 4] {
+            let resumed = resumed_state(&source, name, false);
+            start(&resumed, task_id).await.unwrap();
+            let missing_slot = resumed.prepare_replication(&cancel).await;
+            assert!(
+                matches!(missing_slot, Err(Error::MissingReplicationSlot(_))),
+                "{missing_slot:?}"
+            );
+            assert_eq!(slot_count(&mut publication.server, name).await, shards - 1);
+            resumed.cancel_run().await.unwrap();
+            assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        }
 
         remove_resumable(&mut publication.server, name).await;
         source.shutdown();
@@ -1837,7 +1871,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn resumed_run_at_their_stage_reuses_slots_and_origins() {
+    async fn resumed_run_recreates_missing_origins_and_keeps_progress() {
         crate::logger();
         let name = "state_resume_reuse";
         let mut publication =
@@ -2020,7 +2054,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn user_slots_stay_on_cancel_of_fresh_and_resumed_runs() {
+    async fn user_slots_stay_on_cancel_of_a_live_run_and_go_with_a_resumed_run() {
         crate::logger();
         let name = "state_user_slots_stay";
         let mut publication = keyed_publication(name).await;
@@ -2056,7 +2090,7 @@ mod test {
         start(&resumed, 3).await.unwrap();
         resumed.prepare_replication(&cancel).await.unwrap();
         resumed.cancel_run().await.unwrap();
-        assert_eq!(slot_count(&mut publication.server, name).await, shards);
+        assert_eq!(slot_count(&mut publication.server, name).await, 0);
         assert_eq!(origin_count(&mut publication.server, name).await, 0);
         assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
 
@@ -2185,27 +2219,180 @@ mod test {
         remove_resumable(&mut publication.server, name).await;
 
         let state = keyed_state(&source, name, false);
-        state
-            .start_run(RESHARD, Stage::PreData, TaskId::new(1))
-            .await
-            .unwrap();
-        state.set_stage(Stage::Replication).await.unwrap();
+        start(&state, 1).await.unwrap();
+        state.create_slots(&CancellationToken::new()).await.unwrap();
         state.cancel_run().await.unwrap();
 
         let resumed = resumed_state(&source, name, false);
-        resumed
-            .start_run(RESHARD, Stage::PreData, TaskId::new(2))
+        start(&resumed, 2).await.unwrap();
+        assert_eq!(resumed.inner.lock().stage, Some(Stage::Replication));
+        resumed.set_stage(Stage::CopyTables).await.unwrap();
+        assert_eq!(
+            stored_stage(&mut publication.server, name).await,
+            Stage::Replication.to_string()
+        );
+        resumed.finish_run().await.unwrap();
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn row_is_written_once_slots_exist() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_row_after_slots";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let cancel = CancellationToken::new();
+        remove_resumable(&mut publication.server, name).await;
+
+        let replicate = keyed_state(&source, name, false);
+        start(&replicate, 1).await.unwrap();
+        assert!(!replicate.keeps_slots());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+        replicate.create_slots(&cancel).await.unwrap();
+        assert!(replicate.keeps_slots());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        assert_eq!(
+            stored_stage(&mut publication.server, name).await,
+            Stage::Replication.to_string()
+        );
+        replicate.finish_run().await.unwrap();
+        remove_resumable(&mut publication.server, name).await;
+
+        let reshard = keyed_state(&source, name, false);
+        reshard.start_run(RESHARD, TaskId::new(2)).await.unwrap();
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+        reshard.create_slots(&cancel).await.unwrap();
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        assert_eq!(
+            stored_stage(&mut publication.server, name).await,
+            Stage::CopyTables.to_string()
+        );
+        reshard.finish_run().await.unwrap();
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn run_stopped_before_slots_leaves_nothing() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_stopped_early";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        remove_resumable(&mut publication.server, name).await;
+
+        let state = keyed_state(&source, name, false);
+        start(&state, 1).await.unwrap();
+        assert!(!state.keeps_slots());
+        assert!(state.run_store().is_some());
+        state.cancel_run().await.unwrap();
+        assert!(state.run_store().is_none());
+        assert_eq!(slot_count(&mut publication.server, name).await, 0);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+
+        let dropped = keyed_state(&source, name, false);
+        start(&dropped, 2).await.unwrap();
+        drop(dropped);
+
+        let again = keyed_state(&source, name, false);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Err(Error::ReshardingLocked { .. }) = start(&again, 3).await {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the lock of a dropped run must be released");
+        assert!(again.run_store().is_some());
+        assert_eq!(slot_count(&mut publication.server, name).await, 0);
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+        again.finish_run().await.unwrap();
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn copy_tables_row_refuses_resume() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_copy_resume";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let shards = source.shards().len() as i64;
+        remove_resumable(&mut publication.server, name).await;
+
+        let state = keyed_state(&source, name, false);
+        state.start_run(RESHARD, TaskId::new(1)).await.unwrap();
+        state.create_slots(&CancellationToken::new()).await.unwrap();
+        state.cancel_run().await.unwrap();
+        assert_eq!(slot_count(&mut publication.server, name).await, shards);
+
+        let resumed = resumed_state(&source, name, false);
+        let refused = resumed.start_run(RESHARD, TaskId::new(2)).await;
+        assert!(
+            matches!(refused, Err(Error::ReshardingCopyResume(_))),
+            "{refused:?}"
+        );
+        assert!(resumed.run_store().is_none());
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+        assert_eq!(
+            stored_stage(&mut publication.server, name).await,
+            Stage::CopyTables.to_string()
+        );
+
+        let (store, record) = state
+            .open_for_abort(CommandKind::Reshard, None)
             .await
             .unwrap();
-        for stage in [Stage::PreData, Stage::Copy, Stage::TableSync] {
-            resumed.set_stage(stage).await.unwrap();
-            assert_eq!(
-                stored_stage(&mut publication.server, name).await,
-                Stage::Replication.to_string(),
-                "after writing {stage}"
-            );
-        }
-        resumed.finish_run().await.unwrap();
+        state.abort_run(&store, &record).await.unwrap();
+        wait_until_removed(&mut publication.server, name).await;
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+
+        remove_resumable(&mut publication.server, name).await;
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn cutover_ends_the_run() {
+        crate::logger();
+        let name = "state_cutover";
+        let mut publication = keyed_publication(name).await;
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let shards = source.shards().len() as i64;
+        remove_resumable(&mut publication.server, name).await;
+        let cancel = CancellationToken::new();
+
+        let state = keyed_state(&source, name, false);
+        start(&state, 1).await.unwrap();
+        state.prepare_replication(&cancel).await.unwrap();
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 1);
+
+        state.prepare_reverse_replication(&cancel).await.unwrap();
+        state.prepare_replication(&cancel).await.unwrap();
+        assert_eq!(resharding_rows(&mut publication.server, name).await, 0);
+        assert_eq!(slot_count(&mut publication.server, name).await, shards);
+        assert_eq!(
+            origin_count(&mut publication.server, name).await,
+            shards * shards
+        );
+        assert!(!state.keeps_slots());
+        assert!(matches!(
+            state.check_record(CommandKind::Replicate, None).await,
+            Err(Error::NoResharding(_))
+        ));
+
+        state.cancel_run().await.unwrap();
+        wait_until_removed(&mut publication.server, name).await;
+        assert_eq!(origin_count(&mut publication.server, name).await, 0);
 
         remove_resumable(&mut publication.server, name).await;
         source.shutdown();

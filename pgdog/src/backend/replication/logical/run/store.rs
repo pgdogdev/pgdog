@@ -112,6 +112,7 @@ impl ReshardingStore {
         Ok(())
     }
 
+    // W: why do we need separate load and read?
     pub(crate) async fn read(
         server: &mut Server,
         key: &ReshardingKey,
@@ -179,6 +180,7 @@ async fn connect_session(addr: &Address) -> Result<Server, Error> {
     Ok(server)
 }
 
+// W: wtf result<error, error>?
 async fn locked(server: &mut Server, key: &ReshardingKey) -> Result<Error, Error> {
     let owner = ReshardingStore::lock_owner(server, key)
         .await?
@@ -189,6 +191,7 @@ async fn locked(server: &mut Server, key: &ReshardingKey) -> Result<Error, Error
     })
 }
 
+// W: verify pub exports everywhere
 #[derive(Debug)]
 pub(crate) struct UnreadableRecord {
     pub(crate) key: ReshardingKey,
@@ -226,7 +229,7 @@ fn parse_key(row: &DataRow) -> Result<ReshardingKey, Error> {
 }
 
 fn parse_record(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Error> {
-    let format_version: i32 = parsed(row, 11, "format_version")?;
+    let format_version: i32 = parsed(row, 10, "format_version")?;
     if format_version > FORMAT_VERSION {
         return Err(Error::ReshardingFormat(format!(
             "format version {format_version} is newer than {FORMAT_VERSION}"
@@ -234,23 +237,22 @@ fn parse_record(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, E
     }
 
     Ok(ReshardingRecord {
-        id: parsed(row, 12, "id")?,
+        id: parsed(row, 11, "id")?,
         key,
         command: json(row, 3, "command")?,
         slot_name: text(row, 4)?,
-        slot_existed: parsed(row, 5, "slot_existed")?,
-        stage: text(row, 6)?.parse()?,
-        config: json(row, 7, "config")?,
+        stage: text(row, 5)?.parse()?,
+        config: json(row, 6, "config")?,
         owner: TaskOwner {
-            instance_id: InstanceId::from(text(row, 8)?),
-            run_id: parsed(row, 9, "run_id")?,
-            task_id: parsed(row, 10, "task_id")?,
+            instance_id: InstanceId::from(text(row, 7)?),
+            run_id: parsed(row, 8, "run_id")?,
+            task_id: parsed(row, 9, "task_id")?,
         },
         format_version,
-        started_at: millis(row, 13, "started_at")?,
-        resumed_at: match text(row, 14)?.as_str() {
+        started_at: millis(row, 12, "started_at")?,
+        resumed_at: match text(row, 13)?.as_str() {
             "" => None,
-            _ => Some(millis(row, 14, "resumed_at")?),
+            _ => Some(millis(row, 13, "resumed_at")?),
         },
     })
 }
@@ -325,8 +327,7 @@ mod test {
                 tables_only: false,
             },
             slot_name: "slot".into(),
-            slot_existed: false,
-            stage: Stage::Copy,
+            stage: Stage::CopyTables,
             config,
             owner: TaskOwner::current(pgdog_stats::TaskId::new(7)),
             format_version: FORMAT_VERSION,
@@ -459,7 +460,7 @@ mod test {
         assert_eq!(loaded.stage, Stage::Replication);
         assert_eq!(
             ReshardingRecord {
-                stage: Stage::Copy,
+                stage: Stage::CopyTables,
                 ..loaded
             },
             row
@@ -502,7 +503,10 @@ mod test {
         drop(store);
 
         let store = open_after_drop(&addr, key).await;
-        assert_eq!(store.load().await.unwrap().unwrap().stage, Stage::Copy);
+        assert_eq!(
+            store.load().await.unwrap().unwrap().stage,
+            Stage::CopyTables
+        );
         store.delete().await.unwrap();
     }
 

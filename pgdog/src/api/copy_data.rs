@@ -13,7 +13,6 @@ use crate::backend::replication::data_sync::{
 };
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::Stage;
 use crate::backend::replication::publisher::{Table, resolve_resharding_replicas};
 use crate::tasks;
 use crate::util::safe_sleep;
@@ -65,7 +64,6 @@ impl Task for CopyDataTask {
         let dest = &self.state.destination;
         let state = &self.state;
         let cancel = ctx.cancellation_token();
-        state.set_stage(Stage::Copy).await?;
 
         ctx.set_status(CopyDataStage::LoadingTableMetadata.into());
         state.sync_tables().await?;

@@ -56,7 +56,6 @@ const SHOW_RESHARDING_LAYOUT: &[(&str, &str)] = &[
     ("owner", "TEXT"),
     ("last_task", "TEXT"),
     ("replication_slot", "TEXT"),
-    ("slot_existed", "BOOL"),
     ("slots", "TEXT"),
     ("origins", "TEXT"),
     ("config", "TEXT"),
@@ -126,7 +125,11 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
                 && task.inner_status == "replicating"
         })
         .await;
-        assert_eq!(resharding_records().await, 1);
+        poll("the resharding row after slot creation", || async {
+            fail_if_task_errored(&admin, task_id).await;
+            (resharding_records().await == 1).then_some(())
+        })
+        .await;
         let running = poll("SHOW RESHARDING to list the running resharding", || async {
             fail_if_task_errored(&admin, task_id).await;
             let rows = show_resharding(&admin).await;

@@ -34,8 +34,6 @@ impl Command for ShowResharding {
             // W: what is it? improve the name or remove
             Field::text("last_task"),
             Field::text("replication_slot"),
-            // W: remove this
-            Field::bool("slot_existed"),
             // W: there is no point in counters
             Field::text("slots"),
             Field::text("origins"),
@@ -79,7 +77,6 @@ fn found_row(report: &ReshardingReport) -> DataRow {
         .add(report.state.owner())
         .add(record.owner.to_string())
         .add(record.slot_name.as_str())
-        .add(record.slot_existed)
         .add(count_text(report.slots))
         .add(count_text(report.origins))
         .add(report.config.to_string())
@@ -105,7 +102,6 @@ fn problem_row(
         .add(none)
         .add(none)
         .add(none)
-        .add(None::<bool>)
         .add(none)
         .add(none)
         .add(none)

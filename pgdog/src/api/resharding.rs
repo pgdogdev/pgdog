@@ -16,7 +16,7 @@ use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
 use crate::api::{ReshardingError, Task, run_task, tasks_storage};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand, Stage};
+use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand};
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -70,10 +70,9 @@ impl Task for ReshardTask {
         let cancel = ctx.cancellation_token();
         let cutover = self.cutover_mode();
         let command = self.command();
-        let first_stage = self.first_stage();
         let mut state = self.state;
         let root_id = ctx.root_id();
-        state.start_run(command, first_stage, root_id).await?;
+        state.start_run(command, root_id).await?;
         let _active = ActiveRun::start(&state, move || {
             tasks_storage().cancel_task(root_id);
         });
@@ -82,13 +81,11 @@ impl Task for ReshardTask {
             .databases(state.databases())
             .publication(state.publication.clone());
 
-        // Replicate-only continues an earlier copy.
-        let mut copied = self.replicate_only;
+        let mut copied = false;
         let mut result: Result<(), ReshardingError> = Box::pin(async {
             // Pre-data schema sync, unless skipped. It runs inside the cleanup
             // guard below, so a failure here also reaches the cleanup.
             if !self.skip_schema_sync {
-                state.set_stage(Stage::PreData).await?;
                 ctx.set_status(ReshardStatus::SchemaSync);
                 ctx.run(
                     schema_sync
@@ -104,6 +101,9 @@ impl Task for ReshardTask {
                 // cluster refs, so the state still holds stale ones.
                 state.reload()?;
             }
+
+            // Replicate-only continues an earlier copy.
+            copied = self.replicate_only;
 
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
@@ -123,7 +123,6 @@ impl Task for ReshardTask {
             // It reuses dump schema from the earlier schema_sync
             // calls if they were executed.
             if !self.skip_schema_sync {
-                state.set_stage(Stage::PostData).await?;
                 ctx.set_status(ReshardStatus::FinalizingSchema);
                 ctx.run(
                     schema_sync
@@ -176,7 +175,7 @@ impl Task for ReshardTask {
         if stopped {
             // With cleanup_on_cancel true, drop the slots this run created and
             // all its origins, then delete the row. With false, keep them and
-            // pause the run. A slot that existed before the run always stays.
+            // pause the run. A live run keeps the slots that existed before it.
             if let Err(err) = state.cancel_run().await {
                 warn!("failed to clean up the resharding run: {err}");
             }
@@ -219,16 +218,6 @@ impl ReshardTask {
             CutoverMode::Auto
         } else {
             CutoverMode::Manual
-        }
-    }
-
-    fn first_stage(&self) -> Stage {
-        if !self.skip_schema_sync {
-            Stage::PreData
-        } else if !self.replicate_only {
-            Stage::Copy
-        } else {
-            Stage::Replication
         }
     }
 

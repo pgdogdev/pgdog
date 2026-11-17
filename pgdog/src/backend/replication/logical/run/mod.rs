@@ -81,22 +81,12 @@ impl ReshardingCommand {
         }
     }
 
-    pub(crate) fn slots_stage(&self) -> Stage {
+    pub(crate) fn first_stage(&self) -> Stage {
         match self {
             Self::Reshard {
                 replicate_only: false,
                 ..
-            } => Stage::Copy,
-            Self::Reshard { .. } | Self::Replicate { .. } => Stage::Replication,
-        }
-    }
-
-    pub(crate) fn origins_stage(&self) -> Stage {
-        match self {
-            Self::Reshard {
-                replicate_only: false,
-                ..
-            } => Stage::TableSync,
+            } => Stage::CopyTables,
             Self::Reshard { .. } | Self::Replicate { .. } => Stage::Replication,
         }
     }
@@ -115,19 +105,15 @@ pub(crate) enum CommandKind {
 #[from_str(rename_all = "snake_case")]
 #[from_str(error(Error, format_error))]
 pub(crate) enum Stage {
-    PreData,
-    Copy,
-    PostData,
-    TableSync,
+    CopyTables,
     Replication,
-    Cutover,
-    ReverseReplication,
 }
 
 fn format_error(err: FromStrError) -> Error {
     Error::ReshardingFormat(err.to_string())
 }
 
+/// Defines how the replication objects should be handled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum RunObjects {
     #[default]
@@ -141,14 +127,6 @@ pub(crate) enum RunObjects {
 }
 
 impl RunObjects {
-    pub(crate) fn resumed(stored: Stage, created_at: Stage, owned: bool) -> Self {
-        match stored.cmp(&created_at) {
-            std::cmp::Ordering::Less => Self::Create,
-            std::cmp::Ordering::Equal => Self::Reuse { owned },
-            std::cmp::Ordering::Greater => Self::Load { owned },
-        }
-    }
-
     pub(crate) fn owned(self) -> bool {
         match self {
             Self::Create => false,
@@ -157,6 +135,7 @@ impl RunObjects {
     }
 }
 
+// W: move to pgdog-stats
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Display, FromStr)]
 pub(crate) struct ReshardingId(Uuid);
 
@@ -191,7 +170,6 @@ pub(crate) struct ReshardingRecord {
     pub(crate) key: ReshardingKey,
     pub(crate) command: ReshardingCommand,
     pub(crate) slot_name: String,
-    pub(crate) slot_existed: bool,
     pub(crate) stage: Stage,
     pub(crate) config: ConfigSnapshot,
     pub(crate) owner: TaskOwner,
@@ -226,63 +204,10 @@ mod test {
     use super::*;
 
     #[test]
-    fn resumed_objects_follow_the_stage_that_creates_them() {
-        let reshard = ReshardingCommand::Reshard {
-            skip_schema_sync: false,
-            replicate_only: false,
-            sync_only: false,
-            auto_cutover: false,
-            tables_only: false,
-        };
-        let replicate_only = ReshardingCommand::Reshard {
-            skip_schema_sync: true,
-            replicate_only: true,
-            sync_only: false,
-            auto_cutover: false,
-            tables_only: false,
-        };
-        let replicate = ReshardingCommand::Replicate {
-            auto_cutover: false,
-        };
-        let reuse = RunObjects::Reuse { owned: true };
-        let load = RunObjects::Load { owned: true };
-        let create = RunObjects::Create;
-
-        for (command, stage, slots, origins) in [
-            (reshard, Stage::PreData, create, create),
-            (reshard, Stage::Copy, reuse, create),
-            (reshard, Stage::PostData, load, create),
-            (reshard, Stage::TableSync, load, reuse),
-            (reshard, Stage::Replication, load, load),
-            (replicate_only, Stage::PreData, create, create),
-            (replicate_only, Stage::Replication, reuse, reuse),
-            (replicate, Stage::Replication, reuse, reuse),
-        ] {
-            assert_eq!(
-                RunObjects::resumed(stage, command.slots_stage(), true),
-                slots,
-                "{command:?} slots at {stage}"
-            );
-            assert_eq!(
-                RunObjects::resumed(stage, command.origins_stage(), true),
-                origins,
-                "{command:?} origins at {stage}"
-            );
-        }
-        assert!(!create.owned());
-        assert!(!RunObjects::resumed(Stage::Replication, Stage::Copy, false).owned());
-    }
-
-    #[test]
     fn stage_round_trips_its_stored_text_in_pipeline_order() {
         let stages = [
-            (Stage::PreData, "pre_data"),
-            (Stage::Copy, "copy"),
-            (Stage::PostData, "post_data"),
-            (Stage::TableSync, "table_sync"),
+            (Stage::CopyTables, "copy_tables"),
             (Stage::Replication, "replication"),
-            (Stage::Cutover, "cutover"),
-            (Stage::ReverseReplication, "reverse_replication"),
         ];
         for (stage, text) in stages {
             assert_eq!(stage.to_string(), text);

@@ -13,7 +13,9 @@ origin_count() {
 }
 
 resharding_rows() {
-    if [ "$(pg_sql 15434 "SELECT to_regclass('pgdog.resharding') IS NOT NULL")" = t ]; then
+    local exists
+    exists=$(pg_sql 15434 "SELECT to_regclass('pgdog.resharding') IS NOT NULL") || return 1
+    if [ "${exists}" = t ]; then
         pg_sql 15434 "SELECT count(*) FROM pgdog.resharding WHERE slot_name = '$1'"
     else
         echo 0
@@ -21,7 +23,7 @@ resharding_rows() {
 }
 
 resharding_record() {
-    pg_sql 15434 "SELECT command->>'command', publication, stage, slot_existed::text, config->'destination'->>'shards' FROM pgdog.resharding WHERE slot_name = '$1'"
+    pg_sql 15434 "SELECT command->>'command', publication, stage, config->'destination'->>'shards' FROM pgdog.resharding WHERE slot_name = '$1'"
 }
 
 lock_holders() {
@@ -30,13 +32,13 @@ lock_holders() {
 
 resharding_row() {
     local rows
-    rows=$(psql admin -tAc 'SHOW RESHARDING')
+    rows=$(psql admin -tAc 'SHOW RESHARDING') || return 1
     grep '^source|destination|' <<< "${rows}" || true
 }
 
 # SHOW RESHARDING without owner and last_task, which change between runs.
 resharding_status() {
-    resharding_row | cut -d'|' -f1-6,9-13
+    resharding_row | cut -d'|' -f1-6,9-12
 }
 
 initialize_resharding
@@ -48,21 +50,21 @@ SLOT=${COPY_RESULT#*|}
 test -n "${SLOT}"
 test "$(admin_task_type "${COPY_TASK_ID}")" = 'reshard source -> destination'
 wait_admin_task_inner_status "${COPY_TASK_ID}" 'replicating'
-test "$(resharding_record "${SLOT}")" = 'reshard|pgdog|replication|false|2'
+test "$(resharding_record "${SLOT}")" = 'reshard|pgdog|replication|2'
 test "$(lock_holders)" = 1
 test "$(resharding_row | cut -d'|' -f6,7)" = "running|$(psql admin -tAc 'SHOW INSTANCE_ID')"
 
 # STOP_TASK pauses it: the record, slots and origins stay, the lock is released.
 psql admin -c "STOP_TASK ${COPY_TASK_ID}"
 wait_admin_task_status "${COPY_TASK_ID}" 'cancelled'
-test "$(resharding_record "${SLOT}")" = 'reshard|pgdog|replication|false|2'
+test "$(resharding_record "${SLOT}")" = 'reshard|pgdog|replication|2'
 test "$(slot_count 15432 "${SLOT}_0")" = 1
 test "$(slot_count 15433 "${SLOT}_1")" = 1
 test "$(origin_count 15434 "${SLOT}")" = 2
 test "$(origin_count 15435 "${SLOT}")" = 2
 # The lock is released during the cleanup.
 wait_for_value 0 lock_holders
-PAUSED="source|destination|reshard|pgdog|replication|paused|${SLOT}|f|2/2|4/4|ok"
+PAUSED="source|destination|reshard|pgdog|replication|paused|${SLOT}|2/2|4/4|ok"
 test "$(resharding_status)" = "${PAUSED}"
 
 # The pause survives a restart: SHOW RESHARDING reads the database, not memory.
@@ -87,33 +89,33 @@ test "$(slot_count 15432 "${SLOT}_0")" = 0
 test "$(slot_count 15433 "${SLOT}_1")" = 0
 test "$(origin_count 15434 "${SLOT}")" = 0
 test "$(origin_count 15435 "${SLOT}")" = 0
-test -z "$(resharding_row)"
+ROW=$(resharding_row)
+test -z "${ROW}"
 
-# A slot that existed before the run stays after abort.
+# Abort also drops slots that existed before the run.
 pg_sql 15432 "SELECT pg_create_logical_replication_slot('resumable_keep_0', 'pgoutput')"
 pg_sql 15433 "SELECT pg_create_logical_replication_slot('resumable_keep_1', 'pgoutput')"
 KEEP_TASK_ID=$(psql admin -tAc 'REPLICATE source destination pgdog resumable_keep WITH (cleanup_on_cancel false)')
 wait_for_value 2 origin_count 15434 resumable_keep
+wait_for_value 'replicate|pgdog|replication|2' resharding_record resumable_keep
 psql admin -c "STOP_TASK ${KEEP_TASK_ID}"
 wait_admin_task_status "${KEEP_TASK_ID}" 'cancelled'
-test "$(resharding_record resumable_keep)" = 'replicate|pgdog|replication|true|2'
+test "$(resharding_record resumable_keep)" = 'replicate|pgdog|replication|2'
 wait_for_value 0 lock_holders
 KEEP_ABORT_ID=$(psql admin -tAc 'REPLICATE source destination pgdog WITH (abort)')
 wait_admin_task_finished "${KEEP_ABORT_ID}"
 test "$(resharding_rows resumable_keep)" = 0
-test "$(slot_count 15432 resumable_keep_0)" = 1
-test "$(slot_count 15433 resumable_keep_1)" = 1
+test "$(slot_count 15432 resumable_keep_0)" = 0
+test "$(slot_count 15433 resumable_keep_1)" = 0
 test "$(origin_count 15434 resumable_keep)" = 0
 test "$(origin_count 15435 resumable_keep)" = 0
-pg_sql 15432 "SELECT pg_drop_replication_slot('resumable_keep_0')"
-pg_sql 15433 "SELECT pg_drop_replication_slot('resumable_keep_1')"
 
 # A plain run also records itself and holds the lock while it runs.
 PLAIN_TASK_ID=$(psql admin -tAc 'REPLICATE source destination pgdog plain_slot WITH (cleanup_on_cancel true)')
 # The slots are created after the reply, and dropped in the background.
 wait_for_value 1 slot_count 15432 plain_slot
 wait_for_value 1 slot_count 15433 plain_slot
-test "$(resharding_record plain_slot)" = 'replicate|pgdog|replication|false|2'
+wait_for_value 'replicate|pgdog|replication|2' resharding_record plain_slot
 test "$(lock_holders)" = 1
 
 # STOP_TASK drops its slots and origins, deletes the record and releases the lock.

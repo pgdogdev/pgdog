@@ -178,9 +178,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
                     auto_cutover: self.cutover == CutoverMode::Auto,
                 };
                 let root_id = ctx.root_id();
-                self.state
-                    .start_run(command, Stage::Replication, root_id)
-                    .await?;
+                self.state.start_run(command, root_id).await?;
                 Some(ActiveRun::start(&self.state, move || {
                     tasks_storage().cancel_task(root_id);
                 }))
@@ -197,13 +195,13 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         let completed = result.is_ok() || stopped_in_rollback_window;
 
         let cleanup = if completed {
-            state.drop_slots().await
+            state.complete_run().await
         } else {
             state.cancel_run().await
         };
 
         if let Err(err) = cleanup {
-            warn!("failed to clean up replication slots: {err}");
+            warn!("failed to clean up the resharding run: {err}");
         }
 
         if stopped_in_rollback_window {
@@ -481,10 +479,8 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         warn!("cutting over");
         ctx.set_status(ReplicationStatus::PreparingReverseReplication.into());
 
-        Box::pin(self.state.complete_run()).await?;
-        // create replication slots on the destination to allow rollback
         self.state
-            .create_reverse_slots(&ctx.cancellation_token())
+            .prepare_reverse_replication(&ctx.cancellation_token())
             .await?;
         ctx.set_status(
             match self.state.direction() {

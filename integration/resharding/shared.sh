@@ -462,7 +462,7 @@ wait_for_value() {
     shift
     local value=""
     for _ in $(seq 1 30); do
-        value=$("$@")
+        value=$("$@") || value=""
         if [ "${value}" = "${expected}" ]; then
             return 0
         fi
