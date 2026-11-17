@@ -479,7 +479,7 @@ impl Connection {
     }
 
     /// Record a SET the server confirmed on every held server connection.
-    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+    pub(crate) fn record_set(&mut self, param: SetParam, in_transaction: bool) {
         self.binding.record_set(param, in_transaction);
     }
 

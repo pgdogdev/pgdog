@@ -1,7 +1,6 @@
 use itertools::Itertools;
 
 use crate::{
-    frontend::SetParam,
     net::{ParameterStatus, Query},
     stats::memory::MemoryUsage,
 };
@@ -64,8 +63,12 @@ impl ParameterStore {
     /// `RESET ALL` outside a transaction: restore the startup parameters
     /// but keep `role` and `session_authorization`, like PostgreSQL does.
     pub(crate) fn restore_startup_keep_identity(&mut self) {
-        let mut identity = self.params.clone();
-        identity.retain_session_identity();
+        let identity = Parameters::new(
+            self.params
+                .iter()
+                .filter(|(name, _)| is_session_identity(name.as_str()))
+                .map(|(name, value)| (name.to_string(), value.clone())),
+        );
         self.restore_startup();
         self.params.extend(identity);
     }
@@ -199,25 +202,26 @@ impl ParameterStore {
         self.transaction_params.retain_session_identity();
     }
 
-    /// Apply a `SET` or `RESET`, following PostgreSQL's rules.
-    pub(crate) fn apply(&mut self, param: &SetParam) {
+    /// Apply a `SET` (`value` is `Some`) or `RESET` (`value` is `None`),
+    /// following PostgreSQL's rules.
+    pub(crate) fn apply(&mut self, name: &str, value: Option<ParameterValue>, local: bool) {
         // SET LOCAL outside a transaction has no effect.
-        if param.local && !self.in_transaction {
+        if local && !self.in_transaction {
             return;
         }
 
-        match &param.value {
-            Some(value) if param.local => {
-                self.set_local(&param.name, value.clone());
+        match value {
+            Some(value) if local => {
+                self.set_local(name, value);
             }
             Some(value) => {
-                self.set(&param.name, value.clone());
+                self.set(name, value);
             }
-            None => self.reset(&param.name),
+            None => self.reset(name),
         }
 
-        if param.name.eq_ignore_ascii_case(SESSION_AUTHORIZATION) {
-            self.clear_role(param.local);
+        if is_session_authorization(name) {
+            self.clear_role(local);
         }
     }
 
@@ -304,41 +308,31 @@ impl ParameterStore {
                 .map(|(name, _)| name.to_string())
                 .collect();
 
-            let reset: Vec<_> = reset_names.iter().map(|name| reset_to_sql(name)).collect();
-
-            // Get all parameters other wants to set on the server.
-            let mut set: Vec<_> = other
-                .params
-                .tracked()
-                .into_iter()
-                .filter(|(name, value)| self.get(name.as_str()) != Some(*value)) // Only set parameters that are different.
-                .collect();
-
             // Changing the session authorization clears the role,
             // so it has to be set again afterwards.
-            let is_session_authorization =
-                |name: &str| name.eq_ignore_ascii_case(SESSION_AUTHORIZATION);
-            let session_authorization_changed = reset_names
-                .iter()
-                .any(|name| is_session_authorization(name))
-                || set
-                    .iter()
-                    .any(|(name, _)| is_session_authorization(name.as_str()));
-            if session_authorization_changed
-                && !set
-                    .iter()
-                    .any(|(name, _)| name.as_str().eq_ignore_ascii_case(ROLE))
-                && let Some(role) = other.params.get_key_value(ParameterNameRef::new(ROLE))
-            {
-                set.push(role);
-            }
-            set.sort_by_key(|(name, _)| sync_order(name.as_str()));
+            let session_authorization_changed =
+                self.get(SESSION_AUTHORIZATION) != other.params.get(SESSION_AUTHORIZATION);
 
-            let set = set
-                .into_iter()
+            // Get all parameters other wants to set on the server.
+            // `tracked()` yields `session_authorization` before `role`.
+            let set = other
+                .params
+                .tracked()
+                .filter(|(name, value)| {
+                    // Only set parameters that are different.
+                    self.get(name.as_str()) != Some(*value)
+                        || (session_authorization_changed
+                            && name.as_str().eq_ignore_ascii_case(ROLE))
+                })
                 .map(|(name, value)| param_to_sql(name.as_str(), value, false));
 
-            (reset.into_iter().chain(set).collect(), reset_names)
+            let queries = reset_names
+                .iter()
+                .map(|name| reset_to_sql(name))
+                .chain(set)
+                .collect();
+
+            (queries, reset_names)
         } else {
             (vec![], vec![])
         };
@@ -381,13 +375,11 @@ impl ParameterStore {
     /// to what the client expects.
     pub(crate) fn transaction_sync(&self) -> Vec<Query> {
         self.transaction_params
-            .iter()
-            .sorted_by_key(|(name, _)| sync_order(name.as_str()))
+            .apply_order()
             .map(|(name, value)| param_to_sql(name.as_str(), value, false))
             .chain(
                 self.transaction_local_params
-                    .iter()
-                    .sorted_by_key(|(name, _)| sync_order(name.as_str()))
+                    .apply_order()
                     .map(|(name, value)| param_to_sql(name.as_str(), value, true)),
             )
             .collect()

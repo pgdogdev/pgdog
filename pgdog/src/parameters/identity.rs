@@ -11,17 +11,10 @@ pub(crate) const ROLE: &str = "role";
 
 /// Is this parameter part of the session identity?
 pub(crate) fn is_session_identity(name: &str) -> bool {
-    name.eq_ignore_ascii_case(SESSION_AUTHORIZATION) || name.eq_ignore_ascii_case(ROLE)
+    is_session_authorization(name) || name.eq_ignore_ascii_case(ROLE)
 }
 
-/// Sort key that applies `session_authorization` before `role`,
-/// and both before everything else.
-pub(super) fn sync_order(name: &str) -> u8 {
-    if name.eq_ignore_ascii_case(SESSION_AUTHORIZATION) {
-        0
-    } else if name.eq_ignore_ascii_case(ROLE) {
-        1
-    } else {
-        2
-    }
+/// Is this `session_authorization`?
+pub(crate) fn is_session_authorization(name: &str) -> bool {
+    name.eq_ignore_ascii_case(SESSION_AUTHORIZATION)
 }

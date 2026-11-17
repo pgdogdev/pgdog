@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::{
-    KnownParameter, ParameterName, ParameterNameRef, ParameterValue, hash_parameters,
-    is_session_identity, is_untracked,
+    KnownParameter, ParameterName, ParameterNameRef, ParameterValue, SESSION_AUTHORIZATION,
+    hash_parameters, is_session_authorization, is_session_identity, is_untracked,
 };
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -194,11 +194,23 @@ impl Parameters {
         }
     }
 
-    /// Get parameters we should be updating on the server/client
-    /// during synchronization.
-    pub(super) fn tracked(&self) -> impl IntoIterator<Item = (&ParameterName, &ParameterValue)> {
+    /// All parameters, `session_authorization` first: setting it
+    /// clears the role, so it has to be applied before `role`.
+    pub(super) fn apply_order(&self) -> impl Iterator<Item = (&ParameterName, &ParameterValue)> {
         self.parameters
-            .iter()
+            .get_key_value(ParameterNameRef::new(SESSION_AUTHORIZATION))
+            .into_iter()
+            .chain(
+                self.parameters
+                    .iter()
+                    .filter(|(name, _)| !is_session_authorization(name.as_str())),
+            )
+    }
+
+    /// Get parameters we should be updating on the server/client
+    /// during synchronization, in the order they should be applied.
+    pub(super) fn tracked(&self) -> impl Iterator<Item = (&ParameterName, &ParameterValue)> {
+        self.apply_order()
             .filter(|(name, _)| !is_untracked(name.as_str()))
     }
 

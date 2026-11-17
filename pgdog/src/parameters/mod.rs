@@ -13,7 +13,7 @@ mod validator;
 mod value;
 
 use hash::hash_parameters;
-use identity::sync_order;
+use identity::is_session_authorization;
 use to_sql::{param_to_sql, reset_to_sql};
 use untracked::is_untracked;
 

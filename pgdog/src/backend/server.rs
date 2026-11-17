@@ -806,11 +806,12 @@ impl Server {
 
     /// Record a SET this server confirmed, so the next client
     /// is synced against what the server actually has.
-    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+    pub(crate) fn record_set(&mut self, param: SetParam, in_transaction: bool) {
         if in_transaction {
             self.client_params.begin();
         }
-        self.client_params.apply(param);
+        self.client_params
+            .apply(&param.name, param.value, param.local);
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.
@@ -3323,7 +3324,7 @@ pub(crate) mod test {
         // Rolled back: the server is back to its defaults, nothing to sync.
         server.execute("BEGIN").await.unwrap();
         server.execute("SET work_mem TO '1MB'").await.unwrap();
-        server.record_set(&work_mem, true);
+        server.record_set(work_mem.clone(), true);
         server.execute("ROLLBACK").await.unwrap();
         server.transaction_complete(true);
         let changed = server
@@ -3335,7 +3336,7 @@ pub(crate) mod test {
         // Committed: the next client without it gets a RESET.
         server.execute("BEGIN").await.unwrap();
         server.execute("SET work_mem TO '1MB'").await.unwrap();
-        server.record_set(&work_mem, true);
+        server.record_set(work_mem, true);
         server.execute("COMMIT").await.unwrap();
         server.transaction_complete(false);
         let changed = server

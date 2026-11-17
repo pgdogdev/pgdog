@@ -74,7 +74,7 @@ impl QueryEngine {
             // Record each SET on the server once it confirms it (see `record_confirmed_set`),
             // so the next client is synced against what the server actually has.
             self.pending_sets.clear();
-            self.pending_sets.extend(params.iter().cloned());
+            self.pending_sets.extend(params);
             if let Err(err) = self.execute(context, client_request, None).await {
                 self.pending_sets.clear();
                 return Err(err);
@@ -150,7 +150,9 @@ impl QueryEngine {
         let previous = context.params.get_reported(&param.name).cloned();
         let is_pin = param.name.eq_ignore_ascii_case(PGDOG_PIN);
 
-        context.params.apply(param);
+        context
+            .params
+            .apply(&param.name, param.value.clone(), param.local);
 
         if is_pin {
             match &param.value {

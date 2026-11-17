@@ -444,7 +444,7 @@ impl QueryEngine {
     /// A failed SET gets an error instead of CommandComplete, so it's never recorded.
     fn record_confirmed_set(&mut self, context: &QueryEngineContext<'_>) {
         if let Some(param) = self.pending_sets.pop_front() {
-            self.backend.record_set(&param, context.in_transaction());
+            self.backend.record_set(param, context.in_transaction());
         }
     }
 
