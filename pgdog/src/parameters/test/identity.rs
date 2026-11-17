@@ -18,10 +18,11 @@ fn test_session_authorization_is_applied_before_role() {
 
     assert_eq!(
         queries(server.sync(&client)),
+        // session_authorization first, then the rest in name order.
         [
             r#"SET "session_authorization" TO "delegated""#,
-            r#"SET "role" TO "reporting""#,
             r#"SET "application_name" TO "app""#,
+            r#"SET "role" TO "reporting""#,
         ]
     );
 }
@@ -66,10 +67,11 @@ fn test_transaction_sync_orders_identity() {
 
     assert_eq!(
         client.transaction_sync(),
+        // session_authorization first, then the rest in name order.
         vec![
             Query::new(r#"SET "session_authorization" TO "delegated""#),
-            Query::new(r#"SET "role" TO "reporting""#),
             Query::new(r#"SET "application_name" TO "app""#),
+            Query::new(r#"SET "role" TO "reporting""#),
         ]
     );
 }
