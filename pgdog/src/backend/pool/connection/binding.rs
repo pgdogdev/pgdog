@@ -330,21 +330,12 @@ impl Binding {
         }
     }
 
-    pub(super) fn record_set(&mut self, param: SetParam, in_transaction: bool) {
+    pub(super) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
         match self {
             Binding::Direct(server, ..) => server.record_set(param, in_transaction),
-            Binding::MultiShard(servers) => {
-                // Each server needs its own copy; the last one takes the original.
-                let mut servers = servers.iter_mut().peekable();
-                while let Some(server) = servers.next() {
-                    if servers.peek().is_some() {
-                        server.record_set(param.clone(), in_transaction);
-                    } else {
-                        server.record_set(param, in_transaction);
-                        break;
-                    }
-                }
-            }
+            Binding::MultiShard(servers) => servers
+                .iter_mut()
+                .for_each(|server| server.record_set(param, in_transaction)),
             _ => (),
         }
     }

@@ -247,9 +247,6 @@ impl QueryEngine {
             }
 
             'C' => {
-                if !self.pending_sets.is_empty() {
-                    self.record_confirmed_set(context);
-                }
                 self.backend
                     .statement_completed(self.router.command().route());
                 self.emit_explain_rows(context).await?;
@@ -257,8 +254,8 @@ impl QueryEngine {
             }
 
             'E' => {
-                if !self.pending_sets.is_empty() {
-                    self.discard_pending_sets();
+                if matches!(self.router.command(), Command::Set { .. }) {
+                    self.set_failed();
                 }
                 self.result_row_counter = 0;
                 if let Some(ref mut state) = self.pending_explain {
@@ -269,6 +266,10 @@ impl QueryEngine {
             }
 
             'Z' => {
+                // Before `handle_ready_for_query`, which resets the router.
+                if matches!(self.router.command(), Command::Set { .. }) {
+                    self.record_sets(context.in_transaction());
+                }
                 let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
                 self.handle_ready_for_query(context, state, &mut message)
                     .await?;
@@ -442,24 +443,23 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// The server confirmed the next pending SET, so record it on the server.
-    ///
-    /// A failed SET gets an error instead of CommandComplete, so it's never recorded.
-    /// Kept out of line: it runs only for SETs, not on every message.
+    /// The server ran the client's SETs, so record them on the server.
+    /// The next client is then synced against what the server actually has.
     #[inline(never)]
-    fn record_confirmed_set(&mut self, context: &QueryEngineContext<'_>) {
-        if let Some(param) = self.pending_sets.pop_front() {
-            self.backend.record_set(param, context.in_transaction());
+    fn record_sets(&mut self, in_transaction: bool) {
+        if let Command::Set { params, .. } = self.router.command() {
+            for param in params {
+                self.backend.record_set(param, in_transaction);
+            }
         }
     }
 
     /// A SET failed. Earlier SETs in the same request may have been rolled back,
-    /// or applied on some shards only, so we no longer know what the server has.
-    /// Reset it when it goes back to the pool.
+    /// or applied on some shards only, so the recorded state can't be trusted.
+    /// Reset the server when it goes back to the pool.
     #[cold]
     #[inline(never)]
-    fn discard_pending_sets(&mut self) {
-        self.pending_sets.clear();
+    fn set_failed(&mut self) {
         self.backend.mark_dirty();
     }
 

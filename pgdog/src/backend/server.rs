@@ -806,12 +806,12 @@ impl Server {
 
     /// Record a SET this server confirmed, so the next client
     /// is synced against what the server actually has.
-    pub(crate) fn record_set(&mut self, param: SetParam, in_transaction: bool) {
+    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
         if in_transaction {
             self.client_params.begin();
         }
         self.client_params
-            .apply(&param.name, param.value, param.local);
+            .apply(&param.name, param.value.clone(), param.local);
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.

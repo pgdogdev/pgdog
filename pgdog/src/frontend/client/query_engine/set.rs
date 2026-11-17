@@ -71,14 +71,8 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
-            // Record each SET on the server once it confirms it (see `record_confirmed_set`),
-            // so the next client is synced against what the server actually has.
-            self.pending_sets.clear();
-            self.pending_sets.extend(params);
-            if let Err(err) = self.execute(context, client_request, None).await {
-                self.pending_sets.clear();
-                return Err(err);
-            }
+            // The SETs are recorded on the server when it replies (see `record_sets`).
+            self.execute(context, client_request, None).await?;
         } else {
             self.fake_command_response(
                 context,
