@@ -184,6 +184,7 @@ impl Cache {
         Ok(ClientQuery {
             cached: true,
             comment: Arc::new(query_and_comment.comment),
+            comment_spans: query_and_comment.spans,
             ast,
         })
     }
@@ -215,6 +216,7 @@ impl Cache {
         Ok(ClientQuery {
             cached: false,
             comment: Arc::new(query_and_comment.comment),
+            comment_spans: query_and_comment.spans,
             ast,
         })
     }
@@ -240,6 +242,7 @@ impl Cache {
         Ok(ClientQuery {
             cached: true,
             comment: Default::default(),
+            comment_spans: Default::default(),
             ast,
         })
     }

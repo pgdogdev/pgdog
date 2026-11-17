@@ -11,6 +11,7 @@ use tracing::warn;
 use super::super::{Error, Route, StatementRewrite, StatementRewriteContext};
 use super::Stats;
 use crate::frontend::router::parser::cache::AstQuery;
+use crate::frontend::router::parser::comment::CommentSpans;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::router::parser::rewrite::statement::projection::PostRouteRewrite;
 use crate::frontend::{PreparedStatements, RoutingComment};
@@ -20,6 +21,9 @@ use crate::frontend::{PreparedStatements, RoutingComment};
 pub(crate) struct ClientQuery {
     pub(crate) cached: bool,
     pub(in crate::frontend) comment: Arc<RoutingComment>,
+    /// Where the edge comments sit in this query's text.
+    #[allow(dead_code)] // used by ee
+    pub(crate) comment_spans: CommentSpans,
     pub(crate) ast: Arc<Ast>,
 }
 

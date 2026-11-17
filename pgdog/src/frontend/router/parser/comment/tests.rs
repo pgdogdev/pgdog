@@ -605,3 +605,26 @@ fn test_sharding_key_comment_translates_through_lookup() {
     let expected = shard_value("org_root", &DataType::Varchar, 3, &vec![], 0);
     assert_eq!(result.comment.shard, Some(ShardOrLookup::Shard(expected)));
 }
+
+#[test]
+fn spans_locate_edge_comments() {
+    use super::CommentSpans;
+
+    let schema = test_schema();
+
+    let query = "  /* a */ /* b */ SELECT 1 /* c */\n";
+    let result = parse_edge_comment(query, &schema).unwrap();
+    assert_eq!(result.spans.leading_comment(query), Some("/* a */ /* b */"));
+    assert_eq!(result.spans.trailing_comment(query), Some("/* c */"));
+
+    let query = "SELECT 1 /*module='M',op='o'*/ /*traceparent='00-abc'*/";
+    let result = parse_edge_comment(query, &schema).unwrap();
+    assert_eq!(result.spans.leading_comment(query), None);
+    assert_eq!(
+        result.spans.trailing_comment(query),
+        Some("/*module='M',op='o'*/ /*traceparent='00-abc'*/")
+    );
+
+    let result = parse_edge_comment("SELECT 1", &schema).unwrap();
+    assert_eq!(result.spans, CommentSpans::default());
+}
