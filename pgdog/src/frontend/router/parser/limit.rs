@@ -51,12 +51,20 @@ impl<'a> LimitClause<'a> {
     /// Values PgDog can't compute are `None`, the same as no limit.
     // FIXME: We should error and not silently treat as NULL
     fn decode(&self, node: Node<'_>) -> Result<Option<usize>, Error> {
-        if !Self::is_computable(node) {
-            return Ok(None);
-        }
-        Ok(self
-            .evaluate(node)?
-            .and_then(|value| usize::try_from(value).ok()))
+        use pg_raw_parse::ConstValue;
+
+        // No value, plain integers and parameters are the common case: skip
+        // the expression checks, this runs on every routed request.
+        let value = match node {
+            Node::None => None,
+            Node::A_Const(constant) if let Some(ConstValue::Integer(value)) = constant.val() => {
+                Some(i64::from(value))
+            }
+            Node::ParamRef(param) => self.parameter(param.number as usize)?,
+            node if Self::is_computable(node) => self.evaluate(node)?,
+            _ => None,
+        };
+        Ok(value.and_then(|value| usize::try_from(value).ok()))
     }
 
     /// Compute a value accepted by [`Self::is_computable`]. `None` is no limit.
