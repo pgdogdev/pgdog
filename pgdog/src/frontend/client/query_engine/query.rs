@@ -247,7 +247,9 @@ impl QueryEngine {
             }
 
             'C' => {
-                self.record_confirmed_set(context);
+                if !self.pending_sets.is_empty() {
+                    self.record_confirmed_set(context);
+                }
                 self.backend
                     .statement_completed(self.router.command().route());
                 self.emit_explain_rows(context).await?;
@@ -255,7 +257,9 @@ impl QueryEngine {
             }
 
             'E' => {
-                self.discard_pending_sets();
+                if !self.pending_sets.is_empty() {
+                    self.discard_pending_sets();
+                }
                 self.result_row_counter = 0;
                 if let Some(ref mut state) = self.pending_explain {
                     state.annotated = true;
@@ -265,7 +269,6 @@ impl QueryEngine {
             }
 
             'Z' => {
-                self.pending_sets.clear();
                 let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
                 self.handle_ready_for_query(context, state, &mut message)
                     .await?;
@@ -442,6 +445,8 @@ impl QueryEngine {
     /// The server confirmed the next pending SET, so record it on the server.
     ///
     /// A failed SET gets an error instead of CommandComplete, so it's never recorded.
+    /// Kept out of line: it runs only for SETs, not on every message.
+    #[inline(never)]
     fn record_confirmed_set(&mut self, context: &QueryEngineContext<'_>) {
         if let Some(param) = self.pending_sets.pop_front() {
             self.backend.record_set(param, context.in_transaction());
@@ -451,11 +456,11 @@ impl QueryEngine {
     /// A SET failed. Earlier SETs in the same request may have been rolled back,
     /// or applied on some shards only, so we no longer know what the server has.
     /// Reset it when it goes back to the pool.
+    #[cold]
+    #[inline(never)]
     fn discard_pending_sets(&mut self) {
-        if !self.pending_sets.is_empty() {
-            self.pending_sets.clear();
-            self.backend.mark_dirty();
-        }
+        self.pending_sets.clear();
+        self.backend.mark_dirty();
     }
 
     pub(super) async fn cleanup_backend(
