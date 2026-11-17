@@ -1,4 +1,5 @@
 mod hash;
+mod identity;
 mod known;
 mod name;
 mod normalizer;
@@ -12,9 +13,11 @@ mod validator;
 mod value;
 
 use hash::hash_parameters;
+use identity::sync_order;
 use to_sql::{param_to_sql, reset_to_sql};
 use untracked::is_untracked;
 
+pub(crate) use identity::{ROLE, SESSION_AUTHORIZATION, is_session_identity};
 pub(crate) use known::KnownParameter;
 pub(crate) use name::{ParameterName, ParameterNameRef};
 pub(crate) use normalizer::ParameterNormalizer;

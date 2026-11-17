@@ -13,9 +13,12 @@ static PREPARED: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DEALLOCATE ALL
 ///
 static DIRTY: Lazy<Vec<Query>> = Lazy::new(|| {
     vec![
-        Query::new("RESET ALL"),                       // Reset all parameters.
+        // RESET ALL doesn't reset the role or session authorization.
+        // Resetting the session authorization also resets the role.
+        Query::new("SET SESSION AUTHORIZATION DEFAULT"),
+        Query::new("RESET ALL"), // Reset all other parameters.
         Query::new("SELECT pg_advisory_unlock_all()"), // Remove all advisory locks.
-        Query::new("DISCARD TEMP"),                    // Drop all temporary tables.
+        Query::new("DISCARD TEMP"), // Drop all temporary tables.
     ]
 });
 
@@ -134,5 +137,26 @@ impl Cleanup {
 
     pub(crate) fn is_deallocate(&self) -> bool {
         self.deallocate
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_dirty_cleanup_resets_session_identity_first() {
+        let cleanup = Cleanup::parameters();
+        let queries: Vec<_> = cleanup.queries().iter().map(Query::query).collect();
+
+        assert_eq!(
+            queries,
+            [
+                "SET SESSION AUTHORIZATION DEFAULT",
+                "RESET ALL",
+                "SELECT pg_advisory_unlock_all()",
+                "DISCARD TEMP",
+            ]
+        );
     }
 }

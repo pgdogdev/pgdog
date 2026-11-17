@@ -10,6 +10,7 @@ use crate::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
+    parameters::is_session_identity,
     state::State,
     util::safe_timeout_from,
 };
@@ -473,7 +474,11 @@ impl QueryEngine {
             // Update client params with values
             // sent from the server using ParameterStatus(B) messages.
             if !changed_params.is_empty() {
-                for (name, value) in changed_params.iter() {
+                // The client's own SET statements are the source of truth for its identity.
+                for (name, value) in changed_params
+                    .iter()
+                    .filter(|(name, _)| !is_session_identity(name.as_str()))
+                {
                     debug!("setting client's \"{}\" to {}", name, value);
                     context.params.set(name, value.clone());
                 }

@@ -2,7 +2,10 @@ use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::{FakeCommand, FakeResponse};
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
 use crate::net::messages::{ErrorResponse, NoticeResponse};
-use crate::parameters::{ParameterNormalizer, ParameterValidator, ParameterValue};
+use crate::parameters::{
+    ParameterNormalizer, ParameterValidator, ParameterValue, SESSION_AUTHORIZATION,
+    is_session_identity,
+};
 
 use super::*;
 
@@ -68,6 +71,17 @@ impl QueryEngine {
 
         if !context.in_transaction() {
             self.comms.update_params(context.params);
+        }
+
+        // The server only learns the client's parameters when the client links to it.
+        // A role change on a connected server bypasses that, so reset the server's
+        // identity when it goes back to the pool.
+        if self.backend.connected()
+            && params
+                .iter()
+                .any(|param| !param.local && is_session_identity(&param.name))
+        {
+            self.backend.mark_dirty();
         }
 
         if self.backend.connected() {
@@ -165,6 +179,10 @@ impl QueryEngine {
             }
         }
 
+        if param.name.eq_ignore_ascii_case(SESSION_AUTHORIZATION) {
+            context.params.clear_role(param.local);
+        }
+
         let value = context.params.get_reported(&param.name);
         let mut command =
             Self::parameter_command(param, set_config, context.in_transaction(), value);
@@ -215,7 +233,7 @@ impl QueryEngine {
         if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();
         } else {
-            context.params.restore_startup();
+            context.params.restore_startup_keep_identity();
             self.comms.update_params(context.params);
         }
 

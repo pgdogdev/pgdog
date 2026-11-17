@@ -473,6 +473,11 @@ impl Connection {
         }
     }
 
+    /// Clean up held server connections when they go back to the pool.
+    pub(crate) fn mark_dirty(&mut self) {
+        self.binding.dirty();
+    }
+
     /// Check if any held server connection is currently locked to a client.
     #[cfg(test)]
     pub(crate) fn locked(&self) -> bool {

@@ -13,7 +13,8 @@ use crate::{
 };
 
 use super::{
-    KnownParameter, ParameterName, ParameterNameRef, ParameterValue, hash_parameters, is_untracked,
+    KnownParameter, ParameterName, ParameterNameRef, ParameterValue, hash_parameters,
+    is_session_identity, is_untracked,
 };
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -165,6 +166,13 @@ impl Parameters {
         self.parameters.clear();
         self.hash = 0;
         self.known = Default::default();
+    }
+
+    /// Drop every parameter except `role` and `session_authorization`.
+    pub(super) fn retain_session_identity(&mut self) {
+        self.parameters
+            .retain(|name, _| is_session_identity(name.as_str()));
+        self.update_derived();
     }
 
     /// Copy parameters from other into self, recomputing the hash.

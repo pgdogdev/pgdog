@@ -739,7 +739,9 @@ impl Server {
                 self.prepared_statements.clear();
                 self.client_params.server_reset();
             }
-            "RESET" => self.client_params.server_reset(), // Someone reset params, we're gonna need to re-sync.
+            // Someone reset params, we're gonna need to re-sync. RESET doesn't touch
+            // the role or session authorization, so keep tracking those.
+            "RESET" => self.client_params.server_reset_keep_identity(),
             _ => (),
         }
         self.stats.rows_affected(cmd);
@@ -3270,6 +3272,33 @@ pub(crate) mod test {
             changed > 0,
             "expected re-sync after RESET ALL cleared client_params"
         );
+    }
+
+    #[tokio::test]
+    async fn test_reset_all_keeps_role_tracking() {
+        let mut server = test_server().await;
+        let mut params = ParameterStore::default();
+        params.set("role", "pg_monitor");
+
+        let changed = server
+            .link_client(FrontendPid::new(), &params, None)
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+
+        // PostgreSQL's RESET ALL leaves the role in place.
+        server.execute("RESET ALL").await.unwrap();
+        let current_user: Vec<String> = server.fetch_all("SELECT current_user").await.unwrap();
+        assert_eq!(current_user, ["pg_monitor"]);
+
+        // So the next client without a role has to reset it.
+        let changed = server
+            .link_client(FrontendPid::new(), &ParameterStore::default(), None)
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+        let current_user: Vec<String> = server.fetch_all("SELECT current_user").await.unwrap();
+        assert_eq!(current_user, ["pgdog"]);
     }
 
     #[tokio::test]
