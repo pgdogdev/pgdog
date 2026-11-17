@@ -220,10 +220,7 @@ impl Schema {
         user: &'a str,
         search_path: Option<&'a ParameterValue>,
     ) -> Vec<&'a str> {
-        let path: &[String] = match search_path {
-            Some(ParameterValue::Tuple(overriden)) => overriden.as_slice(),
-            _ => &self.inner.search_path,
-        };
+        let path = search_path.map_or(self.inner.search_path.as_slice(), ParameterValue::as_slice);
 
         path.iter()
             .map(|p| if p == "$user" { user } else { p.as_str() })
@@ -388,6 +385,40 @@ mod test {
         let override_path = ParameterValue::Tuple(vec!["custom".into(), "other".into()]);
         let resolved = schema.resolve_search_path("alice", Some(&override_path));
         assert_eq!(resolved, vec!["custom", "other"]);
+    }
+
+    #[test]
+    fn test_resolve_search_path_override_single_schema() {
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], HashMap::new());
+
+        let override_path = ParameterValue::String("custom".into());
+        let resolved = schema.resolve_search_path("alice", Some(&override_path));
+        assert_eq!(resolved, vec!["custom"]);
+    }
+
+    #[test]
+    fn test_table_single_schema_search_path() {
+        let relations: HashMap<(String, String), Relation> = HashMap::from([
+            (
+                ("tenant_b".into(), "users".into()),
+                Relation::test_table("tenant_b", "users", IndexMap::new()),
+            ),
+            (
+                ("public".into(), "users".into()),
+                Relation::test_table("public", "users", IndexMap::new()),
+            ),
+        ]);
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], relations);
+
+        let table = Table {
+            name: "users",
+            schema: None,
+            alias: None,
+        };
+
+        let search_path = ParameterValue::String("tenant_b".into());
+        let result = schema.table(table, "alice", Some(&search_path));
+        assert_eq!(result.unwrap().schema(), "tenant_b");
     }
 
     #[test]

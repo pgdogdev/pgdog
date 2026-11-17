@@ -114,4 +114,13 @@ impl ParameterValue {
             _ => None,
         }
     }
+
+    /// Get parameter value as a list of strings. A single value
+    /// is returned as a one-element slice.
+    pub(crate) fn as_slice(&self) -> &[String] {
+        match self {
+            Self::String(s) => std::slice::from_ref(s),
+            Self::Tuple(v) => v,
+        }
+    }
 }
