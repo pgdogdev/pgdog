@@ -22,7 +22,7 @@ use crate::{
     auth::{md5, scram::Client},
     backend::pool::stats::MemoryStats,
     config::AuthType,
-    frontend::ClientRequest,
+    frontend::{ClientRequest, SetParam},
     net::{
         Close, Liveness, MessageBuffer, Parameter, ProtocolMessage, Sync,
         messages::{
@@ -802,6 +802,15 @@ impl Server {
         self.mark_dirty(false);
 
         Ok(executed)
+    }
+
+    /// Record a SET this server confirmed, so the next client
+    /// is synced against what the server actually has.
+    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+        if in_transaction {
+            self.client_params.begin();
+        }
+        self.client_params.apply(param);
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.
@@ -3299,6 +3308,43 @@ pub(crate) mod test {
         assert_eq!(changed, 1);
         let current_user: Vec<String> = server.fetch_all("SELECT current_user").await.unwrap();
         assert_eq!(current_user, ["pgdog"]);
+    }
+
+    #[tokio::test]
+    async fn test_record_set_follows_transaction() {
+        let mut server = test_server().await;
+        let client = ParameterStore::default();
+        let work_mem = SetParam {
+            name: "work_mem".into(),
+            value: Some("1MB".into()),
+            local: false,
+        };
+
+        // Rolled back: the server is back to its defaults, nothing to sync.
+        server.execute("BEGIN").await.unwrap();
+        server.execute("SET work_mem TO '1MB'").await.unwrap();
+        server.record_set(&work_mem, true);
+        server.execute("ROLLBACK").await.unwrap();
+        server.transaction_complete(true);
+        let changed = server
+            .link_client(FrontendPid::new(), &client, None)
+            .await
+            .unwrap();
+        assert_eq!(changed, 0);
+
+        // Committed: the next client without it gets a RESET.
+        server.execute("BEGIN").await.unwrap();
+        server.execute("SET work_mem TO '1MB'").await.unwrap();
+        server.record_set(&work_mem, true);
+        server.execute("COMMIT").await.unwrap();
+        server.transaction_complete(false);
+        let changed = server
+            .link_client(FrontendPid::new(), &client, None)
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+        let value: Vec<String> = server.fetch_all("SHOW work_mem").await.unwrap();
+        assert_eq!(value, ["4MB"]);
     }
 
     #[tokio::test]

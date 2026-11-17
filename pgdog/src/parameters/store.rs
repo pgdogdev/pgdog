@@ -1,6 +1,7 @@
 use itertools::Itertools;
 
 use crate::{
+    frontend::SetParam,
     net::{ParameterStatus, Query},
     stats::memory::MemoryUsage,
 };
@@ -198,8 +199,30 @@ impl ParameterStore {
         self.transaction_params.retain_session_identity();
     }
 
+    /// Apply a `SET` or `RESET`, following PostgreSQL's rules.
+    pub(crate) fn apply(&mut self, param: &SetParam) {
+        // SET LOCAL outside a transaction has no effect.
+        if param.local && !self.in_transaction {
+            return;
+        }
+
+        match &param.value {
+            Some(value) if param.local => {
+                self.set_local(&param.name, value.clone());
+            }
+            Some(value) => {
+                self.set(&param.name, value.clone());
+            }
+            None => self.reset(&param.name),
+        }
+
+        if param.name.eq_ignore_ascii_case(SESSION_AUTHORIZATION) {
+            self.clear_role(param.local);
+        }
+    }
+
     /// `SET SESSION AUTHORIZATION` also resets the role.
-    pub(crate) fn clear_role(&mut self, local: bool) {
+    fn clear_role(&mut self, local: bool) {
         if local {
             // PostgreSQL treats the value "none" as `SET ROLE NONE`.
             self.set_local(ROLE, "none");

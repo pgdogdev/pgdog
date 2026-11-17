@@ -3,7 +3,7 @@ use crate::{
     config::config,
     frontend::{
         BufferedQuery, Client, ClientComms, ClientRequest, Command, DiscardTarget, Error, Router,
-        RouterContext, Stats, UnlistenTarget,
+        RouterContext, SetParam, Stats, UnlistenTarget,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
         prepared_statements::Error as PreparedStatementError,
         router::{Route, parser::Shard},
@@ -11,6 +11,7 @@ use crate::{
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
+use std::collections::VecDeque;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -79,6 +80,8 @@ pub(crate) struct QueryEngine {
     temp_tables: TempTables,
     // Count how many rows we received from the query we are currently executing.
     result_row_counter: usize,
+    // SETs sent to a connected server, recorded on it as the server confirms each one.
+    pending_sets: VecDeque<SetParam>,
 }
 
 impl QueryEngine {
@@ -108,6 +111,7 @@ impl QueryEngine {
             manual_lock: false,
             temp_tables: Default::default(),
             result_row_counter: 0,
+            pending_sets: VecDeque::new(),
         })
     }
 

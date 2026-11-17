@@ -2,10 +2,7 @@ use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::{FakeCommand, FakeResponse};
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
 use crate::net::messages::{ErrorResponse, NoticeResponse};
-use crate::parameters::{
-    ParameterNormalizer, ParameterValidator, ParameterValue, SESSION_AUTHORIZATION,
-    is_session_identity,
-};
+use crate::parameters::{ParameterNormalizer, ParameterValidator, ParameterValue};
 
 use super::*;
 
@@ -73,19 +70,15 @@ impl QueryEngine {
             self.comms.update_params(context.params);
         }
 
-        // The server only learns the client's parameters when the client links to it.
-        // A role change on a connected server bypasses that, so reset the server's
-        // identity when it goes back to the pool.
-        if self.backend.connected()
-            && params
-                .iter()
-                .any(|param| !param.local && is_session_identity(&param.name))
-        {
-            self.backend.mark_dirty();
-        }
-
         if self.backend.connected() {
-            self.execute(context, client_request, None).await?;
+            // Record each SET on the server once it confirms it (see `record_confirmed_set`),
+            // so the next client is synced against what the server actually has.
+            self.pending_sets.clear();
+            self.pending_sets.extend(params.iter().cloned());
+            if let Err(err) = self.execute(context, client_request, None).await {
+                self.pending_sets.clear();
+                return Err(err);
+            }
         } else {
             self.fake_command_response(
                 context,
@@ -157,30 +150,17 @@ impl QueryEngine {
         let previous = context.params.get_reported(&param.name).cloned();
         let is_pin = param.name.eq_ignore_ascii_case(PGDOG_PIN);
 
-        if let Some(value) = param.value.clone() {
-            if param.local {
-                context.params.set_local(&param.name, value);
-            } else {
-                context.params.set(&param.name, value);
+        context.params.apply(param);
 
+        if is_pin {
+            match &param.value {
                 // Pin the backend to this client.
-                if is_pin && !context.in_transaction() {
-                    self.manual_lock = param
-                        .value
-                        .as_ref()
-                        .and_then(|p| p.as_str())
-                        .is_some_and(|p| matches!(p, "true" | "t"));
+                Some(value) if !param.local && !context.in_transaction() => {
+                    self.manual_lock = value.as_str().is_some_and(|p| matches!(p, "true" | "t"));
                 }
+                Some(_) => (),
+                None => self.manual_lock = false,
             }
-        } else {
-            context.params.reset(&param.name);
-            if is_pin {
-                self.manual_lock = false;
-            }
-        }
-
-        if param.name.eq_ignore_ascii_case(SESSION_AUTHORIZATION) {
-            context.params.clear_role(param.local);
         }
 
         let value = context.params.get_reported(&param.name);

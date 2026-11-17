@@ -1,6 +1,6 @@
 //! `role` and `session_authorization` tracking.
 
-use crate::{net::Query, parameters::*};
+use crate::{frontend::SetParam, net::Query, parameters::*};
 
 fn queries(sync: ParametersSync<'_>) -> Vec<String> {
     sync.into_iter()
@@ -155,22 +155,46 @@ fn test_server_reset_keep_identity() {
     assert!(server.sync(&peer).is_empty());
 }
 
+fn param(name: &str, value: Option<&str>, local: bool) -> SetParam {
+    SetParam {
+        name: name.into(),
+        value: value.map(ParameterValue::from),
+        local,
+    }
+}
+
 #[test]
-fn test_clear_role() {
+fn test_apply() {
     let mut params = ParameterStore::default();
-    params.set(ROLE, "reporting");
-    params.clear_role(false);
+    params.apply(&param("work_mem", Some("1MB"), false));
+    assert_eq!(params.get("work_mem"), Some(&"1MB".into()));
+
+    // SET LOCAL outside a transaction does nothing.
+    params.apply(&param("work_mem", Some("2MB"), true));
+    assert_eq!(params.get("work_mem"), Some(&"1MB".into()));
+
+    params.apply(&param("work_mem", None, false));
+    assert!(params.get("work_mem").is_none());
+}
+
+#[test]
+fn test_apply_session_authorization_clears_role() {
+    let mut params = ParameterStore::default();
+    params.apply(&param(ROLE, Some("reporting"), false));
+    params.apply(&param(SESSION_AUTHORIZATION, Some("delegated"), false));
     assert!(params.get(ROLE).is_none());
 
-    params.set(ROLE, "reporting");
+    // SET LOCAL clears the role until the transaction ends.
+    params.apply(&param(ROLE, Some("reporting"), false));
     params.begin();
-    params.clear_role(true);
+    params.apply(&param(SESSION_AUTHORIZATION, Some("delegated"), true));
     assert_eq!(params.get(ROLE), Some(&"none".into()));
     params.commit();
     assert_eq!(params.get(ROLE), Some(&"reporting".into()));
 
+    // SET SESSION AUTHORIZATION DEFAULT clears the role too, and rolls back.
     params.begin();
-    params.clear_role(false);
+    params.apply(&param(SESSION_AUTHORIZATION, None, false));
     assert!(params.get(ROLE).is_none());
     params.rollback();
     assert_eq!(params.get(ROLE), Some(&"reporting".into()));
