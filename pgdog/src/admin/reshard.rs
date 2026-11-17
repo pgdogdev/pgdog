@@ -5,8 +5,8 @@ use tracing::info;
 use crate::api::abort_resharding::AbortReshardingTask;
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
-use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
+use pgdog_stats::CommandKind;
 
 use super::options::{Options, RunMode};
 use super::prelude::*;
@@ -64,11 +64,9 @@ impl Command for Reshard {
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
-            .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
+            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
             .build()?;
-        if self.mode == RunMode::Abort {
-            return abort(state, CommandKind::Reshard, self.replication_slot.clone()).await;
-        }
+        check_abort!(self, state, CommandKind::Reshard);
         info!(
             r#"resharding "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
@@ -91,6 +89,17 @@ impl Command for Reshard {
         ])
     }
 }
+
+/// Return from the command with the abort task's reply when the command runs `WITH (abort)`.
+macro_rules! check_abort {
+    ($command:expr, $state:expr, $kind:expr) => {
+        if $command.mode == $crate::admin::options::RunMode::Abort {
+            return $crate::admin::reshard::abort($state, $kind, $command.replication_slot.clone())
+                .await;
+        }
+    };
+}
+pub(super) use check_abort;
 
 pub(super) async fn abort(
     state: ReshardingState,
@@ -115,11 +124,19 @@ mod test {
     #[test]
     fn parses_slot_and_run_mode() {
         for (sql, slot, mode) in [
-            ("reshard a b pub", None, RunMode::WithCleanup),
+            (
+                "reshard a b pub",
+                None,
+                RunMode::Run {
+                    cleanup_on_cancel: true,
+                },
+            ),
             (
                 "reshard a b pub slot with (cleanup_on_cancel false)",
                 Some("slot"),
-                RunMode::NoCleanup,
+                RunMode::Run {
+                    cleanup_on_cancel: false,
+                },
             ),
             ("reshard a b pub (abort)", None, RunMode::Abort),
         ] {

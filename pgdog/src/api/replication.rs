@@ -13,9 +13,9 @@ use tokio::{select, try_join};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
+use crate::api::Task;
 use crate::api::schema_sync::{SchemaSyncBuilder, SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::{TaskContext, TaskId};
-use crate::api::{Task, tasks_storage};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::cutover_policy::CutoverPolicy;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
@@ -24,7 +24,7 @@ use crate::backend::replication::logical::publisher::replication_stream::{
 };
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand};
+use crate::backend::replication::logical::run::{LockWatchdog, ReshardingCommand};
 use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
@@ -171,18 +171,15 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
     /// forward phase returns [`Error::ReplicationAborted`].
     async fn run(mut self, ctx: &TaskContext<T>) -> Result<(), Error> {
         let cancel = ctx.cancellation_token();
-        let _active = match self.state.run_store() {
-            Some(_) => None,
-            None => {
-                let command = ReshardingCommand::Replicate {
-                    auto_cutover: self.cutover == CutoverMode::Auto,
-                };
-                let root_id = ctx.root_id();
-                self.state.start_run(command, root_id).await?;
-                Some(ActiveRun::start(&self.state, move || {
-                    tasks_storage().cancel_task(root_id);
-                }))
-            }
+        let _watchdog = if self.state.run_store().is_some() {
+            None
+        } else {
+            let command = ReshardingCommand::Replicate {
+                auto_cutover: self.cutover == CutoverMode::Auto,
+            };
+            let root_id = ctx.root_id();
+            self.state.start_run(command, root_id).await?;
+            Some(LockWatchdog::start(&self.state, root_id))
         };
         let state = self.state.clone();
         let result = self.replicate_loop(ctx, self.cutover).await;

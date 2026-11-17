@@ -1,5 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pgdog_stats::ReshardingId;
+
 use super::{ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
 use crate::net::bind::Parameter;
@@ -134,34 +136,8 @@ impl Query for ListRows {
     }
 }
 
-pub(crate) struct CountSlots;
-
-impl Query for CountSlots {
-    const SQL: &'static str = "SELECT count(*) FROM pg_replication_slots WHERE slot_name = $1";
-
-    type Params<'a> = &'a str;
-
-    fn params(slot_name: &str) -> Vec<Parameter> {
-        vec![text(slot_name)]
-    }
-}
-
-pub(crate) struct CountOrigins;
-
-impl Query for CountOrigins {
-    const SQL: &'static str =
-        "SELECT count(*) FROM pg_replication_origin WHERE roname = ANY(string_to_array($1, ','))";
-
-    type Params<'a> = &'a [String];
-
-    fn params(names: &[String]) -> Vec<Parameter> {
-        vec![text(&names.join(","))]
-    }
-}
-
 pub(crate) struct InsertRow;
 
-// W: maybe add unit test for this?
 impl Query for InsertRow {
     const SQL: &'static str = "
         INSERT INTO pgdog.resharding (
@@ -194,33 +170,24 @@ impl Query for InsertRow {
     }
 }
 
-// W: collect and move all helpers at the end of the file
-fn unix_millis(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis() as i64)
-}
-
 pub(crate) struct UpdateStage;
 
-pub(crate) struct StageUpdate<'a> {
-    pub(crate) key: &'a ReshardingKey,
+pub(crate) struct StageUpdate {
+    pub(crate) id: ReshardingId,
     pub(crate) stage: Stage,
 }
 
 impl Query for UpdateStage {
     const SQL: &'static str = "
         UPDATE pgdog.resharding
-        SET stage = $4
-        WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
+        SET stage = $2
+        WHERE id = $1::uuid";
 
-    type Params<'a> = StageUpdate<'a>;
+    type Params<'a> = StageUpdate;
 
-    fn params(update: StageUpdate<'_>) -> Vec<Parameter> {
-        let [source, destination, publication] = key_params(update.key);
+    fn params(update: StageUpdate) -> Vec<Parameter> {
         vec![
-            source,
-            destination,
-            publication,
+            text(&update.id.to_string()),
             text(&update.stage.to_string()),
         ]
     }
@@ -229,7 +196,7 @@ impl Query for UpdateStage {
 pub(crate) struct ResumeRow;
 
 pub(crate) struct ResumeUpdate<'a> {
-    pub(crate) key: &'a ReshardingKey,
+    pub(crate) id: ReshardingId,
     pub(crate) owner: &'a TaskOwner,
     pub(crate) resumed_at: SystemTime,
 }
@@ -237,18 +204,15 @@ pub(crate) struct ResumeUpdate<'a> {
 impl Query for ResumeRow {
     const SQL: &'static str = "
         UPDATE pgdog.resharding
-        SET instance_id = $4, run_id = $5::uuid, task_id = $6::bigint,
-            resumed_at = to_timestamp($7::bigint / 1000.0)
-        WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
+        SET instance_id = $2, run_id = $3::uuid, task_id = $4::bigint,
+            resumed_at = to_timestamp($5::bigint / 1000.0)
+        WHERE id = $1::uuid";
 
     type Params<'a> = ResumeUpdate<'a>;
 
     fn params(update: ResumeUpdate<'_>) -> Vec<Parameter> {
-        let [source, destination, publication] = key_params(update.key);
         vec![
-            source,
-            destination,
-            publication,
+            text(&update.id.to_string()),
             text(update.owner.instance_id.as_str()),
             text(&update.owner.run_id.to_string()),
             text(&update.owner.task_id.to_string()),
@@ -272,6 +236,20 @@ impl Query for Heartbeat {
 pub(crate) struct DeleteRow;
 
 impl Query for DeleteRow {
+    const SQL: &'static str = "DELETE FROM pgdog.resharding WHERE id = $1::uuid";
+
+    type Params<'a> = ReshardingId;
+
+    fn params(id: ReshardingId) -> Vec<Parameter> {
+        vec![text(&id.to_string())]
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct DeleteKey;
+
+#[cfg(test)]
+impl Query for DeleteKey {
     const SQL: &'static str = "
         DELETE FROM pgdog.resharding
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
@@ -300,4 +278,9 @@ fn lock_name(key: &ReshardingKey) -> Parameter {
         "{}/{}/{}",
         key.databases.source, key.databases.destination, key.publication
     ))
+}
+
+fn unix_millis(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as i64)
 }

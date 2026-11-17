@@ -4,12 +4,11 @@ use derive_more::Display;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::Databases;
+use crate::{CommandKind, Databases};
 
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
 #[display("abort {command} {databases}")]
 pub struct AbortReshardingDefinition {
     pub databases: Databases,
-    // W: can we reuse ReshardingCommand?
-    pub command: String,
+    pub command: CommandKind,
 }

@@ -1,7 +1,7 @@
 use futures::future::try_join_all;
 use futures::prelude::future::join_all;
 use parking_lot::Mutex;
-use pgdog_stats::{Databases, ReshardingDirection, TaskId};
+use pgdog_stats::{CommandKind, Databases, ReshardingDirection, ReshardingId, TaskId};
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -14,8 +14,8 @@ use tracing::{info, warn};
 
 use super::publisher::{Permanent, ReplicationSlot, Table, permanent_slot_name};
 use super::run::{
-    CommandKind, ConfigSnapshot, FORMAT_VERSION, ReshardingCommand, ReshardingId, ReshardingKey,
-    ReshardingRecord, ReshardingStore, Stage, TaskOwner, existing_slots,
+    ConfigSnapshot, FORMAT_VERSION, ReshardingCommand, ReshardingKey, ReshardingRecord,
+    ReshardingStore, Stage, TaskOwner, existing_slots,
 };
 use super::subscriber::connect_address;
 use super::subscriber::replication_origin::ReplicationOrigin;
@@ -60,9 +60,37 @@ struct ReshardingStateInner {
 #[derive(Debug)]
 struct RecordedRun {
     store: Arc<ReshardingStore>,
+    id: ReshardingId,
     stage: Stage,
     resumed: bool,
     keep_on_stop: bool,
+}
+
+impl RecordedRun {
+    fn row(&self) -> RunRow {
+        RunRow {
+            store: self.store.clone(),
+            id: self.id,
+        }
+    }
+
+    fn into_row(self) -> RunRow {
+        RunRow {
+            store: self.store,
+            id: self.id,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RunRow {
+    store: Arc<ReshardingStore>,
+    id: ReshardingId,
+}
+
+struct AcceptedRow {
+    id: ReshardingId,
+    stage: Stage,
 }
 
 type Slots = HashMap<usize, ReplicationSlot<Permanent>>;
@@ -104,9 +132,9 @@ impl Drop for ReshardingStateInner {
         }
         let slots = self.take_owned_slots();
         let origins = self.take_origins();
-        let store = self.run.take().map(|run| run.store);
+        let run = self.run.take().map(RecordedRun::into_row);
         tasks::spawn("resharding run cleanup", async move {
-            if let Err(err) = close(store, slots, origins).await {
+            if let Err(err) = close(run, slots, origins).await {
                 warn!("resharding cleanup failed: {err}");
             }
         });
@@ -245,7 +273,14 @@ impl ReshardingState {
         &self,
         cancel: &CancellationToken,
     ) -> Result<(), Error> {
-        Box::pin(self.drop_slots()).await?;
+        if let Err(err) = Box::pin(self.drop_slots()).await {
+            warn!(
+                "resharding {}: forward slot cleanup failed, cutover continues: {err}; drop the remaining slots \"{}_<shard>\" on the source and origins \"__pgdog_origin_{}_<shard>\" on the destination by hand",
+                self.run_key(),
+                self.slot_name,
+                self.slot_name,
+            );
+        }
         self.finish_run().await?;
         self.create_slots_on(&self.destination, cancel).await
     }
@@ -316,9 +351,9 @@ impl ReshardingState {
         for (number, origins) in self.origins_for(slots).await? {
             self.inner.lock().origins.insert(number, origins.clone());
             if keep_progress {
-                try_join_all(origins.iter().map(ReplicationOrigin::create_origin)).await?;
+                try_join_all(origins.iter().map(ReplicationOrigin::ensure_exists)).await?;
             } else {
-                try_join_all(origins.iter().map(ReplicationOrigin::recreate_origin)).await?;
+                try_join_all(origins.iter().map(ReplicationOrigin::recreate)).await?;
             }
         }
 
@@ -405,8 +440,8 @@ impl ReshardingState {
         task_id: TaskId,
     ) -> Result<(), Error> {
         let store = self.lock_run().await?;
-        let stage = Box::pin(self.insert_run(&store, command, task_id)).await;
-        Box::pin(self.accept_run(store, stage, false)).await
+        let row = Box::pin(self.insert_run(&store, command, task_id)).await;
+        Box::pin(self.accept_run(store, row, false)).await
     }
 
     #[allow(dead_code)]
@@ -416,8 +451,8 @@ impl ReshardingState {
         task_id: TaskId,
     ) -> Result<(), Error> {
         let store = self.lock_run().await?;
-        let stage = Box::pin(self.load_run(&store, command, task_id)).await;
-        Box::pin(self.accept_run(store, stage, true)).await
+        let row = Box::pin(self.load_run(&store, command, task_id)).await;
+        Box::pin(self.accept_run(store, row, true)).await
     }
 
     async fn lock_run(&self) -> Result<ReshardingStore, Error> {
@@ -429,7 +464,7 @@ impl ReshardingState {
         store: &ReshardingStore,
         command: ReshardingCommand,
         task_id: TaskId,
-    ) -> Result<Stage, Error> {
+    ) -> Result<AcceptedRow, Error> {
         let key = store.key();
         if let Some(record) = store.load().await? {
             return Err(Error::ReshardingExists {
@@ -444,10 +479,11 @@ impl ReshardingState {
         if existing != 0 && existing != self.source.shards().len() {
             return Err(Error::ReshardingSlotsPartial(self.slot_name.clone()));
         }
+        let id = ReshardingId::generate();
         let stage = Stage::Initializing;
         store
             .insert(&ReshardingRecord {
-                id: ReshardingId::generate(),
+                id,
                 key: key.clone(),
                 command,
                 slot_name: self.slot_name.clone(),
@@ -459,7 +495,7 @@ impl ReshardingState {
                 resumed_at: None,
             })
             .await?;
-        Ok(stage)
+        Ok(AcceptedRow { id, stage })
     }
 
     async fn load_run(
@@ -467,7 +503,7 @@ impl ReshardingState {
         store: &ReshardingStore,
         command: ReshardingCommand,
         task_id: TaskId,
-    ) -> Result<Stage, Error> {
+    ) -> Result<AcceptedRow, Error> {
         let key = store.key();
         let record = store
             .load()
@@ -481,20 +517,27 @@ impl ReshardingState {
             });
         }
         store
-            .resume(&TaskOwner::current(task_id), std::time::SystemTime::now())
+            .resume(
+                record.id,
+                &TaskOwner::current(task_id),
+                std::time::SystemTime::now(),
+            )
             .await?;
-        Ok(record.stage)
+        Ok(AcceptedRow {
+            id: record.id,
+            stage: record.stage,
+        })
     }
 
     async fn accept_run(
         &self,
         store: ReshardingStore,
-        stage: Result<Stage, Error>,
+        row: Result<AcceptedRow, Error>,
         resumed: bool,
     ) -> Result<(), Error> {
         let key = store.key();
-        let stage = match stage {
-            Ok(stage) => stage,
+        let AcceptedRow { id, stage } = match row {
+            Ok(row) => row,
             Err(err) => {
                 warn!("resharding {key}: refused to start: {err}");
                 unlock(&store).await;
@@ -509,6 +552,7 @@ impl ReshardingState {
 
         self.inner.lock().run = Some(RecordedRun {
             store: Arc::new(store),
+            id,
             stage,
             resumed,
             keep_on_stop: resumed || !self.cleanup_on_cancel,
@@ -557,11 +601,11 @@ impl ReshardingState {
     }
 
     pub(crate) async fn set_stage(&self, stage: Stage) -> Result<(), Error> {
-        let store = match &self.inner.lock().run {
-            Some(run) if stage > run.stage => run.store.clone(),
+        let row = match &self.inner.lock().run {
+            Some(run) if stage > run.stage => run.row(),
             _ => return Ok(()),
         };
-        store.set_stage(stage).await?;
+        row.store.set_stage(row.id, stage).await?;
         if let Some(run) = self.inner.lock().run.as_mut() {
             run.stage = stage;
         }
@@ -589,29 +633,29 @@ impl ReshardingState {
             }
             return Ok(());
         }
-        close(run.map(|run| run.store), slots, origins).await
+        close(run.map(RecordedRun::into_row), slots, origins).await
     }
 
     pub(crate) async fn complete_run(&self) -> Result<(), Error> {
-        let (slots, origins, store) = {
+        let (slots, origins, run) = {
             let mut inner = self.inner.lock();
             (
                 inner.take_slots(),
                 inner.take_origins(),
-                inner.run.take().map(|run| run.store),
+                inner.run.take().map(RecordedRun::into_row),
             )
         };
-        close(store, slots, origins).await
+        close(run, slots, origins).await
     }
 
     pub(crate) async fn finish_run(&self) -> Result<(), Error> {
-        let store = self.inner.lock().run.as_ref().map(|run| run.store.clone());
-        let Some(store) = store else {
+        let row = self.inner.lock().run.as_ref().map(RecordedRun::row);
+        let Some(row) = row else {
             return Ok(());
         };
-        delete_row(&store).await?;
+        delete_row(&row.store, row.id).await?;
         self.inner.lock().run = None;
-        unlock(&store).await;
+        unlock(&row.store).await;
         Ok(())
     }
 
@@ -661,7 +705,7 @@ impl ReshardingState {
                 .map(|number| (number, permanent_slot_name(&record.slot_name, number)))
                 .collect();
             let origins = self.origins_for(names).await?;
-            remove_run(&store, slots, origins).await?;
+            remove_run(&store, record.id, slots, origins).await?;
             Ok(record)
         }
         .await;
@@ -709,32 +753,33 @@ async fn remove_objects(slots: Slots, origins: Origins) -> Result<(), Error> {
     slots.await?.and(origins.await?)
 }
 
-async fn remove_run(store: &ReshardingStore, slots: Slots, origins: Origins) -> Result<(), Error> {
-    remove_objects(slots, origins).await?;
-    delete_row(store).await
-}
-
-async fn close(
-    store: Option<Arc<ReshardingStore>>,
+async fn remove_run(
+    store: &ReshardingStore,
+    id: ReshardingId,
     slots: Slots,
     origins: Origins,
 ) -> Result<(), Error> {
-    let Some(store) = store else {
+    remove_objects(slots, origins).await?;
+    delete_row(store, id).await
+}
+
+async fn close(run: Option<RunRow>, slots: Slots, origins: Origins) -> Result<(), Error> {
+    let Some(run) = run else {
         return remove_objects(slots, origins).await;
     };
-    let result = remove_run(&store, slots, origins).await;
-    unlock(&store).await;
+    let result = remove_run(&run.store, run.id, slots, origins).await;
+    unlock(&run.store).await;
     result
 }
 
-async fn delete_row(store: &ReshardingStore) -> Result<(), Error> {
-    if let Err(err) = store.delete().await {
+async fn delete_row(store: &ReshardingStore, id: ReshardingId) -> Result<(), Error> {
+    if let Err(err) = store.delete(id).await {
         warn!(
             "resharding {}: state connection failed, reconnecting: {err}",
             store.key()
         );
         store.reconnect().await?;
-        store.delete().await?;
+        store.delete(id).await?;
     }
     Ok(())
 }

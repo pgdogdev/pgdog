@@ -4,12 +4,12 @@ use tracing::info;
 
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
-use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
+use pgdog_stats::CommandKind;
 
 use super::options::{Options, RunMode};
 use super::prelude::*;
-use super::reshard::abort;
+use super::reshard::check_abort;
 
 pub(crate) struct CopyData {
     pub(crate) from_database: String,
@@ -76,12 +76,9 @@ impl Command for CopyData {
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
-            .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
+            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
             .build()?;
-        // W: maybe we check it inside the api, not in admin? we duplicate right now it.
-        if self.mode == RunMode::Abort {
-            return abort(state, CommandKind::Reshard, self.replication_slot.clone()).await;
-        }
+        check_abort!(self, state, CommandKind::Reshard);
         info!(
             r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
             self.from_database, self.to_database, self.publication, self.tables_only
@@ -157,7 +154,9 @@ mod test {
             (
                 "copy_data a b pub slot with (cleanup_on_cancel false)",
                 Some("slot"),
-                RunMode::NoCleanup,
+                RunMode::Run {
+                    cleanup_on_cancel: false,
+                },
             ),
             ("copy_data a b pub (abort)", None, RunMode::Abort),
         ] {

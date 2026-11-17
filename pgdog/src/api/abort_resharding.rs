@@ -1,11 +1,10 @@
-use pgdog_stats::{AbortReshardingDefinition, TaskDefinition, TaskStatus};
+use pgdog_stats::{AbortReshardingDefinition, CommandKind, TaskDefinition, TaskStatus};
 use tracing::info;
 
 use crate::api::Task;
 use crate::api::task::TaskContext;
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::CommandKind;
 
 #[derive(Debug)]
 pub(crate) struct AbortReshardingTask {
@@ -37,7 +36,7 @@ impl Task for AbortReshardingTask {
     fn definition(&self) -> impl Into<TaskDefinition> {
         AbortReshardingDefinition {
             databases: self.state.databases(),
-            command: self.command.to_string(),
+            command: self.command,
         }
     }
 

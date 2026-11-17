@@ -10,12 +10,11 @@ use crate::api::task::TaskError;
 use crate::api::{ReshardingError, run_task};
 use crate::backend::databases::databases;
 use crate::backend::replication::logical::Error::ReplicationAborted;
-use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::comms::comms;
 use crate::frontend::router::cli::RouterCli;
-use pgdog_stats::Databases;
+use pgdog_stats::{CommandKind, Databases};
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]

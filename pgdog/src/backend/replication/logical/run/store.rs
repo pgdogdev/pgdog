@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use pgdog_stats::{Databases, InstanceId};
+use pgdog_stats::{Databases, InstanceId, ReshardingId};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
@@ -13,7 +13,7 @@ use super::queries::{
 };
 use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
-use crate::backend::{Server, pool::Address};
+use crate::backend::{Error as BackendError, Server, pool::Address};
 use crate::net::{DataRow, Format};
 use crate::util::instance_id;
 
@@ -23,7 +23,7 @@ const RELOCK_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 pub(crate) struct ReshardingStore {
-    server: Mutex<Server>,
+    server: Mutex<Option<Server>>,
     addr: Address,
     key: ReshardingKey,
 }
@@ -36,7 +36,7 @@ impl ReshardingStore {
         }
 
         Ok(Self {
-            server: Mutex::new(server),
+            server: Mutex::new(Some(server)),
             addr: addr.clone(),
             key,
         })
@@ -44,14 +44,16 @@ impl ReshardingStore {
 
     pub(crate) async fn reconnect(&self) -> Result<(), Error> {
         let mut server = self.server.lock().await;
-        *server = connect_session(&self.addr).await?;
+        *server = None;
+        let mut session = connect_session(&self.addr).await?;
         for _ in 0..RELOCK_ATTEMPTS {
-            if try_lock(&mut server, &self.key).await? {
+            if try_lock(&mut session, &self.key).await? {
+                *server = Some(session);
                 return Ok(());
             }
             tokio::time::sleep(RELOCK_DELAY).await;
         }
-        Err(locked_error(&mut server, &self.key).await)
+        Err(locked_error(&mut session, &self.key).await)
     }
 
     pub(crate) fn key(&self) -> &ReshardingKey {
@@ -63,36 +65,40 @@ impl ReshardingStore {
     }
 
     pub(crate) async fn load(&self) -> Result<Option<ReshardingRecord>, Error> {
-        Self::read(&mut *self.server.lock().await, &self.key).await
+        Self::read(session(&mut *self.server.lock().await)?, &self.key).await
     }
 
     pub(crate) async fn insert(&self, row: &ReshardingRecord) -> Result<(), Error> {
         self.execute(InsertRow::request(row)).await
     }
 
-    pub(crate) async fn set_stage(&self, stage: Stage) -> Result<(), Error> {
-        self.execute(UpdateStage::request(StageUpdate {
-            key: &self.key,
-            stage,
-        }))
-        .await
+    pub(crate) async fn set_stage(&self, id: ReshardingId, stage: Stage) -> Result<(), Error> {
+        self.execute(UpdateStage::request(StageUpdate { id, stage }))
+            .await
     }
 
     pub(crate) async fn resume(
         &self,
+        id: ReshardingId,
         owner: &TaskOwner,
         resumed_at: SystemTime,
     ) -> Result<(), Error> {
         self.execute(ResumeRow::request(ResumeUpdate {
-            key: &self.key,
+            id,
             owner,
             resumed_at,
         }))
         .await
     }
 
-    pub(crate) async fn delete(&self) -> Result<(), Error> {
-        self.execute(DeleteRow::request(&self.key)).await
+    pub(crate) async fn delete(&self, id: ReshardingId) -> Result<(), Error> {
+        self.execute(DeleteRow::request(id)).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn clear(&self) -> Result<(), Error> {
+        self.execute(super::queries::DeleteKey::request(&self.key))
+            .await
     }
 
     pub(crate) async fn heartbeat(&self) -> Result<(), Error> {
@@ -104,7 +110,9 @@ impl ReshardingStore {
     }
 
     async fn execute(&self, request: impl Into<ServerRequest>) -> Result<(), Error> {
-        self.server.lock().await.execute_checked(request).await?;
+        session(&mut *self.server.lock().await)?
+            .execute_checked(request)
+            .await?;
         Ok(())
     }
 
@@ -158,6 +166,12 @@ impl ReshardingStore {
             });
         Ok(owner)
     }
+}
+
+fn session(server: &mut Option<Server>) -> Result<&mut Server, Error> {
+    server
+        .as_mut()
+        .ok_or_else(|| Error::Backend(BackendError::NotConnected))
 }
 
 async fn try_lock(server: &mut Server, key: &ReshardingKey) -> Result<bool, Error> {
@@ -255,8 +269,8 @@ fn millis(row: &DataRow, index: usize, field: &str) -> Result<SystemTime, Error>
 }
 
 #[cfg(test)]
-mod test {
-    use super::super::{ConfigSnapshot, ReshardingCommand, ReshardingId};
+pub(super) mod test {
+    use super::super::{ConfigSnapshot, ReshardingCommand};
     use super::*;
     use crate::backend::server::test::test_server;
 
@@ -265,12 +279,14 @@ mod test {
             .server
             .lock()
             .await
+            .as_mut()
+            .unwrap()
             .fetch_all::<i32>("SELECT pg_backend_pid()")
             .await
             .unwrap()[0]
     }
 
-    fn key(name: &str) -> ReshardingKey {
+    pub(in super::super) fn key(name: &str) -> ReshardingKey {
         ReshardingKey {
             databases: Databases {
                 source: format!("{name}_src"),
@@ -303,7 +319,7 @@ mod test {
             )
     }
 
-    fn row(key: ReshardingKey) -> ReshardingRecord {
+    pub(in super::super) fn row(key: ReshardingKey) -> ReshardingRecord {
         let config: ConfigSnapshot = serde_json::from_str(
             r#"{"source":{"shards":1,"sharded_tables":[],"sharded_mappings":[],"omnisharded_tables":[],"sharded_schemas":[]},
             "destination":{"shards":2,"sharded_tables":[],"sharded_mappings":[],"omnisharded_tables":[],"sharded_schemas":[]}}"#,
@@ -357,10 +373,12 @@ mod test {
             .await
             .unwrap();
         for store in [&first, &second] {
-            store.delete().await.unwrap();
+            store.clear().await.unwrap();
         }
-        first.insert(&row(first_key.clone())).await.unwrap();
-        second.insert(&row(second_key.clone())).await.unwrap();
+        let first_row = row(first_key.clone());
+        let second_row = row(second_key.clone());
+        first.insert(&first_row).await.unwrap();
+        second.insert(&second_row).await.unwrap();
 
         let listed = listed_for(&first_key)
             .await
@@ -369,9 +387,9 @@ mod test {
             .collect::<Vec<_>>();
         assert_eq!(listed, [second_key, first_key]);
 
-        first.delete().await.unwrap();
+        first.delete(first_row.id).await.unwrap();
         assert!(second.load().await.unwrap().is_some());
-        second.delete().await.unwrap();
+        second.delete(second_row.id).await.unwrap();
     }
 
     #[tokio::test]
@@ -385,7 +403,7 @@ mod test {
         let old = ReshardingStore::open(&addr, old_key.clone()).await.unwrap();
         let new = ReshardingStore::open(&addr, new_key.clone()).await.unwrap();
         for store in [&old, &new] {
-            store.delete().await.unwrap();
+            store.clear().await.unwrap();
         }
         old.insert(&row(old_key.clone())).await.unwrap();
         new.insert(&ReshardingRecord {
@@ -404,8 +422,8 @@ mod test {
         );
         assert_eq!(listed[1].as_ref().unwrap().key, old_key);
 
-        old.delete().await.unwrap();
-        new.delete().await.unwrap();
+        old.clear().await.unwrap();
+        new.clear().await.unwrap();
     }
 
     #[tokio::test]
@@ -444,11 +462,11 @@ mod test {
         let key = key("store_rows");
         let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
         let row = row(key.clone());
-        store.delete().await.unwrap();
+        store.clear().await.unwrap();
         store.insert(&row).await.unwrap();
         assert!(store.insert(&row).await.is_err());
 
-        store.set_stage(Stage::Replication).await.unwrap();
+        store.set_stage(row.id, Stage::Replication).await.unwrap();
         let loaded = store.load().await.unwrap().unwrap();
         assert_eq!(loaded.stage, Stage::Replication);
         assert_eq!(
@@ -470,10 +488,38 @@ mod test {
             Some(instance_id().to_owned())
         );
 
-        store.delete().await.unwrap();
+        store.delete(row.id).await.unwrap();
         assert_eq!(store.load().await.unwrap(), None);
         drop(store);
         drop(open_after_drop(&addr, key).await);
+    }
+
+    #[tokio::test]
+    async fn writes_with_an_old_id_keep_the_new_row() {
+        let addr = Address::new_test();
+        let key = key("store_old_id");
+        let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
+        store.clear().await.unwrap();
+        let old = row(key.clone());
+        store.insert(&old).await.unwrap();
+        store.delete(old.id).await.unwrap();
+        let new = row(key.clone());
+        store.insert(&new).await.unwrap();
+
+        store.set_stage(old.id, Stage::Replication).await.unwrap();
+        store
+            .resume(
+                old.id,
+                &TaskOwner::current(pgdog_stats::TaskId::new(9)),
+                now_millis(),
+            )
+            .await
+            .unwrap();
+        store.delete(old.id).await.unwrap();
+        assert_eq!(store.load().await.unwrap(), Some(new.clone()));
+
+        store.delete(new.id).await.unwrap();
+        assert_eq!(store.load().await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -481,8 +527,9 @@ mod test {
         let addr = Address::new_test();
         let key = key("store_loss");
         let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
-        store.delete().await.unwrap();
-        store.insert(&row(key.clone())).await.unwrap();
+        store.clear().await.unwrap();
+        let row = row(key.clone());
+        store.insert(&row).await.unwrap();
 
         let pid = backend_pid(&store).await;
         let mut server = test_server().await;
@@ -491,7 +538,7 @@ mod test {
             .await
             .unwrap();
 
-        assert!(store.set_stage(Stage::Replication).await.is_err());
+        assert!(store.set_stage(row.id, Stage::Replication).await.is_err());
         assert!(store.heartbeat().await.is_err());
         drop(store);
 
@@ -500,7 +547,35 @@ mod test {
             store.load().await.unwrap().unwrap().stage,
             Stage::CopyTables
         );
-        store.delete().await.unwrap();
+        store.delete(row.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_relock_keeps_writes_failing() {
+        let addr = Address::new_test();
+        let key = key("store_relock");
+        let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
+        store.clear().await.unwrap();
+        let row = row(key.clone());
+        store.insert(&row).await.unwrap();
+
+        let pid = backend_pid(&store).await;
+        let mut server = test_server().await;
+        server
+            .execute_checked(format!("SELECT pg_terminate_backend({pid})"))
+            .await
+            .unwrap();
+        let other = open_after_drop(&addr, key.clone()).await;
+
+        assert!(matches!(
+            store.reconnect().await,
+            Err(Error::ReshardingLocked { .. })
+        ));
+        assert!(store.delete(row.id).await.is_err());
+        assert!(store.heartbeat().await.is_err());
+        assert_eq!(other.load().await.unwrap(), Some(row.clone()));
+
+        other.delete(row.id).await.unwrap();
     }
 
     #[tokio::test]
@@ -508,13 +583,13 @@ mod test {
         let addr = Address::new_test();
         let key = key("store_resume");
         let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
-        store.delete().await.unwrap();
+        store.clear().await.unwrap();
         let row = row(key.clone());
         store.insert(&row).await.unwrap();
 
         let owner = TaskOwner::current(pgdog_stats::TaskId::new(8));
         let resumed_at = now_millis();
-        store.resume(&owner, resumed_at).await.unwrap();
+        store.resume(row.id, &owner, resumed_at).await.unwrap();
         assert_eq!(
             store.load().await.unwrap().unwrap(),
             ReshardingRecord {
@@ -524,6 +599,6 @@ mod test {
             }
         );
 
-        store.delete().await.unwrap();
+        store.delete(row.id).await.unwrap();
     }
 }

@@ -5,12 +5,12 @@ use tracing::info;
 use crate::api::replication::ReplicationTask;
 use crate::api::run_task;
 use crate::api::schema_sync::SchemaSyncTask;
-use crate::backend::replication::logical::run::CommandKind;
 use crate::backend::replication::resharding_state::ReshardingState;
+use pgdog_stats::CommandKind;
 
 use super::options::{Options, RunMode};
 use super::prelude::*;
-use super::reshard::abort;
+use super::reshard::check_abort;
 
 pub(crate) struct Replicate {
     pub(crate) from_database: String,
@@ -65,11 +65,9 @@ impl Command for Replicate {
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
-            .cleanup_on_cancel(self.mode != RunMode::NoCleanup)
+            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
             .build()?;
-        if self.mode == RunMode::Abort {
-            return abort(state, CommandKind::Replicate, self.replication_slot.clone()).await;
-        }
+        check_abort!(self, state, CommandKind::Replicate);
         info!(
             r#"replicate "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
@@ -106,11 +104,19 @@ mod test {
     #[test]
     fn parses_slot_and_run_mode() {
         for (sql, slot, mode) in [
-            ("replicate a b pub", None, RunMode::WithCleanup),
+            (
+                "replicate a b pub",
+                None,
+                RunMode::Run {
+                    cleanup_on_cancel: true,
+                },
+            ),
             (
                 "replicate a b pub slot with (cleanup_on_cancel false)",
                 Some("slot"),
-                RunMode::NoCleanup,
+                RunMode::Run {
+                    cleanup_on_cancel: false,
+                },
             ),
             ("replicate a b pub (abort)", None, RunMode::Abort),
         ] {

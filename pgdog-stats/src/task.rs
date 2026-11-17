@@ -409,7 +409,7 @@ pub struct RatioProgress {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{Lsn, MissedRows, SyncState};
+    use crate::{CommandKind, Lsn, MissedRows, SyncState};
     use pgdog_config::CopyFormat;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -490,7 +490,7 @@ mod test {
             .into(),
             AbortReshardingDefinition {
                 databases: databases(),
-                command: "reshard".into(),
+                command: CommandKind::Reshard,
             }
             .into(),
         ]
@@ -887,7 +887,7 @@ mod test {
     fn test_abort_resharding_definition() {
         let definition = TaskDefinition::from(AbortReshardingDefinition {
             databases: databases(),
-            command: "reshard".into(),
+            command: CommandKind::Reshard,
         });
         assert_eq!(definition.to_string(), "abort reshard prod -> prod_sharded");
 

@@ -53,27 +53,22 @@ const SHOW_RESHARDING_LAYOUT: &[(&str, &str)] = &[
     ("publication", "TEXT"),
     ("stage", "TEXT"),
     ("state", "TEXT"),
-    ("owner", "TEXT"),
-    ("last_task", "TEXT"),
+    ("instance", "TEXT"),
+    ("task_id", "TEXT"),
     ("replication_slot", "TEXT"),
-    ("slots", "TEXT"),
-    ("origins", "TEXT"),
-    ("config", "TEXT"),
     ("started_at", "TEXT"),
     ("resumed_at", "TEXT"),
 ];
 
-const RESHARDING_COLUMNS: [&str; 7] = [
+const RESHARDING_COLUMNS: [&str; 5] = [
     "command",
     "publication",
     "state",
     "replication_slot",
-    "slots",
-    "origins",
-    "config",
+    "task_id",
 ];
 
-async fn show_resharding(admin: &Pool<Postgres>) -> Vec<Vec<String>> {
+async fn show_resharding(admin: &Pool<Postgres>) -> Vec<Vec<Option<String>>> {
     let rows = admin.fetch_all("SHOW RESHARDING").await.unwrap();
     if !rows.is_empty() {
         assert_layout(&rows, SHOW_RESHARDING_LAYOUT);
@@ -86,14 +81,20 @@ async fn show_resharding(admin: &Pool<Postgres>) -> Vec<Vec<String>> {
         .map(|row| {
             RESHARDING_COLUMNS
                 .iter()
-                .map(|column| row.get::<String, _>(*column))
+                .map(|column| row.get::<Option<String>, _>(*column))
                 .collect()
         })
         .collect()
 }
 
-fn complete(count: &str) -> bool {
-    matches!(count.split_once('/'), Some((present, expected)) if present == expected && present != "0")
+fn resharding_row(state: &str, task_id: Option<i64>) -> Vec<Option<String>> {
+    vec![
+        Some("replicate".into()),
+        Some(TEST_PUB.into()),
+        Some(state.into()),
+        Some(SLOT.into()),
+        task_id.map(|id| id.to_string()),
+    ]
 }
 
 #[tokio::test]
@@ -133,18 +134,10 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
         let running = poll("SHOW RESHARDING to list the running resharding", || async {
             fail_if_task_errored(&admin, task_id).await;
             let rows = show_resharding(&admin).await;
-            (rows.len() == 1 && complete(&rows[0][4]) && complete(&rows[0][5])).then_some(rows)
+            (rows.len() == 1).then_some(rows)
         })
         .await;
-        assert_eq!(
-            running[0]
-                .iter()
-                .enumerate()
-                .filter(|(column, _)| ![4, 5].contains(column))
-                .map(|(_, value)| value.as_str())
-                .collect::<Vec<_>>(),
-            ["replicate", TEST_PUB, "running", SLOT, "ok"]
-        );
+        assert_eq!(running, [resharding_row("running", Some(task_id))]);
 
         let wrong_command = r#"resharding command is "replicate", not "reshard""#;
         for (sql, expected) in [
@@ -190,13 +183,10 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
         assert_eq!(test_slot_names(&direct).await, [format!("{SLOT}_0")]);
         let paused = poll("SHOW RESHARDING to list the paused resharding", || async {
             let rows = show_resharding(&admin).await;
-            (rows.len() == 1 && rows[0][2] == "paused").then_some(rows)
+            (rows.len() == 1 && rows[0][2].as_deref() == Some("paused")).then_some(rows)
         })
         .await;
-        assert_eq!(
-            paused,
-            [["replicate", TEST_PUB, "paused", SLOT, "1/1", "2/2", "ok"]]
-        );
+        assert_eq!(paused, [resharding_row("paused", None)]);
 
         let abort_id = run_task_command(&admin, &abort_slot).await;
         wait_for_task(&admin, "abort task listed", |task| {
@@ -206,7 +196,10 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
         wait_for_task_status(&admin, abort_id, TaskProgress::Finished).await;
 
         assert_eq!(resharding_records().await, 0);
-        assert_eq!(show_resharding(&admin).await, Vec::<Vec<String>>::new());
+        assert_eq!(
+            show_resharding(&admin).await,
+            Vec::<Vec<Option<String>>>::new()
+        );
         assert_eq!(test_slot_names(&direct).await, Vec::<String>::new());
         assert_eq!(origin_count("shard_0").await, 0);
         assert_eq!(origin_count("shard_1").await, 0);

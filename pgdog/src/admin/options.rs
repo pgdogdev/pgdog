@@ -2,12 +2,24 @@
 
 use super::error::Error;
 
-// W: maybe it should have 2 variants and the cleanup as a separate flag?
+/// What a resharding admin command does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunMode {
-    WithCleanup,
-    NoCleanup,
+    /// Start a run. With `cleanup_on_cancel` false, a stop pauses it.
+    Run { cleanup_on_cancel: bool },
+    /// Abort the unfinished run with the same key.
     Abort,
+}
+
+impl RunMode {
+    pub(crate) fn cleanup_on_cancel(self) -> bool {
+        !matches!(
+            self,
+            Self::Run {
+                cleanup_on_cancel: false
+            }
+        )
+    }
 }
 
 /// Options after a command's positional arguments. Each command takes the
@@ -80,8 +92,12 @@ impl<'a> Options<'a> {
             return Ok(RunMode::Abort);
         }
         match cleanup_on_cancel {
-            None | Some(None) | Some(Some("true" | "on")) => Ok(RunMode::WithCleanup),
-            Some(Some("false" | "off")) => Ok(RunMode::NoCleanup),
+            None | Some(None) | Some(Some("true" | "on")) => Ok(RunMode::Run {
+                cleanup_on_cancel: true,
+            }),
+            Some(Some("false" | "off")) => Ok(RunMode::Run {
+                cleanup_on_cancel: false,
+            }),
             Some(Some(_)) => Err(Error::InvalidOption("cleanup_on_cancel".into())),
         }
     }
@@ -132,27 +148,25 @@ mod test {
         options.finish().unwrap();
     }
 
+    const CLEANUP: RunMode = RunMode::Run {
+        cleanup_on_cancel: true,
+    };
+    const PAUSE: RunMode = RunMode::Run {
+        cleanup_on_cancel: false,
+    };
+
     #[test]
     fn parses_run_mode() {
         for (sql, mode) in [
-            ("reshard a b", RunMode::WithCleanup),
-            ("reshard a b ()", RunMode::WithCleanup),
-            ("reshard a b (cleanup_on_cancel)", RunMode::WithCleanup),
-            ("reshard a b (cleanup_on_cancel true)", RunMode::WithCleanup),
-            (
-                "reshard a b (cleanup_on_cancel 'true')",
-                RunMode::WithCleanup,
-            ),
-            ("reshard a b (cleanup_on_cancel on)", RunMode::WithCleanup),
-            ("reshard a b (cleanup_on_cancel false)", RunMode::NoCleanup),
-            (
-                "reshard a b with (cleanup_on_cancel off)",
-                RunMode::NoCleanup,
-            ),
-            (
-                "reshard a b (cleanup_on_cancel 'false')",
-                RunMode::NoCleanup,
-            ),
+            ("reshard a b", CLEANUP),
+            ("reshard a b ()", CLEANUP),
+            ("reshard a b (cleanup_on_cancel)", CLEANUP),
+            ("reshard a b (cleanup_on_cancel true)", CLEANUP),
+            ("reshard a b (cleanup_on_cancel 'true')", CLEANUP),
+            ("reshard a b (cleanup_on_cancel on)", CLEANUP),
+            ("reshard a b (cleanup_on_cancel false)", PAUSE),
+            ("reshard a b with (cleanup_on_cancel off)", PAUSE),
+            ("reshard a b (cleanup_on_cancel 'false')", PAUSE),
             ("reshard a b (abort)", RunMode::Abort),
         ] {
             let (_, mut options) = Options::parse(sql).unwrap();
@@ -186,7 +200,7 @@ mod test {
 
         let (_, mut options) =
             Options::parse("reshard a b (cleanup_on_cancel false, other)").unwrap();
-        assert_eq!(options.run_mode().unwrap(), RunMode::NoCleanup);
+        assert_eq!(options.run_mode().unwrap(), PAUSE);
         assert!(matches!(options.finish(), Err(Error::InvalidOption(n)) if n == "other"));
     }
 

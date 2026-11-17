@@ -3,13 +3,12 @@ use std::time::SystemTime;
 use chrono::{DateTime, Local};
 
 use crate::backend::replication::logical::run::scan::{
-    ReshardingReport, ReshardingScan, count_text, scan,
+    ReshardingReport, ReshardingScan, RunState, scan,
 };
 use crate::util::format_time;
 
 use super::prelude::*;
 
-// W: do we have integration test for it in rust/admin?
 pub(crate) struct ShowResharding;
 
 #[async_trait]
@@ -30,15 +29,9 @@ impl Command for ShowResharding {
             Field::text("publication"),
             Field::text("stage"),
             Field::text("state"),
-            Field::text("owner"),
-            // W: what is it? improve the name or remove
-            Field::text("last_task"),
+            Field::text("instance"),
+            Field::text("task_id"),
             Field::text("replication_slot"),
-            // W: there is no point in counters
-            Field::text("slots"),
-            Field::text("origins"),
-            // W: remove - we have the tables directly, let's just preserve the host/shard to refer to
-            Field::text("config"),
             Field::text("started_at"),
             Field::text("resumed_at"),
         ]);
@@ -74,12 +67,9 @@ fn found_row(report: &ReshardingReport) -> DataRow {
         .add(record.key.publication.as_str())
         .add(record.stage.to_string())
         .add(report.state.to_string())
-        .add(report.state.owner())
-        .add(record.owner.to_string())
+        .add(record.owner.instance_id.to_string())
+        .add(matches!(report.state, RunState::Running).then(|| record.owner.task_id.to_string()))
         .add(record.slot_name.as_str())
-        .add(count_text(report.slots))
-        .add(count_text(report.origins))
-        .add(report.config.to_string())
         .add(local_time(record.started_at))
         .add(record.resumed_at.map(local_time));
     row
@@ -99,9 +89,6 @@ fn problem_row(
         .add(publication)
         .add(none)
         .add(state)
-        .add(none)
-        .add(none)
-        .add(none)
         .add(none)
         .add(none)
         .add(none)

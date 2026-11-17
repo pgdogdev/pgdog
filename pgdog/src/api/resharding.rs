@@ -14,9 +14,9 @@ use crate::api::replication::{CutoverMode, ReplicationTask};
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
-use crate::api::{ReshardingError, Task, run_task, tasks_storage};
+use crate::api::{ReshardingError, Task, run_task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::{ActiveRun, ReshardingCommand};
+use crate::backend::replication::logical::run::{LockWatchdog, ReshardingCommand};
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -73,9 +73,7 @@ impl Task for ReshardTask {
         let mut state = self.state;
         let root_id = ctx.root_id();
         state.start_run(command, root_id).await?;
-        let _active = ActiveRun::start(&state, move || {
-            tasks_storage().cancel_task(root_id);
-        });
+        let _watchdog = LockWatchdog::start(&state, root_id);
         let schema_sync = SchemaSyncTask::builder()
             .publication_tables_only(self.tables_only)
             .databases(state.databases())

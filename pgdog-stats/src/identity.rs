@@ -40,6 +40,19 @@ pub fn run_id() -> RunId {
     *RUN_ID
 }
 
+/// Identifier of one resharding run, kept across its pauses and resumes.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Display, FromStr, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(transparent)]
+pub struct ReshardingId(Uuid);
+
+impl ReshardingId {
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

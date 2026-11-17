@@ -3,9 +3,8 @@ use std::time::SystemTime;
 
 use derive_more::{Display, FromStr, FromStrError};
 
-use pgdog_stats::{Databases, InstanceId, RunId, TaskId, run_id};
+use pgdog_stats::{CommandKind, Databases, InstanceId, ReshardingId, RunId, TaskId, run_id};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use super::Error;
 use super::publisher::{Permanent, ReplicationSlot};
@@ -22,7 +21,7 @@ pub(crate) mod watchdog;
 
 pub(crate) use snapshot::ConfigSnapshot;
 pub(crate) use store::ReshardingStore;
-pub(crate) use watchdog::ActiveRun;
+pub(crate) use watchdog::LockWatchdog;
 
 pub(crate) async fn state_address(destination: &Cluster) -> Result<Address, Error> {
     Ok(destination
@@ -82,13 +81,6 @@ impl ReshardingCommand {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
-#[display(rename_all = "snake_case")]
-pub(crate) enum CommandKind {
-    Reshard,
-    Replicate,
-}
-
 /// The last known stage of the resharding run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Display, FromStr)]
 #[display(rename_all = "snake_case")]
@@ -102,16 +94,6 @@ pub(crate) enum Stage {
 
 fn format_error(err: FromStrError) -> Error {
     Error::ReshardingFormat(err.to_string())
-}
-
-// W: move to pgdog-stats
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Display, FromStr)]
-pub(crate) struct ReshardingId(Uuid);
-
-impl ReshardingId {
-    pub(crate) fn generate() -> Self {
-        Self(Uuid::now_v7())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Display)]

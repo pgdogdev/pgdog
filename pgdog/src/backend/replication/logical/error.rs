@@ -10,13 +10,14 @@ use crate::{
     net::ErrorResponse,
 };
 
-use super::run::CommandKind;
 use super::run::snapshot::ConfigMismatch;
+use pgdog_stats::CommandKind;
 
 fn abort_hint(command: CommandKind) -> &'static str {
     match command {
         CommandKind::Reshard => "abort it with WITH (abort) or data-sync --abort",
         CommandKind::Replicate => "abort it with REPLICATE ... WITH (abort)",
+        CommandKind::Unknown => "abort it with the command that started it, WITH (abort)",
     }
 }
 
