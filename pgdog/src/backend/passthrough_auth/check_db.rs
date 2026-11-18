@@ -5,14 +5,15 @@ use std::time::Duration;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use pgdog_config::Config;
+use pgdog_config::Role;
 use pgdog_config::User;
 use pgdog_config::users::PasswordKind;
 use tokio::sync::OnceCell;
 use tracing::error;
 
-use crate::backend::Cluster;
-use crate::backend::pool::Request;
+use crate::backend::pool::Error as PoolError;
 use crate::backend::schema::SchemaCache;
+use crate::backend::{Cluster, ConnectReason, DisconnectReason};
 
 use crate::config::config;
 use crate::util::safe_timeout;
@@ -138,24 +139,38 @@ async fn check_password(user: &User, config: &Config) -> Result<bool, Error> {
         return Ok(false);
     };
 
-    // Only launch the pools and try to connect.
-    // Don't fetch schema or gate access to the cluster in any way.
-    cluster.launch_pools();
+    let mut pools = cluster
+        .shards()
+        .first()
+        .expect("cluster to have at least one shard")
+        .pools_with_roles();
+    pools.sort_by_key(|(role, _)| *role != Role::Primary);
 
-    // A connection checkout is sufficient, the pool can only
-    // return a connection if it can connect to the database.
+    // Connect directly instead of checking out from a launched pool.
+    // A pool doesn't pass connection errors to waiting clients, so a
+    // rejected password would wait for the full checkout_timeout.
+    let connect = async {
+        for (_, pool) in pools {
+            match pool.standalone(ConnectReason::PassthroughAuth).await {
+                Ok(mut server) => {
+                    server.disconnect_reason(DisconnectReason::CredentialsCheck);
+                    return true;
+                }
+                // Replicas share the primary's roles and would reject it too.
+                Err(PoolError::ServerAuth) => return false,
+                Err(_) => continue,
+            }
+        }
+        false
+    };
+
     match safe_timeout(
         Duration::from_millis(config.general.checkout_timeout),
-        cluster
-            .shards()
-            .iter()
-            .next()
-            .expect("cluster to have at least one shard")
-            .primary_or_replica(&Request::default()),
+        connect,
     )
     .await
     {
-        Err(_) | Ok(Err(_)) => {
+        Err(_) | Ok(false) => {
             error!(
                 r#"user "{}" could not connect to database "{}" to validate passthrough auth"#,
                 cluster.user(),
@@ -164,6 +179,6 @@ async fn check_password(user: &User, config: &Config) -> Result<bool, Error> {
             Ok(false)
         }
 
-        Ok(_) => Ok(true),
+        Ok(true) => Ok(true),
     }
 }
