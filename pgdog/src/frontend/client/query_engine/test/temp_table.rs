@@ -179,3 +179,63 @@ async fn test_discard_temp_commit_releases_pin() {
     assert!(!client.backend_locked());
     assert!(!client.backend_connected());
 }
+
+#[tokio::test]
+async fn test_temp_tables_from_queries_lock_client() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    for query in [
+        "CREATE TEMP TABLE foo AS SELECT 1 AS id",
+        "SELECT 1 AS id INTO TEMP foo",
+        "SELECT 1 AS id INTO TEMPORARY TABLE foo",
+    ] {
+        client.send_simple(Query::new(query)).await;
+        client.read_until('Z').await.unwrap();
+        assert!(client.backend_locked(), "{query}");
+
+        client.send_simple(Query::new("DROP TABLE foo")).await;
+        client.read_until('Z').await.unwrap();
+        assert!(!client.backend_locked(), "{query}");
+    }
+}
+
+#[tokio::test]
+async fn test_temp_table_as_on_commit_drop() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+    client
+        .send_simple(Query::new(
+            "CREATE TEMP TABLE foo ON COMMIT DROP AS SELECT 1 AS id",
+        ))
+        .await;
+    client.read_until('Z').await.unwrap();
+    assert!(client.backend_locked());
+
+    client.send_simple(Query::new("COMMIT")).await;
+    client.read_until('Z').await.unwrap();
+    assert!(!client.backend_locked());
+}
+
+#[tokio::test]
+async fn test_select_into_permanent_table_does_not_lock_client() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("DROP TABLE IF EXISTS test_select_into"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send_simple(Query::new("SELECT 1 AS id INTO test_select_into"))
+        .await;
+    client.read_until('Z').await.unwrap();
+    assert!(!client.backend_locked());
+
+    client
+        .send_simple(Query::new("DROP TABLE test_select_into"))
+        .await;
+    client.read_until('Z').await.unwrap();
+    assert!(!client.backend_locked());
+}
