@@ -83,17 +83,9 @@ impl ParameterHints<'_> {
             }
         }
         if let Some(search_path) = self.search_path {
-            match search_path {
-                ParameterValue::String(search_path) => {
-                    let schema = Schema::from(search_path.as_str());
-                    schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
-                }
-                ParameterValue::Tuple(search_paths) => {
-                    for schema in search_paths {
-                        let schema = Schema::from(schema.as_str());
-                        schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
-                    }
-                }
+            for schema in search_path.as_slice() {
+                let schema = Schema::from(schema.as_str());
+                schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
             }
 
             if let Some((shard, schema)) = schema_sharder.get() {

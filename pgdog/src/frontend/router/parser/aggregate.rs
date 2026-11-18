@@ -38,6 +38,10 @@ pub(crate) enum AggregateFunction {
     StddevSamp,
     VarPop,
     VarSamp,
+    BoolAnd,
+    BoolOr,
+    BitAnd,
+    BitOr,
     Unrecognized(String),
 }
 
@@ -53,6 +57,10 @@ impl AggregateFunction {
             "stddev_pop" => Self::StddevPop,
             "variance" | "var_samp" => Self::VarSamp,
             "var_pop" => Self::VarPop,
+            "bool_and" | "every" => Self::BoolAnd,
+            "bool_or" => Self::BoolOr,
+            "bit_and" => Self::BitAnd,
+            "bit_or" => Self::BitOr,
             _ => return None,
         })
     }
@@ -70,6 +78,10 @@ impl fmt::Display for AggregateFunction {
             AggregateFunction::StddevSamp => write!(f, "stddev_samp"),
             AggregateFunction::VarPop => write!(f, "var_pop"),
             AggregateFunction::VarSamp => write!(f, "var_samp"),
+            AggregateFunction::BoolAnd => write!(f, "bool_and"),
+            AggregateFunction::BoolOr => write!(f, "bool_or"),
+            AggregateFunction::BitAnd => write!(f, "bit_and"),
+            AggregateFunction::BitOr => write!(f, "bit_or"),
             AggregateFunction::Unrecognized(s) => f.write_str(s),
         }
     }
@@ -451,6 +463,28 @@ mod test {
         assert!(matches!(avg.function(), AggregateFunction::Avg));
         assert!(count.is_distinct());
         assert!(!avg.is_distinct());
+    }
+
+    #[test]
+    fn test_parse_bool_and_bit_aggregates() {
+        let aggr = parse(
+            "SELECT BOOL_AND(open), EVERY(open), BOOL_OR(open), BIT_AND(flags), BIT_OR(flags) FROM menu",
+        );
+        let functions = aggr
+            .targets()
+            .iter()
+            .map(|target| target.function().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            functions,
+            vec![
+                AggregateFunction::BoolAnd,
+                AggregateFunction::BoolAnd,
+                AggregateFunction::BoolOr,
+                AggregateFunction::BitAnd,
+                AggregateFunction::BitOr,
+            ]
+        );
     }
 
     #[test]

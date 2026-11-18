@@ -10,6 +10,7 @@ use crate::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
+    parameters::is_session_identity,
     state::State,
     util::safe_timeout_from,
 };
@@ -253,6 +254,9 @@ impl QueryEngine {
             }
 
             'E' => {
+                if matches!(self.router.command(), Command::Set { .. }) {
+                    self.set_failed();
+                }
                 self.result_row_counter = 0;
                 if let Some(ref mut state) = self.pending_explain {
                     state.annotated = true;
@@ -262,6 +266,8 @@ impl QueryEngine {
             }
 
             'Z' => {
+                // Before `handle_ready_for_query`, which resets the router.
+                self.record_sets(context.in_transaction());
                 let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
                 self.handle_ready_for_query(context, state, &mut message)
                     .await?;
@@ -435,6 +441,25 @@ impl QueryEngine {
         Ok(())
     }
 
+    /// The server ran the client's SETs, so record them on the server.
+    /// The next client is then synced against what the server actually has.
+    fn record_sets(&mut self, in_transaction: bool) {
+        if let Command::Set { params, .. } = self.router.command() {
+            for param in params {
+                self.backend.record_set(param, in_transaction);
+            }
+        }
+    }
+
+    /// A SET failed. Earlier SETs in the same request may have been rolled back,
+    /// or applied on some shards only, so the recorded state can't be trusted.
+    /// Reset the server when it goes back to the pool.
+    #[cold]
+    #[inline(never)]
+    fn set_failed(&mut self) {
+        self.backend.mark_dirty();
+    }
+
     pub(super) async fn cleanup_backend(
         &mut self,
         context: &mut QueryEngineContext<'_>,
@@ -473,7 +498,11 @@ impl QueryEngine {
             // Update client params with values
             // sent from the server using ParameterStatus(B) messages.
             if !changed_params.is_empty() {
-                for (name, value) in changed_params.iter() {
+                // The client's own SET statements are the source of truth for its identity.
+                for (name, value) in changed_params
+                    .iter()
+                    .filter(|(name, _)| !is_session_identity(name.as_str()))
+                {
                     debug!("setting client's \"{}\" to {}", name, value);
                     context.params.set(name, value.clone());
                 }

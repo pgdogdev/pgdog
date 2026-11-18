@@ -9,7 +9,6 @@ const UNTRACKED_PARAMS: &[&str] = &[
     "server_version",
     "server_encoding",
     "integer_datetimes",
-    "session_authorization",
     "in_hot_standby",
     "pgdog.role",
     "pgdog.shard",

@@ -23,8 +23,8 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             "cross-shard HAVING is unsupported: LIMIT and OFFSET must be integers or parameters",
         ),
         (
-            "SELECT count(*) FROM sharded HAVING bool_or(id > 0)",
-            "unsupported aggregation bool_or: bool_or() is not yet supported",
+            "SELECT count(*) FROM sharded HAVING string_agg(id::text, ',') <> ''",
+            "unsupported aggregation string_agg: string_agg() is not yet supported",
         ),
         (
             "SELECT value FROM sharded GROUP BY value ORDER BY count(*)",

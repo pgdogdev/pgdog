@@ -192,6 +192,44 @@ mod test {
         drop(guard);
     }
 
+    async fn identity(guard: &mut Guard) -> String {
+        let identity: Vec<String> = guard
+            .fetch_all("SELECT session_user || ',' || current_user")
+            .await
+            .unwrap();
+        identity.into_iter().next().expect("one row")
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_dirty_resets_session_identity() {
+        crate::logger();
+        let pool = pool();
+        let role = format!("pgdog_cleanup_role_{}", std::process::id());
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        guard.execute(format!("CREATE ROLE {role}")).await.unwrap();
+        guard.execute(format!("SET ROLE {role}")).await.unwrap();
+        assert_eq!(identity(&mut guard).await, format!("pgdog,{role}"));
+        guard.mark_dirty(true);
+        drop(guard);
+
+        // Our test pool is only 1 connection.
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        assert_eq!(identity(&mut guard).await, "pgdog,pgdog");
+
+        guard
+            .execute(format!("SET SESSION AUTHORIZATION {role}"))
+            .await
+            .unwrap();
+        assert_eq!(identity(&mut guard).await, format!("{role},{role}"));
+        guard.mark_dirty(true);
+        drop(guard);
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        assert_eq!(identity(&mut guard).await, "pgdog,pgdog");
+        guard.execute(format!("DROP ROLE {role}")).await.unwrap();
+    }
+
     #[tokio::test]
     async fn test_cleanup_prepared_statements() {
         crate::logger();

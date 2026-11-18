@@ -18,6 +18,7 @@ use pgdog_postgres_types::{DataType, Error as TypeError};
 pub(crate) use error::Error;
 
 mod avg;
+mod bit;
 mod cmp;
 mod error;
 mod sum;
@@ -100,6 +101,7 @@ impl<'a> Accumulator<'a> {
 #[derive(Debug)]
 enum State {
     Avg(avg::Avg),
+    Bit(bit::Bit),
     Cmp(cmp::Cmp),
     /// Ah ah aaaaaaah
     Count(von::Count),
@@ -124,6 +126,13 @@ impl State {
             (AggregateFunction::Count, false) => Ok(Self::Count(von::Count::new(target.column()))),
             (AggregateFunction::Max, _) => Ok(Self::Cmp(cmp::Cmp::max(target.column()))),
             (AggregateFunction::Min, _) => Ok(Self::Cmp(cmp::Cmp::min(target.column()))),
+            // false < true, so all shards agree when the smallest answer is true
+            // and any shard agrees when the largest one is. DISTINCT changes
+            // nothing for these or the bitwise aggregates.
+            (AggregateFunction::BoolAnd, _) => Ok(Self::Cmp(cmp::Cmp::min(target.column()))),
+            (AggregateFunction::BoolOr, _) => Ok(Self::Cmp(cmp::Cmp::max(target.column()))),
+            (AggregateFunction::BitAnd, _) => Ok(Self::Bit(bit::Bit::and(target.column()))),
+            (AggregateFunction::BitOr, _) => Ok(Self::Bit(bit::Bit::or(target.column()))),
             (AggregateFunction::Sum, false) => Ok(Self::Sum(sum::Sum::new(target.column()))),
             (AggregateFunction::Sum, true) => Err(Error::UnsupportedAggregation {
                 function: String::from("sum"),
@@ -197,6 +206,9 @@ impl State {
                 state.accumulate(value, weight);
                 Ok(())
             }
+            State::Bit(state) => {
+                state.accumulate(row.get_column_checked(state.column, decoder)?.value)
+            }
             State::Cmp(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
@@ -219,6 +231,7 @@ impl State {
     fn finalize(self) -> Result<Datum, Error> {
         match self {
             State::Avg(state) => Ok(state.finalize()?),
+            State::Bit(state) => Ok(state.finalize()),
             State::Cmp(state) => Ok(state.finalize()),
             State::Count(state) => state.finalize().map_err(Into::into),
             State::Sum(state) => Ok(state.finalize()),

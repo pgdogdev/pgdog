@@ -660,6 +660,7 @@ fn test_commit_after_reset_in_transaction_reports_nothing() {
     assert_eq!(reported_timezone(&store), Some("UTC"));
 }
 
+mod identity;
 mod server;
 mod value;
 
