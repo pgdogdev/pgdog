@@ -850,7 +850,7 @@ mod test {
         let address = Address::new_test();
         let origin = origin("test_progress_durable", &address);
         origin.drop_origin().await.unwrap();
-        origin.ensure_exists().await.unwrap();
+        origin.create_origin().await.unwrap();
 
         let mut session = test_server().await;
         origin.setup_session(&mut session).await.unwrap();

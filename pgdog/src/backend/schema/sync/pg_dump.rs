@@ -19,7 +19,6 @@ use regex::Regex;
 use tracing::{info, trace, warn};
 
 use super::SchemaSyncError;
-use crate::backend::replication::logical::run::RESHARDING_TABLE;
 use crate::{
     backend::{self, Cluster, pool::Request, replication::publisher::PublicationTable},
     config::config,
@@ -126,8 +125,6 @@ fn build_pg_dump_command(
     command
         .kill_on_drop(true)
         .arg("--schema-only")
-        .arg("--exclude-table")
-        .arg(table_pattern("pgdog", RESHARDING_TABLE))
         .arg("-h")
         .arg(&addr.host)
         .arg("-p")

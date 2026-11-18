@@ -396,7 +396,7 @@ mod tests {
                 .address(self.server.addr())
                 .shard(0)
                 .build();
-            origin.recreate().await?;
+            origin.recreate_origin().await?;
             let mut guard = slot.get_existing().await?;
             if self.replication.progress().replication_lag.is_some() {
                 return Err("lag was measured before replication started".into());

@@ -43,7 +43,7 @@ async fn failed_table_copy_fails_copy_data_and_cancels_the_other_copies()
         })
         .await?;
         let states = subtree_progress(id);
-        state.cancel_run().await?;
+        state.drop_slots_if_owned().await?;
 
         Ok::<_, Box<dyn std::error::Error>>((outcome, states))
     }
