@@ -23,13 +23,14 @@ use tracing::{error, info, warn};
 use crate::backend::replication::ShardedSchemas;
 use crate::backend::schema::SchemaCache;
 use crate::config::PoolerMode;
+use crate::config::cached::CachedConfig;
 use crate::frontend::PreparedStatements;
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::{Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
-    config::{ConfigAndUsers, ShardedMappingDeprecated, config, load},
+    config::{ConfigAndUsers, ShardedMappingDeprecated, cached_config, config, load},
     net::{messages::FrontendPid, tls},
 };
 pub(crate) use pgdog_stats::User;
@@ -88,7 +89,7 @@ pub(crate) fn replace_databases(new_databases: Databases, reload: bool) -> Resul
 /// Re-create all connections.
 pub(crate) fn reconnect() -> Result<(), Error> {
     let _guard = lock();
-    let config = config();
+    let config = cached_config();
     let databases = from_config(&config);
     replace_databases(databases, false)?;
     Ok(())
@@ -98,7 +99,7 @@ pub(crate) fn reconnect() -> Result<(), Error> {
 /// preserving connections.
 pub(crate) fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
-    let config = config();
+    let config = cached_config();
     let databases = from_config(&config);
     replace_databases(databases, true)?;
     super::passthrough_auth::check_db::reset();
@@ -106,7 +107,7 @@ pub(crate) fn reload_from_existing() -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn reload_from_config(config: &ConfigAndUsers) -> Result<(), Error> {
+pub(crate) fn reload_from_config(config: &CachedConfig) -> Result<(), Error> {
     let databases = from_config(config);
     replace_databases(databases, true)?;
     Ok(())
@@ -114,11 +115,11 @@ pub(crate) fn reload_from_config(config: &ConfigAndUsers) -> Result<(), Error> {
 
 /// Initialize the databases for the first time.
 pub(crate) fn init() -> Result<(), Error> {
-    let config = config();
+    let config = cached_config();
     replace_databases(from_config(&config), false)?;
 
     // Resize query cache
-    Cache::resize(config.config.general.query_cache_limit);
+    Cache::resize(config.as_ref().deref().config.general.query_cache_limit);
 
     // Start two-pc manager.
     let _monitor = Manager::get();
@@ -177,7 +178,7 @@ pub(crate) fn reload(force: bool) -> Result<(), Error> {
     // Load config from disk.
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
-    let databases = from_config(&new_config);
+    let databases = from_config(&cached_config());
 
     // Terminate after checking config for validity.
     if force {
@@ -219,7 +220,7 @@ pub(crate) async fn cutover(source: &str, destination: &str) -> Result<ConfigAnd
         config.users.cutover(source, destination);
 
         let config = crate::config::set(config)?;
-        let databases = from_config(&config);
+        let databases = from_config(&cached_config());
 
         replace_databases(databases, true)?;
 
@@ -473,20 +474,24 @@ fn resolve_table_mapping_deprecated(
 // # Arguments
 //
 // - `user`: `[[users]]` entry in `users.toml`
-// - `config`: all of `pgdog.toml`
+// - `config`: configuration with precomputed collections
 // - `schema_cache`: A cache of database tables, shared between all clusters. This is passed here
 //                   to ensure all clusters share the same schema cache, and to make sure a new one
 //                   is created on each config reload.
 pub(super) fn new_pool(
     user: &crate::config::User,
-    config: &crate::config::Config,
+    config: &CachedConfig,
     schema_cache: SchemaCache,
 ) -> Option<(User, Cluster)> {
-    let omnisharded_tables = config.omnisharded_tables();
-    let sharded_mappings = config.sharded_mappings();
-    let sharded_schemas = config.sharded_schemas();
+    let omnisharded_tables = &config.omnisharded_tables;
+    let sharded_mappings = &config.sharded_mappings;
+    let sharded_schemas = &config.sharded_schemas;
+    let databases = &config.databases;
+    let _virtual_of = config
+        .users
+        .get(&(user.name.clone(), user.database.clone()));
+    let config = &config.deref().config;
     let general = &config.general;
-    let databases = config.databases();
 
     let shards = databases.get(&user.database)?;
 
@@ -515,7 +520,7 @@ pub(super) fn new_pool(
         .sharded_tables
         .iter()
         .filter(|t| t.database == user.database)
-        .map(|t| resolve_sharded_table(t, &sharded_mappings, shard_configs.len()))
+        .map(|t| resolve_sharded_table(t, sharded_mappings, shard_configs.len()))
         .collect();
     let sharded_schemas = sharded_schemas
         .get(&user.database)
@@ -564,7 +569,8 @@ pub(super) fn new_pool(
 }
 
 /// Load databases from config.
-pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
+pub(crate) fn from_config(cached_config: &CachedConfig) -> Databases {
+    let config = cached_config.deref();
     let mut databases = HashMap::new();
     // The schema cache is shared between all databases.
     let schema_cache = SchemaCache::default();
@@ -577,7 +583,7 @@ pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
             user.databases.clear();
             user.database = database;
 
-            if let Some((user, cluster)) = new_pool(&user, &config.config, schema_cache.clone()) {
+            if let Some((user, cluster)) = new_pool(&user, cached_config, schema_cache.clone()) {
                 databases.insert(user, cluster);
             }
         }
@@ -749,13 +755,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         let alice_mirrors = databases.mirrors(("alice", "db1")).unwrap().unwrap_or(&[]);
         let bob_mirrors = databases.mirrors(("bob", "db1")).unwrap().unwrap_or(&[]);
@@ -823,13 +829,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Mirrors should be empty due to user mismatch
         let user1_mirrors = databases.mirrors(("user1", "source_db")).unwrap();
@@ -895,13 +901,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Verify mirror config exists and has custom values
         let mirror_config = databases.mirror_config("source_db", "dest_db");
@@ -973,13 +979,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         let mirror_config = databases.mirror_config("db1", "db2");
         assert!(
@@ -1067,13 +1073,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Check mirror1 config - custom queue, default exposure
         let mirror1_config = databases.mirror_config("primary", "mirror1").unwrap();
@@ -1147,13 +1153,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Should not have precomputed this invalid config
         let mirror_config = databases.mirror_config("source", "dest");
@@ -1202,13 +1208,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config: config.clone(),
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Mirror config should not be precomputed when there are no users
         let mirror_config = databases.mirror_config("source_db", "dest_db");
@@ -1231,13 +1237,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases_partial = from_config(&ConfigAndUsers {
+        let databases_partial = from_config(&CachedConfig::new(ConfigAndUsers {
             config: config.clone(),
             users: users_partial,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Mirror config should not be precomputed when destination has no users
         let mirror_config_partial = databases_partial.mirror_config("source_db", "dest_db");
@@ -1260,13 +1266,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases_dest_only = from_config(&ConfigAndUsers {
+        let databases_dest_only = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users: users_dest_only,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Mirror config should not be precomputed when source has no users
         let mirror_config_dest_only = databases_dest_only.mirror_config("source_db", "dest_db");
@@ -1315,13 +1321,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // User should have pools for all three databases
         assert!(
@@ -1380,13 +1386,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // User should have pools for db1 and db3 only
         assert!(
@@ -1447,13 +1453,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // all_databases should take priority - user gets all 3 databases
         assert!(
@@ -1474,7 +1480,7 @@ mod tests {
 
     #[test]
     fn test_new_pool_returns_none_for_nonexistent_database() {
-        let config = Config::default(); // No databases configured
+        let config = CachedConfig::new(ConfigAndUsers::default()); // No databases configured
 
         let user = crate::config::User {
             name: "test_user".to_string(),
@@ -1522,13 +1528,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         assert!(
             databases.cluster(("single_db_user", "db1")).is_ok(),
@@ -1595,13 +1601,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Admin has all 3 databases
         assert!(databases.cluster(("admin", "db1")).is_ok());
@@ -1646,13 +1652,13 @@ mod tests {
             ..Default::default()
         };
 
-        let databases = from_config(&ConfigAndUsers {
+        let databases = from_config(&CachedConfig::new(ConfigAndUsers {
             config,
             users,
             config_path: std::path::PathBuf::new(),
             users_path: std::path::PathBuf::new(),
             ..Default::default()
-        });
+        }));
 
         // Should only create pool for db1, nonexistent is silently skipped
         assert!(databases.cluster(("test_user", "db1")).is_ok());

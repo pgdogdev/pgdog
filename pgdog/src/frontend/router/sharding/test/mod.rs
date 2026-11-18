@@ -506,6 +506,7 @@ fn make_sharding_schema(
     sharded_mappings: Vec<ShardedMappingDeprecated>,
 ) -> ShardingSchema {
     use crate::backend::databases::from_config;
+    use crate::config::cached::CachedConfig;
     use crate::config::{Config, ConfigAndUsers, Database, Role, User, Users};
     use std::path::PathBuf;
 
@@ -540,13 +541,13 @@ fn make_sharding_schema(
         }],
         ..Default::default()
     };
-    let databases = from_config(&ConfigAndUsers {
+    let databases = from_config(&CachedConfig::new(ConfigAndUsers {
         config,
         users,
         config_path: PathBuf::new(),
         users_path: PathBuf::new(),
         ..Default::default()
-    });
+    }));
     databases
         .cluster(("user", "db"))
         .unwrap()
