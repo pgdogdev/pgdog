@@ -267,9 +267,7 @@ impl QueryEngine {
 
             'Z' => {
                 // Before `handle_ready_for_query`, which resets the router.
-                if matches!(self.router.command(), Command::Set { .. }) {
-                    self.record_sets(context.in_transaction());
-                }
+                self.record_sets(context.in_transaction());
                 let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
                 self.handle_ready_for_query(context, state, &mut message)
                     .await?;
@@ -445,7 +443,6 @@ impl QueryEngine {
 
     /// The server ran the client's SETs, so record them on the server.
     /// The next client is then synced against what the server actually has.
-    #[inline(never)]
     fn record_sets(&mut self, in_transaction: bool) {
         if let Command::Set { params, .. } = self.router.command() {
             for param in params {
