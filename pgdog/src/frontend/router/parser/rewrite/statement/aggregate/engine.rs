@@ -131,7 +131,11 @@ impl AggregatesRewrite {
             AggregateFunction::Count
             | AggregateFunction::Sum
             | AggregateFunction::Max
-            | AggregateFunction::Min => Vec::new(),
+            | AggregateFunction::Min
+            | AggregateFunction::BoolAnd
+            | AggregateFunction::BoolOr
+            | AggregateFunction::BitAnd
+            | AggregateFunction::BitOr => Vec::new(),
             // We'll error later
             AggregateFunction::Unrecognized(_) => Vec::new(),
         }

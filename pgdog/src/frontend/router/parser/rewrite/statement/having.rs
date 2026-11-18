@@ -262,7 +262,7 @@ impl<'a> Operands<'a, '_> {
     }
 }
 
-/// Aggregates PgDog can't merge, such as `bool_or`, are still projected
+/// Aggregates PgDog can't merge, such as `string_agg`, are still projected
 /// whole, so the merge rejects them like it does in the SELECT list.
 fn is_aggregate(function: &nodes::FuncCall, schema: &Schema) -> bool {
     function
