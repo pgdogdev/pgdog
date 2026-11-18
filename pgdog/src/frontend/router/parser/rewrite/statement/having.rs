@@ -7,12 +7,10 @@ use pg_raw_parse::{
 };
 
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{
-    Aggregate, AggregateFunction, GroupByAlias, HavingRewritePlan,
-};
+use crate::frontend::router::parser::{AggregateFunction, GroupByKey, HavingRewritePlan};
 
 use super::{
-    Error, group_by, offset,
+    Error, offset,
     projection::{HiddenAliases, is_star},
 };
 
@@ -131,36 +129,27 @@ pub(super) fn rewrite_select<'a>(
     let selected = select.target_list().len();
     let mut group_by = Vec::with_capacity(group_sources.len());
     for group_source in group_sources {
-        let selected_column = match group_source.as_ref() {
-            // A merged row can't tell which grouping set it came from.
-            Node::GroupingSet(_) => {
+        let column = match GroupByKey::new(select, group_source.as_ref(), schema) {
+            GroupByKey::Ordinal(column) | GroupByKey::Alias(column) => column,
+            GroupByKey::GroupingSet => {
+                return Err(Error::UnsupportedHaving(GroupByKey::GROUPING_SET));
+            }
+            GroupByKey::UnresolvedAlias => {
+                return Err(Error::UnsupportedHaving(GroupByKey::UNRESOLVED_ALIAS));
+            }
+            GroupByKey::Unselected if matches!(group_source.as_ref(), Node::A_Const(_)) => {
                 return Err(Error::UnsupportedHaving(
-                    "GROUPING SETS, ROLLUP and CUBE are unsupported",
+                    "GROUP BY constants other than ordinals are unsupported",
                 ));
             }
-            ordinal @ Node::A_Const(_) => Some(
-                Aggregate::group_by_column(select, ordinal, schema).ok_or_else(|| {
-                    Error::UnsupportedHaving(
-                        "GROUP BY constants other than ordinals are unsupported",
-                    )
-                })?,
-            ),
-            Node::ColumnRef(column) => match GroupByAlias::resolve(select, column, schema) {
-                Some(GroupByAlias::Output(index)) => Some(index),
-                // Shards can't resolve a SELECT alias inside the hidden projection.
-                Some(GroupByAlias::Unknown) => {
-                    return Err(Error::UnsupportedHaving(group_by::UNRESOLVED_ALIAS));
-                }
-                Some(GroupByAlias::InputColumn) | None => None,
-            },
-            _ => None,
+            // Columns are projected even when selected, next to the HAVING operands.
+            GroupByKey::SelectedColumn(_) | GroupByKey::Unselected => {
+                let alias = operands.aliases.next_alias();
+                operands.projected.push((alias, group_source));
+                selected + operands.projected.len() - 1
+            }
         };
-        // Keys that aren't a SELECT list position are projected as hidden columns.
-        group_by.push(selected_column.unwrap_or_else(|| {
-            let alias = operands.aliases.next_alias();
-            operands.projected.push((alias, group_source));
-            selected + operands.projected.len() - 1
-        }));
+        group_by.push(column);
     }
 
     let hidden_aliases = operands

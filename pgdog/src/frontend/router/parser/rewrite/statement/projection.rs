@@ -12,7 +12,7 @@ use super::offset::{self, OffsetPlan};
 use super::order_by;
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{
-    Aggregate, AggregateFunction, Function, HavingRewritePlan, OrderBy,
+    Aggregate, AggregateFunction, Function, GroupByKey, HavingRewritePlan, OrderBy,
 };
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
@@ -287,10 +287,16 @@ fn build(
     if has_having && let Some(reason) = unsupported_with_having(select, schema) {
         return Err(Error::UnsupportedHaving(reason));
     }
+    // HAVING classifies the GROUP BY keys in its own rewrite.
+    let group_keys = if has_having {
+        Vec::new()
+    } else {
+        GroupByKey::parse(select, schema).collect()
+    };
     let aggregate = if has_having {
         None
     } else {
-        let aggregate = Aggregate::parse(select, schema);
+        let aggregate = Aggregate::with_keys(select, schema, group_keys.iter().copied());
         if aggregate.targets().is_empty()
             && select.group_clause().is_empty()
             && select.sort_clause().is_empty()
@@ -327,10 +333,10 @@ fn build(
         let mut select = mem.make_unique(select);
         if has_having {
             let (having, group_by) = having::rewrite_select(&mut select.as_mut(), mem, schema)?;
-            // Aggregate::parse skips GROUP BY items it cannot resolve. The
-            // rewrite has a position for every one of them, so unrelated
+            // The rewrite has a position for every GROUP BY item, so unrelated
             // groups are never merged together.
-            let rewritten_aggregate = Aggregate::parse(&select, schema).with_group_by(group_by);
+            let rewritten_aggregate =
+                Aggregate::with_keys(&select, schema, []).with_group_by(group_by);
             if rewritten_aggregate.targets().is_empty() {
                 return Err(Error::UnsupportedHaving(
                     "at least one aggregate function is required",
@@ -342,7 +348,7 @@ fn build(
             )));
         } else if let Some(aggregate) = &aggregate {
             plan.group_by =
-                group_by::rewrite_select(&mut select, mem, aggregate, schema)?.map(Box::new);
+                group_by::rewrite_select(&mut select, mem, aggregate, &group_keys)?.map(Box::new);
         }
         let aggregate = plan
             .aggregate()
@@ -814,6 +820,38 @@ mod tests {
     }
 
     #[test]
+    fn group_by_alias_of_a_column_it_reads_needs_no_schema() {
+        // (query, shard query)
+        for (sql, expected) in [
+            (
+                "SELECT lower(category) AS category, count(*) FROM items GROUP BY category",
+                "SELECT lower(category) AS category, count(*), category AS __pgdog_group_0 \
+                 FROM items GROUP BY category",
+            ),
+            (
+                "SELECT lower(category) AS category, count(*) FROM (SELECT * FROM items) i \
+                 GROUP BY category HAVING count(*) > 1",
+                "SELECT lower(category) AS category, count(*), count(*) AS __pgdog_having_0, \
+                 category AS __pgdog_having_1 FROM (SELECT * FROM items) i \
+                 GROUP BY category HAVING count(*) > 1 OR true",
+            ),
+        ] {
+            assert_eq!(shard_sql(sql, false).as_deref(), Some(expected), "{sql}");
+        }
+
+        // A subquery has columns of its own, so it proves nothing.
+        let ast = pg_raw_parse::parse(
+            "SELECT (SELECT category FROM other LIMIT 1) AS category, count(*) FROM items \
+             GROUP BY category",
+        )
+        .unwrap();
+        assert!(matches!(
+            build(&ast, &Schema::default(), false),
+            Err(Error::UnsupportedGroupBy(_))
+        ));
+    }
+
+    #[test]
     fn group_by_select_alias_is_rejected_when_from_is_not_known() {
         let loaded = items_schema();
         let not_loaded = Schema::default();
@@ -827,7 +865,7 @@ mod tests {
                 &loaded,
             ),
             (
-                "WITH items AS (SELECT 1 AS c) SELECT c + 1 AS c, count(*) FROM items GROUP BY c",
+                "WITH items AS (SELECT 1 AS d) SELECT d + 1 AS c, count(*) FROM items GROUP BY c",
                 &loaded,
             ),
             (
