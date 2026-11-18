@@ -17,6 +17,7 @@ use crate::frontend::router::parser::{
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
 use pg_raw_parse::{Node, StmtList, make, nodes};
+use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -288,8 +289,9 @@ fn build(
         return Err(Error::UnsupportedHaving(reason));
     }
     // HAVING classifies the GROUP BY keys in its own rewrite.
-    let group_keys = if has_having {
-        Vec::new()
+    // Kept on the stack: this runs for every cross-shard SELECT.
+    let group_keys: SmallVec<[GroupByKey; 4]> = if has_having {
+        SmallVec::new()
     } else {
         GroupByKey::parse(select, schema).collect()
     };
