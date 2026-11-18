@@ -6,18 +6,14 @@ use crate::api::replication::ReplicationTask;
 use crate::api::run_task;
 use crate::api::schema_sync::SchemaSyncTask;
 use crate::backend::replication::resharding_state::ReshardingState;
-use pgdog_stats::CommandKind;
 
-use super::options::{Options, RunMode};
 use super::prelude::*;
-use super::reshard::check_abort;
 
 pub(crate) struct Replicate {
     pub(crate) from_database: String,
     pub(crate) to_database: String,
     pub(crate) publication: String,
     pub(crate) replication_slot: Option<String>,
-    pub(crate) mode: RunMode,
 }
 
 #[async_trait]
@@ -27,51 +23,43 @@ impl Command for Replicate {
     }
 
     fn parse(sql: &str) -> Result<Self, Error> {
-        let (words, mut options) = Options::parse(sql)?;
+        let parts = sql.split(" ").collect::<Vec<_>>();
 
-        let (from_database, to_database, publication, replication_slot) = match words[..] {
-            ["replicate", from_database, to_database, publication] => {
-                (from_database, to_database, publication, None)
-            }
+        match parts[..] {
+            ["replicate", from_database, to_database, publication] => Ok(Self {
+                from_database: from_database.to_owned(),
+                to_database: to_database.to_owned(),
+                publication: publication.to_owned(),
+                replication_slot: None,
+            }),
             [
                 "replicate",
                 from_database,
                 to_database,
                 publication,
                 replication_slot,
-            ] => (
-                from_database,
-                to_database,
-                publication,
-                Some(replication_slot),
-            ),
-            _ => return Err(Error::Syntax),
-        };
-        let mode = options.run_mode()?;
-        options.finish()?;
-
-        Ok(Self {
-            from_database: from_database.to_owned(),
-            to_database: to_database.to_owned(),
-            publication: publication.to_owned(),
-            replication_slot: replication_slot.map(str::to_owned),
-            mode,
-        })
+            ] => Ok(Self {
+                from_database: from_database.to_owned(),
+                to_database: to_database.to_owned(),
+                publication: publication.to_owned(),
+                replication_slot: Some(replication_slot.to_owned()),
+            }),
+            _ => Err(Error::Syntax),
+        }
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
+        info!(
+            r#"replicate "{}" to "{}", publication="{}""#,
+            self.from_database, self.to_database, self.publication
+        );
+
         let state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
-            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
             .build()?;
-        check_abort!(self, state, CommandKind::Replicate);
-        info!(
-            r#"replicate "{}" to "{}", publication="{}""#,
-            self.from_database, self.to_database, self.publication
-        );
 
         let schema_sync = SchemaSyncTask::builder()
             .publication_tables_only(false)
@@ -94,40 +82,5 @@ impl Command for Replicate {
             RowDescription::new(&[Field::text("task_id")]).message(),
             dr.message(),
         ])
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn parses_slot_and_run_mode() {
-        for (sql, slot, mode) in [
-            (
-                "replicate a b pub",
-                None,
-                RunMode::Run {
-                    cleanup_on_cancel: true,
-                },
-            ),
-            (
-                "replicate a b pub slot with (cleanup_on_cancel false)",
-                Some("slot"),
-                RunMode::Run {
-                    cleanup_on_cancel: false,
-                },
-            ),
-            ("replicate a b pub (abort)", None, RunMode::Abort),
-        ] {
-            let cmd = Replicate::parse(sql).unwrap();
-            assert_eq!(cmd.publication, "pub", "{sql}");
-            assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
-            assert_eq!(cmd.mode, mode, "{sql}");
-        }
-        assert!(matches!(
-            Replicate::parse("replicate a b pub (unknown)"),
-            Err(Error::InvalidOption(_))
-        ));
     }
 }

@@ -12,14 +12,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{TimestampMilliSeconds, serde_as, skip_serializing_none};
 
-pub mod abort_resharding;
 pub mod copy_data;
 pub mod replication;
 pub mod reshard;
 pub mod schema_sync;
 pub mod synchronize_tables;
 
-pub use abort_resharding::*;
 pub use copy_data::*;
 pub use replication::*;
 pub use reshard::*;
@@ -362,7 +360,6 @@ pub enum TaskDefinitionKind {
     ReplicationCluster(ReplicationClusterDefinition),
     ReplicationShard(ReplicationShardDefinition),
     Reshard(ReshardDefinition),
-    AbortResharding(AbortReshardingDefinition),
     /// No detail beyond the name, or a `kind` this build does not know.
     #[default]
     #[display("")]
@@ -375,7 +372,6 @@ impl TaskDefinitionKind {
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::Reshard(_) => "reshard",
-            Self::AbortResharding(_) => "abort_resharding",
             Self::CopyData(_) => "copy_data",
             Self::TableCopy(_) => "table_copy",
             Self::SynchronizeTables(_) => "synchronize_tables",
@@ -390,7 +386,7 @@ impl TaskDefinitionKind {
 }
 
 /// The two ends of a migration.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
 #[display("{source} -> {destination}")]
 pub struct Databases {
     pub source: String,
@@ -409,7 +405,7 @@ pub struct RatioProgress {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{CommandKind, Lsn, MissedRows, SyncState};
+    use crate::{Lsn, MissedRows, SyncState};
     use pgdog_config::CopyFormat;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -430,7 +426,7 @@ mod test {
 
     /// One definition per kind. The exhaustive `match` in
     /// [`test_definition_round_trip`] forces a new kind into this list.
-    fn definitions() -> [TaskDefinition; 11] {
+    fn definitions() -> [TaskDefinition; 10] {
         [
             "test task".into(),
             ReshardDefinition {
@@ -439,7 +435,6 @@ mod test {
                 replicate_only: false,
                 sync_only: false,
                 auto_cutover: true,
-                cleanup_on_cancel: false,
             }
             .into(),
             CopyDataDefinition {
@@ -463,7 +458,6 @@ mod test {
             ReplicationDefinition {
                 databases: databases(),
                 auto_cutover: false,
-                cleanup_on_cancel: true,
             }
             .into(),
             ReplicationClusterDefinition {
@@ -488,11 +482,6 @@ mod test {
                 sync_state: SyncState::PostData,
             }
             .into(),
-            AbortReshardingDefinition {
-                databases: databases(),
-                command: CommandKind::Reshard,
-            }
-            .into(),
         ]
     }
 
@@ -511,7 +500,6 @@ mod test {
 
             match back.kind {
                 TaskDefinitionKind::Reshard(_)
-                | TaskDefinitionKind::AbortResharding(_)
                 | TaskDefinitionKind::CopyData(_)
                 | TaskDefinitionKind::TableCopy(_)
                 | TaskDefinitionKind::SynchronizeTables(_)
@@ -538,7 +526,6 @@ mod test {
                 replicate_only: false,
                 sync_only: false,
                 auto_cutover: true,
-                cleanup_on_cancel: true,
             })
             .to_string(),
             "reshard prod -> prod_sharded"
@@ -851,54 +838,6 @@ mod test {
                 TaskStatus::Reshard(ReshardStatus::Other),
                 TaskStatus::Reshard(ReshardStatus::SyncingData)
             ]
-        );
-    }
-
-    #[test]
-    fn test_missing_cleanup_on_cancel_reads_as_true() {
-        assert_eq!(
-            serde_json::from_str::<TaskDefinition>(
-                r#"{"name":"reshard","kind":"reshard","databases":{"source":"prod","destination":"prod_sharded"},"skip_schema_sync":false,"replicate_only":false,"sync_only":false,"auto_cutover":true}"#
-            )
-            .unwrap(),
-            TaskDefinition::from(ReshardDefinition {
-                databases: databases(),
-                skip_schema_sync: false,
-                replicate_only: false,
-                sync_only: false,
-                auto_cutover: true,
-                cleanup_on_cancel: true,
-            })
-        );
-        assert_eq!(
-            serde_json::from_str::<TaskDefinition>(
-                r#"{"name":"replication","kind":"replication","databases":{"source":"prod","destination":"prod_sharded"},"auto_cutover":true}"#
-            )
-            .unwrap(),
-            TaskDefinition::from(ReplicationDefinition {
-                databases: databases(),
-                auto_cutover: true,
-                cleanup_on_cancel: true,
-            })
-        );
-    }
-
-    #[test]
-    fn test_abort_resharding_definition() {
-        let definition = TaskDefinition::from(AbortReshardingDefinition {
-            databases: databases(),
-            command: CommandKind::Reshard,
-        });
-        assert_eq!(definition.to_string(), "abort reshard prod -> prod_sharded");
-
-        let json = r#"{"name":"abort_resharding","kind":"abort_resharding","databases":{"source":"prod","destination":"prod_sharded"},"command":"reshard"}"#;
-        assert_eq!(
-            serde_json::to_value(&definition).unwrap(),
-            serde_json::from_str::<serde_json::Value>(json).unwrap()
-        );
-        assert_eq!(
-            serde_json::from_str::<TaskDefinition>(json).unwrap(),
-            definition
         );
     }
 

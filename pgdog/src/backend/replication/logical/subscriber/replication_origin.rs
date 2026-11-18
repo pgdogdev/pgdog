@@ -43,10 +43,6 @@ pub(crate) struct ReplicationOrigin {
     retry_delay: Duration,
 }
 
-pub(crate) fn origin_name(slot: &str, shard: usize) -> String {
-    format!("__pgdog_origin_{slot}_{shard}")
-}
-
 #[bon::bon]
 impl ReplicationOrigin {
     /// Origin for the stream of replication slot `name` on destination
@@ -60,7 +56,7 @@ impl ReplicationOrigin {
         #[builder(default = RETRY_DELAY)] retry_delay: Duration,
     ) -> Self {
         Self {
-            name: quote_literal(&origin_name(name, shard)),
+            name: quote_literal(&format!("__pgdog_origin_{name}_{shard}")),
             address: address.clone(),
             retry_attempts,
             retry_delay,
@@ -72,8 +68,8 @@ impl ReplicationOrigin {
         &self.name
     }
 
-    /// Create the origin if it does not exist. Keeps the progress of an existing origin.
-    pub(crate) async fn ensure_exists(&self) -> Result<(), Error> {
+    /// Create the origin if it does not exist.
+    pub(crate) async fn create_origin(&self) -> Result<(), Error> {
         let mut server = connect_address(&self.address).await?;
         let created = self.create_if_missing(&mut server).await?;
 
@@ -96,24 +92,9 @@ impl ReplicationOrigin {
 
     /// Drop the origin and create it again, so the progress of an earlier
     /// run is not reused.
-    pub(crate) async fn recreate(&self) -> Result<(), Error> {
+    pub(crate) async fn recreate_origin(&self) -> Result<(), Error> {
         self.drop_if_exists().await?;
-        self.ensure_exists().await
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn verify_exists(&self) -> Result<(), Error> {
-        let mut server = connect_address(&self.address).await?;
-        let name = &self.name;
-        let found: Vec<String> = server
-            .fetch_all(format!(
-                "SELECT 'true' WHERE pg_replication_origin_oid({name}) IS NOT NULL"
-            ))
-            .await?;
-        if found.is_empty() {
-            return Err(Error::MissingReplicationOrigin(name.clone()));
-        }
-        Ok(())
+        self.create_origin().await
     }
 
     /// Drop the origin. Waits for a short time while a closing session
@@ -317,7 +298,7 @@ mod test {
                 .retry_attempts(4)
                 .build();
             origin.drop_origin().await.unwrap();
-            origin.ensure_exists().await.unwrap();
+            origin.create_origin().await.unwrap();
 
             let table = format!("public.test_replication_origin_{name}");
             admin
@@ -490,8 +471,8 @@ mod test {
     #[tokio::test]
     async fn create_and_drop_are_idempotent() {
         let mut test = Test::new("lifecycle").await;
-        test.origin.ensure_exists().await.unwrap();
-        test.origin.ensure_exists().await.unwrap();
+        test.origin.create_origin().await.unwrap();
+        test.origin.create_origin().await.unwrap();
         assert_eq!(test.origins_count().await, 1);
         assert_eq!(test.progress(true).await, Lsn::default());
 
@@ -651,7 +632,7 @@ mod test {
             .address(&address)
             .shard(0)
             .build()
-            .ensure_exists()
+            .create_origin()
             .await;
 
         test.admin

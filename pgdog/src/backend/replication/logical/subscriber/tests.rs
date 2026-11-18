@@ -355,7 +355,7 @@ pub(super) async fn test_origins(cluster: &Cluster) -> Vec<ReplicationOrigin> {
             .address(primary(pools).unwrap().addr())
             .shard(shard)
             .build();
-        origin.recreate().await.unwrap();
+        origin.recreate_origin().await.unwrap();
         origins.push(origin);
     }
     origins

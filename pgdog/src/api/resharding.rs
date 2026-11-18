@@ -14,9 +14,8 @@ use crate::api::replication::{CutoverMode, ReplicationTask};
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
-use crate::api::{ReshardingError, Task, run_task};
+use crate::api::{MigrationError, Task, run_task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::{LockWatchdog, ReshardingCommand};
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -49,7 +48,7 @@ pub(crate) struct ReshardTask {
 impl Task for ReshardTask {
     type Status = ReshardStatus;
     type Output = ();
-    type Error = ReshardingError;
+    type Error = MigrationError;
 
     fn cancel_timeout() -> Duration {
         Duration::from_secs(60)
@@ -62,47 +61,40 @@ impl Task for ReshardTask {
             replicate_only: self.replicate_only,
             sync_only: self.sync_only,
             auto_cutover: self.auto_cutover,
-            cleanup_on_cancel: self.state.cleanup_on_cancel(),
         }
     }
 
-    async fn run(self, ctx: TaskContext<Self>) -> Result<(), ReshardingError> {
+    async fn run(self, ctx: TaskContext<Self>) -> Result<(), MigrationError> {
         let cancel = ctx.cancellation_token();
         let cutover = self.cutover_mode();
-        let command = self.command();
         let mut state = self.state;
-        let root_id = ctx.root_id();
-        state.start_run(command, root_id).await?;
-        let _watchdog = LockWatchdog::start(&state, root_id);
         let schema_sync = SchemaSyncTask::builder()
             .publication_tables_only(self.tables_only)
             .databases(state.databases())
             .publication(state.publication.clone());
 
-        let mut copied = false;
-        let mut result: Result<(), ReshardingError> = Box::pin(async {
-            // Pre-data schema sync, unless skipped. It runs inside the cleanup
-            // guard below, so a failure here also reaches the cleanup.
-            if !self.skip_schema_sync {
-                ctx.set_status(ReshardStatus::SchemaSync);
-                ctx.run(
-                    schema_sync
-                        .clone()
-                        .phase(SchemaSyncPhase::Pre)
-                        .ignore_errors(true)
-                        .build(),
-                )
-                .await?;
+        // Pre-data schema sync, unless skipped. It runs before any replication
+        // slots exist, so it stays outside the cleanup guard below.
+        if !self.skip_schema_sync {
+            ctx.set_status(ReshardStatus::SchemaSync);
+            ctx.run(
+                schema_sync
+                    .clone()
+                    .phase(SchemaSyncPhase::Pre)
+                    .ignore_errors(true)
+                    .build(),
+            )
+            .await?;
 
-                // The pre-data sync changed the destination's schema, so its pools
-                // reloaded. `SchemaSync::reload_destination` refreshes only its own
-                // cluster refs, so the state still holds stale ones.
-                state.reload()?;
-            }
+            // The pre-data sync changed the destination's schema, so its pools
+            // reloaded. `SchemaSync::reload_destination` refreshes only its own
+            // cluster refs, so the state still holds stale ones.
+            state.reload()?;
+        }
 
-            // Replicate-only continues an earlier copy.
-            copied = self.replicate_only;
-
+        // Replicate-only continues an earlier copy.
+        let mut copied = self.replicate_only;
+        let result: Result<(), MigrationError> = Box::pin(async {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);
@@ -169,22 +161,19 @@ impl Task for ReshardTask {
         })
         .await;
 
-        let stopped = result.is_err() || cancel.is_cancelled();
-        if stopped {
-            // With cleanup_on_cancel true, drop the slots this run created and
-            // all its origins, then delete the row. With false, keep them and
-            // pause the run. A live run keeps the slots that existed before it.
-            if let Err(err) = state.cancel_run().await {
-                warn!("failed to clean up the resharding run: {err}");
+        if result.is_err() || cancel.is_cancelled() {
+            // on error or cancellation make sure we drop the slots,
+            // but only the slots we're actually created during this run.
+            // If the slots were created outside or by calling pgdog
+            // separate runs, we leave the slots.
+            if let Err(err) = state.drop_slots_if_owned().await {
+                warn!("failed to clean up replication slots after migration: {err}");
             }
         } else {
             // on success we either already removed slots on replication,
             // or replication was not called and we should leave the
             // slots for the future calls
             state.detach_slots();
-            if let Err(err) = state.finish_run().await {
-                result = Err(err.into());
-            }
         }
 
         if self.tables_only && copied {
@@ -216,16 +205,6 @@ impl ReshardTask {
             CutoverMode::Auto
         } else {
             CutoverMode::Manual
-        }
-    }
-
-    fn command(&self) -> ReshardingCommand {
-        ReshardingCommand::Reshard {
-            skip_schema_sync: self.skip_schema_sync,
-            replicate_only: self.replicate_only,
-            sync_only: self.sync_only,
-            auto_cutover: self.auto_cutover,
-            tables_only: self.tables_only,
         }
     }
 }
