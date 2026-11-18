@@ -5,32 +5,21 @@
 
 use pg_raw_parse::{
     Node, Owned, deparse,
-    make::{MemoryToken, Unique, owned},
-    nodes::{CommonTableExpr, RawStmt, SelectStmt},
-    raw::SubLinkType,
+    nodes::{RawStmt, SelectStmt},
 };
 
 // These are all internal modules; don't need to be exported out.
-mod from_clause;
-mod insert_select;
+mod clause;
+mod evaluate;
 mod request;
-mod where_clause;
-mod with_clause;
+mod rewrite;
 
 use super::Error;
 use crate::{
     frontend::{
         ClientRequest,
         client::query_engine::{QueryEngine, QueryEngineContext, multi_step::error::SubqueryError},
-        router::parser::rewrite::statement::{
-            insert::Subquery,
-            subquery::{
-                from_clause::parse_from_clause,
-                insert_select::parse_insert_select,
-                where_clause::{has_sub_link_in_where, parse_where_clause},
-                with_clause::parse_with_clause,
-            },
-        },
+        router::parser::rewrite::statement::insert::Subquery,
     },
     net::{Bind, DataRow, Format, ProtocolMessage, RowDescription},
 };
@@ -177,7 +166,7 @@ impl<'ast> SubqueryMulti<'ast> {
             // Send the subquery that we parsed through the QueryEngine, and fetch its response back
 
             let (rewritten_subquery_ast, subquery_bind): (Owned<SelectStmt>, Bind) =
-                self.parse_and_rewrite_subquery_ast(subquery, current_statement)?;
+                self.new_select_to_fetch_rows_of_subquery(subquery, current_statement)?;
 
             let subquery_sql = deparse(&*rewritten_subquery_ast)?.as_str().to_string();
 
@@ -200,7 +189,8 @@ impl<'ast> SubqueryMulti<'ast> {
                 results?.expect("send_query_string is only None when `is_subquery` is false");
 
             // We send the rows of subqueries as unnest(..) arrays, so we check the column types before rewriting to ensure that all columns have array types.
-            if !matches!(subquery, Subquery::WhereClause)
+            // EXISTS is the only exception to this, since we only read whether or not the subquery returned rows (exists just needs 1 row to be replaced w/ TRUE)
+            if !self.is_exists_in_where(subquery)
                 && let (_, Some(row_description)) = &results
                 && row_description
                     .fields
@@ -235,234 +225,8 @@ impl<'ast> SubqueryMulti<'ast> {
 
         // Re-write outer statement with the response
         let (new_ast, new_bind): (Owned<RawStmt>, Bind) =
-            self.rewrite_outer_statement_with_subquery_response()?;
+            self.rewrite_outer_statement_with_subquery_response();
 
         Ok((new_ast, new_bind))
-    }
-
-    fn rewrite_subquery_ast_with_earlier_subquery_responses(
-        &self,
-        subquery: &Subquery,
-        subquery_ast: Node<'ast>,
-    ) -> (Owned<SelectStmt>, Bind) {
-        let Node::SelectStmt(select) = subquery_ast else {
-            unreachable!("We only allow subselects to be subqueries");
-        };
-
-        let mut subquery_bind = self.current_level_bind.clone();
-
-        let rewritten_subquery_ast = owned(|mem| {
-            let mut subquery_ast = mem.make_unique(select);
-
-            if matches!(subquery, Subquery::InsertSelect)
-                && let Node::InsertStmt(insert) = self.top_level_statement
-                && let Some(with_clause) = insert.with_clause()
-            {
-                subquery_ast
-                    .as_mut()
-                    .set_with_clause(mem.make_unique(with_clause).as_option());
-            }
-
-            let mut previously_executed_ctes: Vec<Unique<&CommonTableExpr>> = Vec::new();
-
-            for (i, (rows, row_description)) in self.subquery_results.iter().enumerate() {
-                let subquery = self
-                    .subqueries
-                    .get(i)
-                    .expect("Subquery 'i' must have existed to create the matching result");
-
-                match &subquery {
-                    Subquery::Cte(alias) | Subquery::WhereClauseCte(alias) => {
-                        let row_description = row_description
-                            .as_ref()
-                            .expect("RowDescription must be Some(..) in order to reach here");
-
-                        // We need to set this within a WITH clause of the subselect,
-                        // so that the subselect can reference previously ran CTEs
-                        let new_cte_subselect = Self::new_select_with_unnest(
-                            &mut subquery_bind,
-                            mem,
-                            Node::None,
-                            rows,
-                            row_description,
-                        );
-
-                        // Need to form the alias for the CTE to be referenced within the other CTE,
-                        // so that it can reference <CTE>.<col>
-                        let mut alias_col_names = Vec::new();
-                        for i in 0..row_description.len() {
-                            alias_col_names.push(
-                                mem.make_string(Some(
-                                    row_description.fields.get(i).unwrap().name.as_str(),
-                                ))
-                                .uncast(),
-                            );
-                        }
-
-                        let new_cte = mem.make_common_table_expr(
-                            alias,
-                            mem.make_list(alias_col_names.as_slice()),
-                            new_cte_subselect.uncast(),
-                        );
-
-                        previously_executed_ctes.push(new_cte);
-                    }
-
-                    // For now, we'll only consider re-writing if it was previously a CTE.
-                    _ => continue,
-                }
-            }
-
-            if !previously_executed_ctes.is_empty() {
-                let new_with_clause =
-                    mem.make_with_clause(mem.make_list(previously_executed_ctes.as_slice()), false);
-
-                subquery_ast
-                    .as_mut()
-                    .set_with_clause(new_with_clause.as_option());
-            }
-
-            subquery_ast
-        });
-
-        (rewritten_subquery_ast, subquery_bind)
-    }
-
-    fn parse_and_rewrite_subquery_ast(
-        &self,
-        subquery: &Subquery,
-        entire_ast: Node<'ast>,
-    ) -> Result<(Owned<SelectStmt>, Bind), Error> {
-        let subquery_ast: Node<'ast> = self.parse_out_relevant_query_to_send(subquery, entire_ast);
-
-        // We might have to reference earlier statements and perform a re-write. E.g., if we have CTE b referencing CTE a, then we need to include the re-written CTE (w/ unnest) here
-        // Only if it's actually relevant, but we need to either (a) figure that out somehow or (b) always include earlier ones
-
-        Ok(self.rewrite_subquery_ast_with_earlier_subquery_responses(subquery, subquery_ast))
-    }
-
-    /// This is the relevant part of what we need to send, e.g., the subselect of a specific CTE.
-    fn parse_out_relevant_query_to_send(
-        &self,
-        subquery: &Subquery,
-        entire_ast: Node<'ast>,
-    ) -> Node<'ast> {
-        match &subquery {
-            Subquery::FromClause => {
-                parse_from_clause(entire_ast)
-            }
-            Subquery::WhereClause => {
-                parse_where_clause(entire_ast)
-            }
-            Subquery::Cte(alias) => {
-                parse_with_clause(entire_ast, alias)
-            }
-            Subquery::InsertSelect => {
-                parse_insert_select(entire_ast)
-            }
-            Subquery::WhereClauseCte(alias) => {
-                parse_where_clause(entire_ast).and_then(|subselect| parse_with_clause(subselect, alias))
-            }
-        }.expect("We already ran these methods in the parser originally. No reason they shouldn't pass here.")
-    }
-
-    fn rewrite_outer_statement_with_subquery_response(
-        &self,
-    ) -> Result<(Owned<RawStmt>, Bind), Error> {
-        // TODO(jkaczman): if we're always passing these three, might as well make a new type or
-        // hold these in the existing one
-        let mut new_bind = self.current_level_bind.clone();
-
-        // We send the rows of subqueries as unnest(..) arrays, so we check the column types before rewriting to ensure that all columns have array types.
-        for (subquery, (_, row_description)) in
-            self.subqueries.iter().zip(self.subquery_results.iter())
-        {
-            // If we have an EXISTS_SUBLINK in WHERE, we don't send data back in the next round trip; instead, we replace the whole
-            // query with a boolean result.
-            let sends_rows_as_unnest_arrays = match subquery {
-                Subquery::WhereClause => has_sub_link_in_where(self.top_level_statement)
-                    .is_some_and(|(sublink, _)| {
-                        sublink.sub_link_type != SubLinkType::EXISTS_SUBLINK
-                    }),
-                Subquery::FromClause
-                | Subquery::InsertSelect
-                | Subquery::Cte(_)
-                | Subquery::WhereClauseCte(_) => true,
-            };
-
-            if !sends_rows_as_unnest_arrays {
-                continue;
-            }
-
-            let Some(row_description) = row_description else {
-                continue;
-            };
-
-            if row_description
-                .fields
-                .iter()
-                .find(|field| field.data_type().into_array_type().is_none())
-                .is_some()
-            {
-                return Err(Error::Subquery(
-                    SubqueryError::SubqueryReturningUnsupportedColumn,
-                ));
-            }
-        }
-
-        let new_statement: Owned<RawStmt> = owned(|mem| {
-            let mut statement: Unique<'_, Node<'_>> = mem.make_unique(self.top_level_statement);
-
-            // TODO(jkaczman): We'll either have to save the AST of the re-written node that we're
-            // constantly rewriting in this outer loop, or we can save it in the struct itself
-            // for easy reference.. however that'd mean we need a mutable reference to the struct,
-            // could be tricky when we try to parallelize this.
-            for (subquery, (data_rows, row_description)) in
-                self.subqueries.iter().zip(self.subquery_results.iter())
-            {
-                statement = self.rewrite_with_subquery_response(
-                    mem,
-                    statement,
-                    subquery,
-                    row_description.as_ref(),
-                    data_rows.as_slice(),
-                    &mut new_bind,
-                );
-            }
-
-            // We also need to capture Bind parameters from this
-
-            mem.make_raw_stmt(statement)
-        });
-
-        Ok((new_statement, new_bind))
-    }
-
-    fn rewrite_with_subquery_response<'mem>(
-        &self,
-        mem: MemoryToken<'mem>,
-        stmt: Unique<'mem, Node<'mem>>,
-        subquery: &Subquery,
-        row_description: Option<&RowDescription>,
-        data_rows: &[DataRow],
-        new_bind: &mut Bind,
-    ) -> Unique<'mem, Node<'mem>> {
-        match subquery {
-            Subquery::FromClause => {
-                self.handle_from_clause(mem, stmt, row_description, data_rows, new_bind)
-            }
-            Subquery::WhereClause => {
-                self.handle_where_clause(mem, stmt, row_description, data_rows, new_bind)
-            }
-            Subquery::InsertSelect => {
-                self.handle_insert_select(mem, stmt, row_description, data_rows, new_bind)
-            }
-            Subquery::WhereClauseCte(alias) => {
-                self.handle_where_clause_cte(alias, mem, stmt, row_description, data_rows, new_bind)
-            }
-            Subquery::Cte(alias) => {
-                self.handle_with_clause(alias, mem, stmt, row_description, data_rows, new_bind)
-            }
-        }
     }
 }

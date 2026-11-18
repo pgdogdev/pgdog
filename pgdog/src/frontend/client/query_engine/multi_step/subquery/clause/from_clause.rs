@@ -158,7 +158,7 @@ impl<'a> SubqueryMulti<'a> {
 
             let pg_catalog_type: &str = data_type
                 .into_array_type()
-                .expect("rewrite_outer_statement_with_subquery_response checked the column types")
+                .expect("evaluate_and_rewrite_outer_statement checked the column types")
                 .as_pg_catalog_type();
 
             let element_oid = data_type

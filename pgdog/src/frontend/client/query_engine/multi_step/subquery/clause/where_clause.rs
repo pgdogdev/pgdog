@@ -9,7 +9,10 @@ use pg_raw_parse::{
 };
 
 use crate::{
-    frontend::{client::query_engine::multi_step::SubqueryMulti, router::parser::rewrite},
+    frontend::{
+        client::query_engine::multi_step::SubqueryMulti,
+        router::parser::rewrite::{self, statement::insert::Subquery},
+    },
     net::{Bind, DataRow, RowDescription},
 };
 
@@ -66,6 +69,15 @@ impl<'a> SubqueryMulti<'a> {
         };
 
         statement
+    }
+
+    /// Returns true if `subquery` is the subquery of an EXISTS (..) in WHERE.
+    pub(crate) fn is_exists_in_where(&self, subquery: &Subquery) -> bool {
+        matches!(subquery, Subquery::WhereClause)
+            && rewrite::statement::subquery::where_clause::has_sub_link_in_where(
+                self.top_level_statement,
+            )
+            .is_some_and(|(sublink, _)| sublink.sub_link_type == SubLinkType::EXISTS_SUBLINK)
     }
 
     fn rewrite_sublink_in_where_clause<'mem>(
