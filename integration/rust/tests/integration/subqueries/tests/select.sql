@@ -219,6 +219,13 @@ SELECT * FROM (
 ) s ORDER BY s.id DESC LIMIT 2;
 
 -- case
+-- what: SELECT * FROM (<sq>) s, <sq> returns an array column
+-- route select: 0,1
+-- route select: any
+-- sql: SELECT * FROM (SELECT u.c1, ($2::pg_catalog._varchar)[u.c2 + 1:u.c2 + u.c3] FROM unnest($1::pg_catalog._int8, $3::pg_catalog._int4, $4::pg_catalog._int4) u(c1, c2, c3)) s(id, tags) ORDER BY id
+SELECT * FROM (SELECT id, tags FROM subusers) s ORDER BY id;
+
+-- case
 -- what: Derived table with an inner-table that returns an empty response.
 --       Want to make sure that the OIDs returned are correct (if present)
 --       based on us relying on the first row normally setting them
