@@ -206,7 +206,10 @@ async fn test_subqueries_suite() {
                     .to_string()
             };
 
-            let test_case_stripped = test_case.replace(sql.as_str(), "");
+            let test_case_stripped = test_case
+                .rsplit_once(sql.as_str())
+                .map(|(comments, _)| comments.to_string())
+                .unwrap();
 
             let test_case: Option<TestCase> =
                 TestCase::new(sql, test_case_stripped.as_str(), identifier);

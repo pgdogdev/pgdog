@@ -101,14 +101,22 @@ pub(crate) async fn execute_test_case(
             continue;
         }
 
-        let expected =
-            wire::run(direct_conn, sql.to_string(), protocol, Some(commands), true).await?;
+        let expected = wire::run(
+            direct_conn,
+            sql.to_string(),
+            protocol,
+            Some(commands),
+            suffix,
+            true,
+        )
+        .await?;
 
         let actual = wire::run(
             sharded_conn,
             sql.to_string(),
             protocol,
             Some(commands),
+            suffix,
             false,
         )
         .await?;
@@ -133,6 +141,7 @@ pub(crate) async fn execute_test_case(
                 command_to_verify.to_string(),
                 protocol,
                 None,
+                suffix,
                 true,
             )
             .await?;
@@ -142,6 +151,7 @@ pub(crate) async fn execute_test_case(
                 command_to_verify.to_string(),
                 protocol,
                 None,
+                suffix,
                 false,
             )
             .await?;
@@ -199,18 +209,65 @@ pub struct TestCase {
     /// so they could be integers, floats... or Strings.
     pub bind_params: Vec<String>,
 
-    /// First entry here will be Shard 0, second Shard 1, and so on.
-    /// Stores each Shard's expected statemnet types, in order.
-    ///
     /// Lets us assert on an exact amount of statements executed for statements containing subqueries,
     /// as well as their general routing (by seeing which ones end up on what shards)
     ///
-    /// TODO: In the future, `StatementType` should more clearly assert,
-    /// to prevent matching on things that are different.
-    pub routing_expectations: Vec<Vec<StatementType>>,
+    /// Optional `sql: <query>` comment after `route` comment also asserts exact query ran
+    pub routing_expectations: Vec<ExpectedStatement>,
+}
 
-    /// Statements expected first on exactly one shard (picked by PgDog) (`route <type>: any`).
-    pub routing_any: Vec<StatementType>,
+const SHARDS: usize = 2;
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum ExpectedShards {
+    // `route <type>: 0,1`
+    Shards(Vec<usize>),
+
+    // `route <type>: any` (proxy picks shard)
+    Any,
+}
+
+// Statement that we expect proxy to send to the shards (`route <type>: <shards>`).
+#[derive(PartialEq, Debug, Clone)]
+pub struct ExpectedStatement {
+    pub statement_type: StatementType,
+
+    pub shards: ExpectedShards,
+
+    // Optional `sql: <query>` comment after `route` comment also asserts exact query ran
+    pub sql: Option<String>,
+}
+
+impl ExpectedStatement {
+    // Returns true if `actual_query` (from pg_stat_monitor) eq the statement type and the query text that we expect.
+    pub fn matches(&self, actual_query: &str, table_suffix: &str) -> bool {
+        if StatementType::parse(actual_query) != self.statement_type {
+            return false;
+        }
+
+        let Some(expected_sql) = self.sql.as_ref() else {
+            return true;
+        };
+
+        let mut expected_sql = expected_sql.clone();
+        for table in TABLES {
+            expected_sql = expected_sql.replace(table, format!("{table}_{table_suffix}").as_str());
+        }
+
+        without_formatting(expected_sql.as_str()) == without_formatting(actual_query)
+    }
+}
+
+// Returns the query with single spaces between the words and without the semicolon at the end,
+// to ensure that we can write `sql:` comments without matching the whitespace
+fn without_formatting(query: &str) -> String {
+    query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(';')
+        .trim_end()
+        .to_string()
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -250,17 +307,13 @@ impl TestCase {
         let mut command_to_verify: Option<String> = None;
         let mut name: Option<String> = None;
 
-        const SHARDS: usize = 2;
-        let mut routing_expectations: Vec<Vec<StatementType>> = Vec::new();
-        for _ in 0..SHARDS {
-            routing_expectations.push(vec![]);
-        }
-        let mut routing_any: Vec<StatementType> = Vec::new();
+        let mut routing_expectations: Vec<ExpectedStatement> = Vec::new();
 
         // Assume an order of $1, $2, $3... (continuous increasing)
         let mut bind_params: Vec<String> = Vec::new();
 
-        for line in lines.clone() {
+        let mut remaining_lines = lines.clone().peekable();
+        while let Some(line) = remaining_lines.next() {
             let line = line.trim();
 
             // Can have cases where we don't want them executed yet (e.g.,
@@ -286,19 +339,30 @@ impl TestCase {
                     StatementType::parse(line.split(" ").nth(1).unwrap().trim_end_matches(':'));
                 let shards = line.split(" ").nth(2).unwrap();
 
-                if shards == "any" {
-                    routing_any.push(statement_type);
-                    continue;
-                }
+                let sql = remaining_lines
+                    .next_if(|next_line| next_line.trim().starts_with("sql: "))
+                    .map(|sql_line| sql_line.trim().replacen("sql: ", "", 1));
 
-                for shard in shards.split(",") {
-                    let num_shard: usize = shard.parse().unwrap();
+                let shards = if shards == "any" {
+                    ExpectedShards::Any
+                } else {
+                    ExpectedShards::Shards(
+                        shards
+                            .split(",")
+                            .map(|shard| shard.parse().unwrap())
+                            .collect(),
+                    )
+                };
 
-                    routing_expectations
-                        .get_mut(num_shard)
-                        .unwrap()
-                        .push(statement_type.clone());
-                }
+                routing_expectations.push(ExpectedStatement {
+                    statement_type,
+                    shards,
+                    sql,
+                });
+            } else if line.starts_with("sql: ") {
+                panic!(
+                    "`sql:` has to be right after the `route` comment of the statement: {line:?}"
+                );
             }
         }
 
@@ -318,7 +382,25 @@ impl TestCase {
             data_modifying,
             bind_params,
             routing_expectations,
-            routing_any,
         })
+    }
+
+    // Returns the statements that we expect all shards to run (the first entry is for Shard 0, then Shard 1, and so on),
+    // assuming that the proxy sends `route <type>: any` statements to the `any_shard` shard.
+    pub(crate) fn expected_statements_per_shard(
+        &self,
+        any_shard: usize,
+    ) -> Vec<Vec<&ExpectedStatement>> {
+        (0..SHARDS)
+            .map(|shard| {
+                self.routing_expectations
+                    .iter()
+                    .filter(|statement| match &statement.shards {
+                        ExpectedShards::Shards(shards) => shards.contains(&shard),
+                        ExpectedShards::Any => shard == any_shard,
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }
