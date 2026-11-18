@@ -163,6 +163,14 @@ impl MultiBinding {
         self.state.push_bind(bind);
     }
 
+    /// See `Connection::set_binds`.
+    pub(in crate::backend::pool::connection) fn set_binds<'a>(
+        &mut self,
+        binds: impl Iterator<Item = &'a Bind>,
+    ) {
+        self.state.set_binds(binds);
+    }
+
     /// Indicates that the backend(s) have more messages for the client
     /// so it should continue to pull them from the connection (until this returns false).
     pub(in crate::backend::pool::connection) fn has_more_messages(&self) -> bool {

@@ -442,6 +442,20 @@ impl Connection {
         }
     }
 
+    // Replaces the Binds from `bind` (above) with the Binds of `request`.
+    // The result formats of these Binds decide how we decode rows when we merge rows across shards.
+    // E.g., `multi_step::fetch_rows` calls this, since we fetch the rows of subqueries in binary even if the client requested text.
+    pub(crate) fn set_binds(&mut self, request: &ClientRequest) {
+        let binds = request.messages.iter().filter_map(|message| match message {
+            ProtocolMessage::Bind(bind) => Some(bind),
+            _ => None,
+        });
+
+        if let Binding::MultiShard(ref mut servers) = self.binding {
+            servers.set_binds(binds);
+        }
+    }
+
     /// Execute an internal query on all connected servers.
     pub(crate) async fn execute(
         &mut self,

@@ -6,12 +6,12 @@ use pg_raw_parse::{
     nodes::{self, Alias, RangeFunction, SelectStmt},
     transform,
 };
-use pgdog_postgres_types::{Array, Datum};
+use pgdog_postgres_types::{Array, Format};
 
 use crate::{
     frontend::client::query_engine::multi_step::SubqueryMulti,
     frontend::router::parser::rewrite::statement::insert::is_constant,
-    net::{Bind, DataRow, Decoder, RowDescription, bind::Parameter},
+    net::{Bind, DataRow, RowDescription, bind::Parameter},
 };
 
 impl<'a> SubqueryMulti<'a> {
@@ -110,9 +110,6 @@ impl<'a> SubqueryMulti<'a> {
         data_rows: &[DataRow],
         row_description: &RowDescription,
     ) -> Unique<'mem, &'mem SelectStmt> {
-        let mut decoder = Decoder::default();
-        decoder.set_row_description(row_description.clone());
-
         let base_param_len = old_bind.params_raw().len() as i32;
 
         let original_targets = match original_ast {
@@ -157,11 +154,16 @@ impl<'a> SubqueryMulti<'a> {
 
             unnest_column_names.push(mem.make_string(Some(unnest_column_name.as_str())).uncast());
 
-            let pg_catalog_type: &str = field
-                .data_type()
+            let data_type = field.data_type();
+
+            let pg_catalog_type: &str = data_type
                 .into_array_type()
                 .expect("rewrite_outer_statement_with_subquery_response checked the column types")
                 .as_pg_catalog_type();
+
+            let element_oid = data_type
+                .to_oid()
+                .expect("all data types with an array type have an OID");
 
             let node = {
                 let mut node = mem.make_node::<nodes::ParamRef>();
@@ -172,21 +174,19 @@ impl<'a> SubqueryMulti<'a> {
                 node
             };
 
-            let mut list_of_rows_for_col: Vec<Datum> = Vec::new();
-            for row in data_rows {
-                // TODO(jkaczman): replace all unwraps()
-                let col = row.get_column(idx, &decoder).unwrap().unwrap();
-                list_of_rows_for_col.push(col.value);
-            }
+            // We build one array for each column that the subquery returned.
+            // E.g., if SELECT id, status FROM users returns the rows (1, 'VIP'), (2, NULL) and (3, 'VIP'), we build
+            // - {1,2,3} for id
+            // - {VIP,NULL,VIP} for status
+            let elements = data_rows.iter().map(|row| {
+                row.get_raw(idx)
+                    .filter(|value| !value.is_null)
+                    .map(|value| value.data.as_ref())
+            });
 
-            let array = Array::new(list_of_rows_for_col, field.type_oid);
+            let array = Array::binary_from_encoded_elements(element_oid, elements);
 
-            // TODO(jkaczman): wonder what the performance tradeoffs are btwn. Binary and Text
-            let default_fmt = old_bind.default_param_format();
-            old_bind.push_param(
-                Parameter::new(array.encode(default_fmt).unwrap().as_ref()),
-                default_fmt,
-            );
+            old_bind.push_param(Parameter::from_bytes(array), Format::Binary);
 
             let node = mem
                 .make_type_cast(
