@@ -10,7 +10,7 @@ use crate::{
     backend::{PubSubClient, pool},
     config::PoolerMode,
     frontend::{
-        BufferedQuery, ClientRequest, Router,
+        BufferedQuery, ClientRequest, Router, SetParam,
         router::{CopyRow, Route, parser::Shard},
     },
     net::{Bind, Message, Parameters, Protocol, ProtocolMessage, Query},
@@ -471,6 +471,16 @@ impl Connection {
         if lock {
             self.binding.dirty();
         }
+    }
+
+    /// Clean up held server connections when they go back to the pool.
+    pub(crate) fn mark_dirty(&mut self) {
+        self.binding.dirty();
+    }
+
+    /// Record a SET the server confirmed on every held server connection.
+    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+        self.binding.record_set(param, in_transaction);
     }
 
     /// Check if any held server connection is currently locked to a client.

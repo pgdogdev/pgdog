@@ -22,7 +22,7 @@ use crate::{
     auth::{md5, scram::Client},
     backend::pool::stats::MemoryStats,
     config::AuthType,
-    frontend::ClientRequest,
+    frontend::{ClientRequest, SetParam},
     net::{
         Close, Liveness, MessageBuffer, Parameter, ProtocolMessage, Sync,
         messages::{
@@ -739,7 +739,9 @@ impl Server {
                 self.prepared_statements.clear();
                 self.client_params.server_reset();
             }
-            "RESET" => self.client_params.server_reset(), // Someone reset params, we're gonna need to re-sync.
+            // Someone reset params, we're gonna need to re-sync. RESET doesn't touch
+            // the role or session authorization, so keep tracking those.
+            "RESET" => self.client_params.server_reset_keep_identity(),
             _ => (),
         }
         self.stats.rows_affected(cmd);
@@ -800,6 +802,16 @@ impl Server {
         self.mark_dirty(false);
 
         Ok(executed)
+    }
+
+    /// Record a SET this server confirmed, so the next client
+    /// is synced against what the server actually has.
+    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+        if in_transaction {
+            self.client_params.begin();
+        }
+        self.client_params
+            .apply(&param.name, param.value.clone(), param.local);
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.

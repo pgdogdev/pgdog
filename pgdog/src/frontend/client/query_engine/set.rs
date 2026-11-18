@@ -71,6 +71,7 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            // The SETs are recorded on the server when it replies (see `record_sets`).
             self.execute(context, client_request, None).await?;
         } else {
             self.fake_command_response(
@@ -143,25 +144,18 @@ impl QueryEngine {
         let previous = context.params.get_reported(&param.name).cloned();
         let is_pin = param.name.eq_ignore_ascii_case(PGDOG_PIN);
 
-        if let Some(value) = param.value.clone() {
-            if param.local {
-                context.params.set_local(&param.name, value);
-            } else {
-                context.params.set(&param.name, value);
+        context
+            .params
+            .apply(&param.name, param.value.clone(), param.local);
 
+        if is_pin {
+            match &param.value {
                 // Pin the backend to this client.
-                if is_pin && !context.in_transaction() {
-                    self.manual_lock = param
-                        .value
-                        .as_ref()
-                        .and_then(|p| p.as_str())
-                        .is_some_and(|p| matches!(p, "true" | "t"));
+                Some(value) if !param.local && !context.in_transaction() => {
+                    self.manual_lock = value.as_str().is_some_and(|p| matches!(p, "true" | "t"));
                 }
-            }
-        } else {
-            context.params.reset(&param.name);
-            if is_pin {
-                self.manual_lock = false;
+                Some(_) => (),
+                None => self.manual_lock = false,
             }
         }
 
@@ -215,7 +209,7 @@ impl QueryEngine {
         if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();
         } else {
-            context.params.restore_startup();
+            context.params.restore_startup_keep_identity();
             self.comms.update_params(context.params);
         }
 

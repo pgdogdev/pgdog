@@ -2,7 +2,7 @@
 
 use crate::{
     frontend::{
-        ClientRequest,
+        ClientRequest, SetParam,
         client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
         router::parser::Shard,
     },
@@ -327,6 +327,16 @@ impl Binding {
                 }
             }
             _ => Parameters::default(),
+        }
+    }
+
+    pub(super) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+        match self {
+            Binding::Direct(server, ..) => server.record_set(param, in_transaction),
+            Binding::MultiShard(servers) => servers
+                .iter_mut()
+                .for_each(|server| server.record_set(param, in_transaction)),
+            _ => (),
         }
     }
 
