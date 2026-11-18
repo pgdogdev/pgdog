@@ -6,7 +6,7 @@ use pg_raw_parse::{
     nodes::{self, Alias, RangeFunction, SelectStmt},
     transform,
 };
-use pgdog_postgres_types::{Array, Format};
+use pgdog_postgres_types::{Array, DataType, Format};
 
 use crate::{
     frontend::client::query_engine::multi_step::SubqueryMulti,
@@ -154,16 +154,9 @@ impl<'a> SubqueryMulti<'a> {
 
             unnest_column_names.push(mem.make_string(Some(unnest_column_name.as_str())).uncast());
 
-            let data_type = field.data_type();
-
-            let pg_catalog_type: &str = data_type
-                .into_array_type()
-                .expect("evaluate_and_rewrite_outer_statement checked the column types")
-                .as_pg_catalog_type();
-
-            let element_oid = data_type
-                .to_oid()
-                .expect("all data types with an array type have an OID");
+            let array_type_name = DataType::array_type_oid(field.type_oid)
+                .and_then(DataType::array_type_name)
+                .expect("evaluate_and_rewrite_outer_statement checked the column types");
 
             let node = {
                 let mut node = mem.make_node::<nodes::ParamRef>();
@@ -184,7 +177,7 @@ impl<'a> SubqueryMulti<'a> {
                     .map(|value| value.data.as_ref())
             });
 
-            let array = Array::binary_from_encoded_elements(element_oid, elements);
+            let array = Array::binary_from_encoded_elements(field.type_oid, elements);
 
             old_bind.push_param(Parameter::from_bytes(array), Format::Binary);
 
@@ -193,7 +186,7 @@ impl<'a> SubqueryMulti<'a> {
                     node.uncast(),
                     mem.make_list(&[
                         mem.make_string(Some("pg_catalog")),
-                        mem.make_string(Some(pg_catalog_type)),
+                        mem.make_string(Some(array_type_name)),
                     ]),
                 )
                 .uncast();
