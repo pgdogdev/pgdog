@@ -549,3 +549,68 @@ hasher = "sha1"
         assert!(err.to_string().contains("$1"));
     }
 }
+
+#[cfg(test)]
+mod strict_parse_tests {
+    use super::*;
+
+    const CONFIG: &str = r#"
+[general]
+port = 6433
+
+[qos]
+write_backoff_delay = 10
+
+[[databases]]
+name = "prod"
+host = "127.0.0.1"
+tls_verify = "disabled"
+"#;
+
+    const USERS: &str = r#"
+[[users]]
+name = "alice"
+database = "prod"
+password = "secret"
+pool_size_primary = 5
+"#;
+
+    #[test]
+    fn strict_accepts_known_flattened_fields() {
+        let config = from_toml_strict(CONFIG, USERS).unwrap();
+        assert_eq!(config.config.qos.backoff.write_backoff_delay, Some(10));
+        assert_eq!(
+            config.config.databases[0].tls.tls_verify,
+            Some(TlsVerifyMode::Disabled)
+        );
+        assert_eq!(config.users.users[0].role_config.pool_size_primary, Some(5));
+    }
+
+    #[test]
+    fn strict_rejects_unknown_config_fields() {
+        let cases = [
+            ("unknown_top_level", format!("unknown_top_level = 1\n{CONFIG}")),
+            ("unknown_section", format!("{CONFIG}\n[unknown_section]\nkey = 1\n")),
+            (
+                "unknown_general",
+                CONFIG.replace("port = 6433", "port = 6433\nunknown_general = 1"),
+            ),
+            (
+                "unknown_qos",
+                CONFIG.replace("write_backoff_delay = 10", "write_backoff_delay = 10\nunknown_qos = 1"),
+            ),
+            ("unknown_database", format!("{CONFIG}unknown_database = 1\n")),
+        ];
+
+        for (key, config) in cases {
+            let err = from_toml_strict(&config, USERS).expect_err(key);
+            assert!(err.to_string().contains(key), "{key}: {err}");
+        }
+    }
+
+    #[test]
+    fn strict_rejects_unknown_users_fields() {
+        let err = from_toml_strict(CONFIG, &format!("{USERS}unknown_user = 1\n")).unwrap_err();
+        assert!(err.to_string().contains("unknown_user"), "{err}");
+    }
+}

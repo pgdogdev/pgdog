@@ -1864,6 +1864,86 @@ column = "legacy_id"
 
         assert_eq!(config.sharded_tables[4].mapping, None);
     }
+
+    #[test]
+    fn config_toml_ignores_unknown_fields() {
+        let source = r#"
+unknown_top_level = 1
+
+[general]
+port = 6433
+unknown_general = true
+
+[qos]
+write_backoff_delay = 10
+unknown_qos = 1
+
+[unknown_section]
+key = 1
+
+[[databases]]
+name = "prod"
+host = "127.0.0.1"
+tls_verify = "disabled"
+unknown_database = "x"
+"#;
+        let config: Config = toml::from_str(source).unwrap();
+        assert_eq!(config.general.port, 6433);
+        assert_eq!(config.qos.backoff.write_backoff_delay, Some(10));
+        assert_eq!(config.databases[0].name, "prod");
+        assert_eq!(config.databases[0].tls.tls_verify, Some(TlsVerifyMode::Disabled));
+
+        let source = r#"
+[[users]]
+name = "alice"
+database = "prod"
+pool_size_primary = 5
+unknown_user = 1
+"#;
+        let users: Users = toml::from_str(source).unwrap();
+        assert_eq!(users.users[0].name, "alice");
+        assert_eq!(users.users[0].role_config.pool_size_primary, Some(5));
+    }
+
+    #[test]
+    fn config_and_users_json_ignores_unknown_fields() {
+        let source = r#"{
+            "unknown_top_level": 1,
+            "config_path": "pgdog.toml",
+            "users_path": "users.toml",
+            "config": {
+                "unknown_config": 1,
+                "unknown_section": { "key": 1 },
+                "general": { "port": 6433, "unknown_general": true },
+                "qos": { "write_backoff_delay": 10, "unknown_qos": 1 },
+                "databases": [{
+                    "name": "prod",
+                    "host": "127.0.0.1",
+                    "tls_verify": "disabled",
+                    "unknown_database": "x"
+                }]
+            },
+            "users": {
+                "unknown_users": 1,
+                "users": [{
+                    "name": "alice",
+                    "database": "prod",
+                    "pool_size_primary": 5,
+                    "unknown_user": 1
+                }]
+            }
+        }"#;
+        let config: ConfigAndUsers = serde_json::from_str(source).unwrap();
+        assert_eq!(config.config.general.port, 6433);
+        assert_eq!(config.config.qos.backoff.write_backoff_delay, Some(10));
+        assert_eq!(config.config.databases[0].name, "prod");
+        assert_eq!(
+            config.config.databases[0].tls.tls_verify,
+            Some(TlsVerifyMode::Disabled)
+        );
+        assert_eq!(config.users.users[0].name, "alice");
+        assert_eq!(config.users.users[0].role_config.pool_size_primary, Some(5));
+    }
 }
 
 #[cfg(test)]
