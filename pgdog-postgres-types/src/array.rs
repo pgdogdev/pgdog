@@ -192,6 +192,43 @@ impl Array {
         buf.freeze()
     }
 
+    /// Splits `array` (array in binary format) into the values of the elements of `array`.
+    /// E.g., for bigint[] {1,NULL,3}, we return [8 bytes of 1], [None], and [8 bytes of 3]
+    /// Returns None for arrays with more than one dimension (e.g., {{1,2},{3,4}}) or that don't start at index 1 (e.g., '[0:1]={1,2}')
+    pub fn binary_elements(array: &[u8]) -> Option<Vec<Option<&[u8]>>> {
+        let read_i32 = |pos: usize| -> Option<i32> {
+            Some(i32::from_be_bytes(
+                array.get(pos..pos + 4)?.try_into().ok()?,
+            ))
+        };
+
+        let dimensions = read_i32(0)?;
+        let mut pos = 12;
+        let element_count = match dimensions {
+            0 => 0,
+            1 if read_i32(16)? == 1 => {
+                pos += 8;
+                usize::try_from(read_i32(12)?).ok()?
+            }
+            _ => return None,
+        };
+
+        let mut elements = Vec::with_capacity(element_count);
+        for _ in 0..element_count {
+            let len = read_i32(pos)?;
+            pos += 4;
+            if len < 0 {
+                elements.push(None);
+            } else {
+                let end = pos + len as usize;
+                elements.push(Some(array.get(pos..end)?));
+                pos = end;
+            }
+        }
+
+        Some(elements)
+    }
+
     fn encode_binary(&self) -> Result<Bytes, Error> {
         let mut buf = BytesMut::with_capacity(12 + 8 + self.elements.len() * 8);
         // Use ndims=0 only for truly empty arrays with default bounds.
@@ -485,6 +522,42 @@ fn decode_binary(bytes: &[u8], expected_element_oid: i32) -> Result<Array, Error
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_binary_elements() {
+        let one = 1i64.to_be_bytes();
+        let three = 3i64.to_be_bytes();
+        let elements = [Some(one.as_slice()), None, Some(three.as_slice())];
+
+        // Splitting {1,NULL,3} returns the elements
+        let array = Array::binary_from_encoded_elements(20, elements.into_iter());
+        assert_eq!(Array::binary_elements(&array), Some(elements.to_vec()));
+
+        // {}, no elements
+        let empty = Array::binary_from_encoded_elements(20, std::iter::empty());
+        assert_eq!(Array::binary_elements(&empty), Some(vec![]));
+
+        // Arrays rejected; can't rebuild from just the elements
+        assert_eq!(
+            Array::binary_elements(&binary_header(&[(2, 1), (1, 1)])),
+            None
+        );
+
+        assert_eq!(Array::binary_elements(&binary_header(&[(2, 0)])), None); // '[0:1]={1,3}'
+    }
+
+    /// Returns the header of a bigint[] in binary format (without the elements) for `dimensions`, which is given to us as (length, first index)
+    /// E.g., for [(2, 1), (1, 1)], we return the header of a 2 by 1 array such as {{1},{3}}.
+    fn binary_header(dimensions: &[(i32, i32)]) -> Vec<u8> {
+        let mut header = [dimensions.len() as i32, 0, 20].to_vec();
+        for (length, first_index) in dimensions {
+            header.extend([*length, *first_index]);
+        }
+        header
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect()
+    }
+
     use super::*;
     use crate::ToDataRowColumn;
 

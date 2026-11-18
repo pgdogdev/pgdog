@@ -61,7 +61,7 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
                 "DROP TABLE IF EXISTS {subpackages_table}, {suborders_table}, {subusers_table}, {substates_table}"
             ),
             format!(
-                "CREATE TABLE {subusers_table} (id BIGINT PRIMARY KEY, username text, status text, profile jsonb, signed_up date, last_ip inet)"
+                "CREATE TABLE {subusers_table} (id BIGINT PRIMARY KEY, username text, status text, profile jsonb, signed_up date, last_ip inet, tags varchar[], media_ids bigint[])"
             ),
             format!("CREATE TABLE {substates_table} (state text PRIMARY KEY, shipping text)"),
             format!(
@@ -81,13 +81,13 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
         format!("INSERT INTO {substates_table}(state, shipping) VALUES ('CA', 'quick')"),
         format!("INSERT INTO {substates_table}(state, shipping) VALUES ('NC', 'not quick')"),
         format!(
-            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip) VALUES (1, 'test', 'VIP', '{{\"plan\": \"pro\"}}', '2026-01-01', '10.0.0.1')"
+            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip, tags, media_ids) VALUES (1, 'test', 'VIP', '{{\"plan\": \"pro\"}}', '2026-01-01', '10.0.0.1', '{{a,b}}', '{{1,2}}')"
         ),
         format!(
-            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip) VALUES (2, 'test2', 'regular', '{{\"plan\": \"free\"}}', '2026-02-01', '192.168.0.2')"
+            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip, tags, media_ids) VALUES (2, 'test2', 'regular', '{{\"plan\": \"free\"}}', '2026-02-01', '192.168.0.2', '{{}}', '{{}}')"
         ),
         format!(
-            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip) VALUES (3, 'test3', 'VIP', '{{\"plan\": \"pro\"}}', '2026-03-01', '10.0.0.3')"
+            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip, tags, media_ids) VALUES (3, 'test3', 'VIP', '{{\"plan\": \"pro\"}}', '2026-03-01', '10.0.0.3', '{{c,NULL}}', '{{3}}')"
         ),
         format!("INSERT INTO {subusers_table}(id, username, status) VALUES (4, 'test4', NULL)"),
         format!(

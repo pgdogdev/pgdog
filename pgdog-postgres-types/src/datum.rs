@@ -402,6 +402,18 @@ impl DataType {
         None
     }
 
+    /// Returns the OID of the elements of the built-in array type `array_oid`, e.g., 20 (bigint) for bigint[] (1016).
+    /// Returns None for types that aren't arrays of built-in types (e.g., bigint or arrays of enums).
+    pub fn array_element_oid(array_oid: i32) -> Option<i32> {
+        for (element_oid, oid, _) in BUILTIN_ARRAY_TYPES {
+            if oid == array_oid {
+                return Some(element_oid);
+            }
+        }
+
+        None
+    }
+
     pub fn pg_catalog_type_to_datatype(pg_catalog_type: &str) -> Option<Self> {
         Some(match pg_catalog_type {
             "int8" => DataType::Bigint,
