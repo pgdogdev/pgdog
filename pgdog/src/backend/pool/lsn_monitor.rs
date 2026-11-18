@@ -64,7 +64,7 @@ SELECT
     '0/0'::pg_lsn AS lsn,
     0::bigint AS offset_bytes,
     now() AS timestamp,
-    1::integer,
+    1::integer
 "; // Timeline doesn't matter on Aurora I don't think. We don't use it anyway.
 
 /// LSN information.
