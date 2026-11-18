@@ -214,8 +214,8 @@ SELECT s.id, s.username FROM (
 -- what: SELECT .. FROM (<sq>) s ORDER BY .. LIMIT <n>, <sq> is cross-shard
 -- route select: 0,1
 -- route select: any
-SELECT s.id, s.status FROM (
-    SELECT id, status FROM subusers WHERE status IS NOT NULL
+SELECT * FROM (
+    SELECT * FROM subusers WHERE status IS NOT NULL
 ) s ORDER BY s.id DESC LIMIT 2;
 
 -- case

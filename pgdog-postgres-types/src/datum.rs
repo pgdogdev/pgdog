@@ -376,78 +376,30 @@ impl DataType {
         }
     }
 
-    // Returns None for arrays, Vector and Other, since we can't send those types as one-dimensional arrays (unnest would flatten arrays of arrays)
-    pub fn into_array_type(&self) -> Option<DataType> {
-        match self {
-            DataType::Bigint => Some(DataType::Array(1016)),
-            DataType::Integer => Some(DataType::Array(1007)),
-            DataType::Text => Some(DataType::Array(1009)),
-            DataType::Interval => Some(DataType::Array(1187)),
-            DataType::Timestamp => Some(DataType::Array(1115)),
-            DataType::TimestampTz => Some(DataType::Array(1185)),
-            DataType::Real => Some(DataType::Array(1021)),
-            DataType::DoublePrecision => Some(DataType::Array(1022)),
-            DataType::Bool => Some(DataType::Array(1000)),
-            DataType::SmallInt => Some(DataType::Array(1005)),
-            DataType::Numeric => Some(DataType::Array(1231)),
-            DataType::Uuid => Some(DataType::Array(2951)),
-            DataType::Oid => Some(DataType::Array(1028)),
-            DataType::Array(_) | DataType::Vector | DataType::Other(_) => None,
-            DataType::Cidr => todo!(),
-            DataType::Money => todo!(),
-            DataType::Inet => todo!(),
+    /// Returns the OID of the array type of the built-in type `type_oid`, e.g., 3807 (jsonb[]) for jsonb (3802).
+    ///
+    /// Returns None for
+    /// - array types (e.g., bigint[]), since Postgres has no array type for bigint[] (in pg_type, typarray is 0 for bigint[]).
+    /// - types that aren't built into Postgres (e.g., enums or vector from pgvector), which aren't in `BUILTIN_ARRAY_TYPES`.
+    pub fn array_type_oid(type_oid: i32) -> Option<i32> {
+        for (element_oid, array_oid, _) in BUILTIN_ARRAY_TYPES {
+            if element_oid == type_oid {
+                return Some(array_oid);
+            }
         }
+
+        None
     }
 
-    /// Format the `DataType` into a type that can be
-    /// expressed as pg_catalog.<TYPE>
-    ///
-    /// Manually checked via `SELECT oid, typname, typnamespace::regnamespace AS schema_name
-    /// FROM pg_catalog.pg_type ORDER BY oid;` against `DataType::from_oid`
-    ///
-    /// <https://www.postgresql.org/docs/current/datatype.html>
-    pub fn as_pg_catalog_type(&self) -> &'static str {
-        match self {
-            DataType::Bigint => "int8",
-            DataType::Integer => "int4",
-            DataType::Text => "text",
-            DataType::Interval => "interval",
-            DataType::Timestamp => "timestamp",
-            DataType::TimestampTz => "timestamptz",
-            DataType::Real => "float4",
-            DataType::DoublePrecision => "float8",
-            DataType::Bool => "bool",
-            DataType::SmallInt => "int2",
-            DataType::Numeric => "numeric",
-            DataType::Uuid => "uuid",
-            DataType::Oid => "oid",
-            DataType::Vector => todo!(
-                "We don't have a type OID for this within from_oid; not sure what this maps to"
-            ),
-            DataType::Array(inner_oid) => match inner_oid {
-                1000 => "_bool",
-                1005 => "_int2",
-                1007 => "_int4",
-                1009 => "_text",
-                1015 => "_varchar",
-                1016 => "_int8",
-                1021 => "_float4",
-                1022 => "_float8",
-                1028 => "_oid",
-                1115 => "_timestamp",
-                1185 => "_timestamptz",
-                1187 => "_interval",
-                1231 => "_numeric",
-                2951 => "_uuid",
-                _ => panic!("We should have all the array types covered (this matches from_oid)"),
-            },
-            DataType::Other(_) => {
-                panic!("This needs to be handled properly with a client-facing error")
+    /// Returns the name of the built-in array type `array_oid` in pg_catalog, e.g., "_jsonb" for jsonb[] (3807).
+    pub fn array_type_name(array_oid: i32) -> Option<&'static str> {
+        for (_, oid, name) in BUILTIN_ARRAY_TYPES {
+            if oid == array_oid {
+                return Some(name);
             }
-            DataType::Money => todo!(),
-            DataType::Inet => todo!(),
-            DataType::Cidr => todo!(),
         }
+
+        None
     }
 
     pub fn pg_catalog_type_to_datatype(pg_catalog_type: &str) -> Option<Self> {
@@ -510,6 +462,94 @@ impl fmt::Display for DataType {
         }
     }
 }
+
+/// Types that are built into Postgres, as well as the array type of each type, e.g., (3802, 3807, "_jsonb") for jsonb and jsonb[]
+/// Each entry tuple represents (the OID of the type, the OID of the array type, the name of the array type)
+///
+/// Generated on Postgres 18 with the query below. The query lists the types in pg_catalog that
+/// - are built in (`oid < 10000`). Postgres assigns these OIDs in its source code
+/// - have a binary format (`typsend <> 0 and typreceive <> 0`), to ensure that we can copy values of these types into arrays in binary format without decoding the values
+/// - are base types (e.g., int8), range types (e.g., int4range) or multirange types (e.g., int4multirange) (`typtype in ('b','r','m')`)
+///
+/// `select oid, typarray, (select typname from pg_type a where a.oid = t.typarray) from pg_type t where typnamespace = 'pg_catalog'::regnamespace and typarray <> 0 and oid < 10000 and typtype in ('b','r','m') and typsend <> 0 and typreceive <> 0 order by oid`
+///
+/// <https://www.postgresql.org/docs/current/datatype.html>
+const BUILTIN_ARRAY_TYPES: [(i32, i32, &str); 74] = [
+    (16, 1000, "_bool"),
+    (17, 1001, "_bytea"),
+    (18, 1002, "_char"),
+    (19, 1003, "_name"),
+    (20, 1016, "_int8"),
+    (21, 1005, "_int2"),
+    (22, 1006, "_int2vector"),
+    (23, 1007, "_int4"),
+    (24, 1008, "_regproc"),
+    (25, 1009, "_text"),
+    (26, 1028, "_oid"),
+    (27, 1010, "_tid"),
+    (28, 1011, "_xid"),
+    (29, 1012, "_cid"),
+    (30, 1013, "_oidvector"),
+    (114, 199, "_json"),
+    (142, 143, "_xml"),
+    (600, 1017, "_point"),
+    (601, 1018, "_lseg"),
+    (602, 1019, "_path"),
+    (603, 1020, "_box"),
+    (604, 1027, "_polygon"),
+    (628, 629, "_line"),
+    (650, 651, "_cidr"),
+    (700, 1021, "_float4"),
+    (701, 1022, "_float8"),
+    (718, 719, "_circle"),
+    (774, 775, "_macaddr8"),
+    (790, 791, "_money"),
+    (829, 1040, "_macaddr"),
+    (869, 1041, "_inet"),
+    (1042, 1014, "_bpchar"),
+    (1043, 1015, "_varchar"),
+    (1082, 1182, "_date"),
+    (1083, 1183, "_time"),
+    (1114, 1115, "_timestamp"),
+    (1184, 1185, "_timestamptz"),
+    (1186, 1187, "_interval"),
+    (1266, 1270, "_timetz"),
+    (1560, 1561, "_bit"),
+    (1562, 1563, "_varbit"),
+    (1700, 1231, "_numeric"),
+    (1790, 2201, "_refcursor"),
+    (2202, 2207, "_regprocedure"),
+    (2203, 2208, "_regoper"),
+    (2204, 2209, "_regoperator"),
+    (2205, 2210, "_regclass"),
+    (2206, 2211, "_regtype"),
+    (2950, 2951, "_uuid"),
+    (2970, 2949, "_txid_snapshot"),
+    (3220, 3221, "_pg_lsn"),
+    (3614, 3643, "_tsvector"),
+    (3615, 3645, "_tsquery"),
+    (3734, 3735, "_regconfig"),
+    (3769, 3770, "_regdictionary"),
+    (3802, 3807, "_jsonb"),
+    (3904, 3905, "_int4range"),
+    (3906, 3907, "_numrange"),
+    (3908, 3909, "_tsrange"),
+    (3910, 3911, "_tstzrange"),
+    (3912, 3913, "_daterange"),
+    (3926, 3927, "_int8range"),
+    (4072, 4073, "_jsonpath"),
+    (4089, 4090, "_regnamespace"),
+    (4096, 4097, "_regrole"),
+    (4191, 4192, "_regcollation"),
+    (4451, 6150, "_int4multirange"),
+    (4532, 6151, "_nummultirange"),
+    (4533, 6152, "_tsmultirange"),
+    (4534, 6153, "_tstzmultirange"),
+    (4535, 6155, "_datemultirange"),
+    (4536, 6157, "_int8multirange"),
+    (5038, 5039, "_pg_snapshot"),
+    (5069, 271, "_xid8"),
+];
 
 #[cfg(test)]
 mod tests {

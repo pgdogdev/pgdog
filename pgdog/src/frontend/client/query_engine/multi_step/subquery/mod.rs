@@ -14,6 +14,8 @@ mod evaluate;
 mod request;
 mod rewrite;
 
+use pgdog_postgres_types::DataType;
+
 use super::Error;
 use crate::{
     frontend::{
@@ -190,12 +192,21 @@ impl<'ast> SubqueryMulti<'ast> {
 
             // We send the rows of subqueries as unnest(..) arrays, so we check the column types before rewriting to ensure that all columns have array types.
             // EXISTS is the only exception to this, since we only read whether or not the subquery returned rows (exists just needs 1 row to be replaced w/ TRUE)
+            //
+            // Specifically, we return the error below for the columns of the types that `DataType::array_type_oid` doesn't return an array type for:
+            // - array columns (e.g., bigint[]), since 2D arrays need inner arrays of the same length, but the arrays of the rows can have different lengths (e.g., {a,b} and {c}).
+            // - columns of types that extensions or users create (e.g., enums) (see below)
+            //
+            // TODO(jkaczman): Support columns who have enum type e.g., mood (CREATE TYPE mood AS ENUM ('sad', 'happy')) or citext.
+            // The RowDescription gives us the OID of the type (e.g., 16385). However, the OID can vary between shards. The good thing is that the name of the type (mood) is the same on all shards. This allows us to first look up the name of the type in pg_type (on the shard that returned the OID)
+            // Then, we could send the values as a text[], and cast that array with the name of the type instead of the OID, e.g., $1::pg_catalog._text::mood[].
+            // How can the values go into the text[] as-is? In binary format, enum or citext value is the same bytes as the text value (e.g., 'happy' is the 5 bytes h, a, p, p, y).
             if !self.is_exists_in_where(subquery)
                 && let (_, Some(row_description)) = &results
                 && row_description
                     .fields
                     .iter()
-                    .any(|field| field.data_type().into_array_type().is_none())
+                    .any(|field| DataType::array_type_oid(field.type_oid).is_none())
             {
                 return Err(Error::Subquery(
                     SubqueryError::SubqueryReturningUnsupportedColumn,

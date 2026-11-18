@@ -61,7 +61,7 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
                 "DROP TABLE IF EXISTS {subpackages_table}, {suborders_table}, {subusers_table}, {substates_table}"
             ),
             format!(
-                "CREATE TABLE {subusers_table} (id BIGINT PRIMARY KEY, username text, status text)"
+                "CREATE TABLE {subusers_table} (id BIGINT PRIMARY KEY, username text, status text, profile jsonb, signed_up date, last_ip inet)"
             ),
             format!("CREATE TABLE {substates_table} (state text PRIMARY KEY, shipping text)"),
             format!(
@@ -80,11 +80,15 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
     let setup_sql_inserts = [
         format!("INSERT INTO {substates_table}(state, shipping) VALUES ('CA', 'quick')"),
         format!("INSERT INTO {substates_table}(state, shipping) VALUES ('NC', 'not quick')"),
-        format!("INSERT INTO {subusers_table}(id, username, status) VALUES (1, 'test', 'VIP')"),
         format!(
-            "INSERT INTO {subusers_table}(id, username, status) VALUES (2, 'test2', 'regular')"
+            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip) VALUES (1, 'test', 'VIP', '{{\"plan\": \"pro\"}}', '2026-01-01', '10.0.0.1')"
         ),
-        format!("INSERT INTO {subusers_table}(id, username, status) VALUES (3, 'test3', 'VIP')"),
+        format!(
+            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip) VALUES (2, 'test2', 'regular', '{{\"plan\": \"free\"}}', '2026-02-01', '192.168.0.2')"
+        ),
+        format!(
+            "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip) VALUES (3, 'test3', 'VIP', '{{\"plan\": \"pro\"}}', '2026-03-01', '10.0.0.3')"
+        ),
         format!("INSERT INTO {subusers_table}(id, username, status) VALUES (4, 'test4', NULL)"),
         format!(
             "INSERT INTO {suborders_table}(id, user_id, state, created_at) VALUES (1, 1, 'CA', '2026-10-12 14:30:00 America/New_York')"
