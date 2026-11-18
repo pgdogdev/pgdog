@@ -3,17 +3,18 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing::info;
 
+use crate::api::abort_resharding::AbortReshardingTask;
 use crate::api::resharding::ReshardTask;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::TaskError;
-use crate::api::{MigrationError, run_task};
+use crate::api::{ReshardingError, run_task};
 use crate::backend::databases::databases;
 use crate::backend::replication::logical::Error::ReplicationAborted;
 use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::comms::comms;
 use crate::frontend::router::cli::RouterCli;
-use pgdog_stats::Databases;
+use pgdog_stats::{CommandKind, Databases};
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
@@ -111,6 +112,21 @@ pub(crate) enum Commands {
         /// Don't perform pre-data or post-data schema sync.
         #[arg(long)]
         skip_schema_sync: bool,
+
+        /// Drop the replication slots that the run created, and all its origins,
+        /// when the run stops before it ends. Slots that existed before the run
+        /// stay. With `false`, the run keeps them and can be aborted later.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        cleanup_on_cancel: bool,
+
+        /// Abort the unfinished resharding from source to destination: drop
+        /// every slot with its slot name, also slots that existed before the
+        /// run, all its origins and its state.
+        #[arg(
+            long,
+            conflicts_with_all = ["cleanup_on_cancel", "replicate_only", "tables_only", "sync_only", "skip_schema_sync"]
+        )]
+        abort: bool,
     },
 
     /// Copy schema from source to destination cluster.
@@ -241,14 +257,30 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         sync_only,
         replication_slot,
         skip_schema_sync,
+        cleanup_on_cancel,
+        abort,
     } = commands
     {
         let state = ReshardingState::builder()
             .source(&from_database)
             .destination(&to_database)
             .publication(&publication)
-            .maybe_replication_slot(replication_slot)
+            .maybe_replication_slot(replication_slot.clone())
+            .cleanup_on_cancel(cleanup_on_cancel)
             .build()?;
+
+        if abort {
+            run_task(
+                Box::pin(AbortReshardingTask::checked(
+                    state,
+                    CommandKind::Reshard,
+                    replication_slot,
+                ))
+                .await?,
+            )
+            .await?;
+            return Ok(());
+        }
 
         let result = run_task(
             ReshardTask::builder()
@@ -261,7 +293,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         )
         .await;
 
-        if let Err(TaskError::Failed(MigrationError::Replication(ReplicationAborted))) = result
+        if let Err(TaskError::Failed(ReshardingError::Replication(ReplicationAborted))) = result
             && comms().offline()
         {
             // pgdog is shutting down, that's why the replication process is aborted.
@@ -382,6 +414,49 @@ mod test {
                     panic!("not a data sync command");
                 };
                 assert_eq!(tables_only, expected, "{args:?}");
+            }
+        }
+
+        #[test]
+        fn test_cleanup_on_cancel_and_abort() {
+            for (args, cleanup, abort) in [
+                (vec!["--publication", "p"], true, false),
+                (
+                    vec!["--publication", "p", "--cleanup-on-cancel", "false"],
+                    false,
+                    false,
+                ),
+                (
+                    vec!["--publication", "p", "--cleanup-on-cancel=true"],
+                    true,
+                    false,
+                ),
+                (vec!["--publication", "p", "--abort"], true, true),
+            ] {
+                let Commands::DataSync {
+                    cleanup_on_cancel,
+                    abort: parsed_abort,
+                    ..
+                } = parse(&args).unwrap()
+                else {
+                    panic!("not a data sync command");
+                };
+                assert_eq!(cleanup_on_cancel, cleanup, "{args:?}");
+                assert_eq!(parsed_abort, abort, "{args:?}");
+            }
+
+            for args in [
+                vec![
+                    "--publication",
+                    "p",
+                    "--abort",
+                    "--cleanup-on-cancel",
+                    "false",
+                ],
+                vec!["--publication", "p", "--abort", "--replicate-only"],
+                vec!["--publication", "p", "--abort", "--tables-only"],
+            ] {
+                assert!(parse(&args).is_err(), "{args:?}");
             }
         }
     }

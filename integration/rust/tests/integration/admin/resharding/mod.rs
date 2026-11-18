@@ -1,3 +1,4 @@
+pub mod abort;
 pub mod copy_data;
 pub mod replication;
 pub mod replication_slots;
@@ -11,7 +12,7 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 
-use crate::setup::connection_sqlx_direct_db;
+use crate::setup::{connection_sqlx_direct, connection_sqlx_direct_db};
 use sqlx::{Executor, Pool, Postgres, Row};
 use tokio::time::{sleep, timeout};
 
@@ -117,11 +118,45 @@ async fn test_slot_names(pool: &Pool<Postgres>) -> Vec<String> {
     .expect("replication slots must be readable")
 }
 
+/// Wait until the forward slot of shard 0 exists on the source and has a
+/// confirmed flush position. Changes are streamed only after the slot is
+/// ready, and the task status can come first.
+async fn wait_for_source_slot(admin: &Pool<Postgres>, task_id: i64, slot: Option<&str>) {
+    let (condition, value) = match slot {
+        Some(slot) => ("slot_name = $1", format!("{slot}_0")),
+        None => ("slot_name LIKE $1", r"\_\_pgdog\_repl\_%\_0".to_owned()),
+    };
+    let query = format!(
+        "SELECT count(*) FROM pg_replication_slots \
+         WHERE {condition} AND confirmed_flush_lsn IS NOT NULL"
+    );
+    let direct = connection_sqlx_direct().await;
+    table_copies::poll("the source replication slot", || async {
+        fail_if_task_errored(admin, task_id).await;
+        let slots: i64 = sqlx::query_scalar(&query)
+            .bind(&value)
+            .fetch_one(&direct)
+            .await
+            .expect("replication slots must be readable");
+        (slots > 0).then_some(())
+    })
+    .await;
+}
+
 async fn drop_all_test_slots(direct: &Pool<Postgres>) {
     drop_test_slots(direct).await;
     for db in &["shard_0", "shard_1"] {
         drop_test_slots(&connection_sqlx_direct_db(db).await).await;
     }
+}
+
+async fn drop_test_origins(pool: &Pool<Postgres>) {
+    let _ = pool
+        .execute(
+            r"SELECT pg_replication_origin_drop(roname) FROM pg_replication_origin
+              WHERE roname LIKE '\_\_pgdog\_origin\_\_\_pgdog\_repl\_%'",
+        )
+        .await;
 }
 
 async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
@@ -131,6 +166,13 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
     sleep(Duration::from_millis(500)).await;
 
     drop_all_test_slots(direct).await;
+    for db in &["shard_0", "shard_1"] {
+        drop_test_origins(&connection_sqlx_direct_db(db).await).await;
+    }
+    let _ = connection_sqlx_direct_db("shard_0")
+        .await
+        .execute("DROP TABLE IF EXISTS pgdog.resharding")
+        .await;
 
     let _ = direct
         .execute(format!("DROP PUBLICATION IF EXISTS {TEST_PUB}").as_str())
