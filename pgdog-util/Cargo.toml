@@ -4,3 +4,9 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_ignored.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+toml = "0.8"

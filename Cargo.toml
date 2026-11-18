@@ -27,6 +27,7 @@ pgdog-util = { path = "./pgdog-util", version = "0.1.0" }
 bon = "3.9"
 derive_more = { version = "2", features = ["display", "from"] }
 schemars = { version = "1.2.1", features = ["uuid1", "chrono04", "indexmap2"] }
+serde_ignored = "0.1"
 serde_json = "1.0"
 indexmap = { version = "2.14", features = ["serde"] }
 serde_with = { version = "3.22", features = ["macros", "schemars_1"] }
