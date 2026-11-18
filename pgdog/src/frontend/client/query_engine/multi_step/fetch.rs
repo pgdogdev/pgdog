@@ -16,8 +16,6 @@ pub(crate) async fn fetch_rows(
     backend: &mut Connection,
     request: &ClientRequest,
 ) -> Result<(Vec<DataRow>, Option<RowDescription>), Error> {
-    backend.set_binds(request);
-
     backend
         .handle_client_request(request, &mut Router::default(), false)
         .await?;

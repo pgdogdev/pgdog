@@ -49,6 +49,8 @@ impl<'a> SubqueryMulti<'a> {
 
                     rewrite_result.apply_after_route(&mut client_request)?;
 
+                    engine.backend.set_binds(&client_request);
+
                     Ok(Some(
                         multi_step::fetch_rows(&mut engine.backend, &client_request).await?,
                     ))
