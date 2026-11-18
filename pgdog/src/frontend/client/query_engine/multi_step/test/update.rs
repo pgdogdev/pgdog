@@ -347,6 +347,127 @@ async fn test_move_rows_simple() {
         });
 }
 
+async fn failed_move_recovers(predicate: &str, expected_error: &str) {
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+
+    for extended in [false, true] {
+        for returning in ["", " RETURNING id"] {
+            let source = client.random_id_for_shard(0);
+            let destination = client.random_id_for_shard(1);
+
+            for query in [
+                "BEGIN".to_owned(),
+                format!("INSERT INTO sharded (id) VALUES ({source}), ({destination})"),
+                "SAVEPOINT move".to_owned(),
+            ] {
+                client.send_simple(Query::new(query)).await;
+                client.read_until('Z').await.expect("setup succeeds");
+            }
+
+            if extended {
+                client
+                    .send(Parse::new_anonymous(&format!(
+                        "UPDATE sharded SET id = $1 WHERE id = $2{predicate}{returning}"
+                    )))
+                    .await;
+                client
+                    .send(Bind::new_params(
+                        "",
+                        &[
+                            Parameter::new(destination.to_string().as_bytes()),
+                            Parameter::new(source.to_string().as_bytes()),
+                        ],
+                    ))
+                    .await;
+                client.send(Execute::new()).await;
+                client.send(Sync).await;
+                client
+                    .try_process()
+                    .await
+                    .expect("recoverable update error");
+            } else {
+                client
+                    .send_simple(Query::new(format!(
+                        "UPDATE sharded SET id = {destination} WHERE id = {source}{predicate}{returning}"
+                    )))
+                    .await;
+            }
+
+            let reply = client.read_until('E').await.expect("update error");
+            let error =
+                expect_message!(reply.last().expect("error response").clone(), ErrorResponse);
+            assert!(error.message.contains(expected_error), "{error:?}");
+            assert_eq!(
+                expect_message!(client.read().await, ReadyForQuery).status,
+                'E'
+            );
+            assert!(
+                !client.engine.backend.has_more_messages(),
+                "internal query responses must be drained before reporting the error"
+            );
+            assert!(client.client.transaction.expect("open transaction").error());
+
+            // Each following response must start with its own CommandComplete,
+            // without a leftover ReadyForQuery from the failed internal query.
+            for (query, command, status) in [
+                ("ROLLBACK TO SAVEPOINT move".to_owned(), "ROLLBACK", 'T'),
+                (
+                    format!("DELETE FROM sharded WHERE id = {source}"),
+                    "DELETE 1",
+                    'T',
+                ),
+                ("COMMIT".to_owned(), "COMMIT", 'I'),
+            ] {
+                client.send_simple(Query::new(query)).await;
+                assert_eq!(
+                    expect_message!(client.read().await, CommandComplete).command(),
+                    command
+                );
+                assert_eq!(
+                    expect_message!(client.read().await, ReadyForQuery).status,
+                    status
+                );
+                assert!(
+                    !client
+                        .client
+                        .transaction
+                        .is_some_and(|transaction| transaction.error())
+                );
+            }
+
+            client
+                .send_simple(Query::new(format!(
+                    "SELECT id FROM sharded WHERE id IN ({source}, {destination})"
+                )))
+                .await;
+            expect_message!(client.read().await, RowDescription);
+            assert_eq!(
+                expect_message!(client.read().await, DataRow).get::<i64>(0, Format::Text),
+                Some(destination)
+            );
+            expect_message!(client.read().await, CommandComplete);
+            expect_message!(client.read().await, ReadyForQuery);
+
+            client
+                .send_simple(Query::new(format!(
+                    "DELETE FROM sharded WHERE id = {destination}"
+                )))
+                .await;
+            client.read_until('Z').await.expect("cleanup succeeds");
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_failed_move_insert_recovers() {
+    failed_move_recovers("", "23505").await;
+}
+
+#[tokio::test]
+async fn test_failed_move_delete_recovers() {
+    failed_move_recovers(" AND nonexistent_update_column = 1", "42703").await;
+}
+
 #[tokio::test]
 async fn test_move_rows_extended() {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;

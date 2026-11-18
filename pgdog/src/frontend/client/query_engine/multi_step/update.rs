@@ -41,6 +41,14 @@ impl<'a> UpdateMulti<'a> {
             Err(err) => {
                 // These are recoverable with a ROLLBACK.
                 if matches!(err, Error::Update(_) | Error::Execution(_)) {
+                    // Drain backends and set transaction error state.
+                    while self.engine.backend.has_more_messages() {
+                        self.engine.read_server_message().await?;
+                    }
+                    if let Some(transaction) = context.transaction.as_mut() {
+                        transaction.set_error();
+                    }
+
                     self.engine
                         .error_response(context, client_request, ErrorResponse::from_err(&err))
                         .await?;
