@@ -329,6 +329,16 @@ fn deparsed<'n, N: Into<Node<'n>>>(node: N) -> Result<Statement, SchemaSyncError
     Ok(Statement::new(pg_raw_parse::deparse(node)?.as_str()))
 }
 
+macro_rules! deparsed_with {
+    ($stmt:expr, $setter:ident) => {
+        deparsed(&*make::owned(|mem| {
+            let mut stmt = mem.make_unique($stmt);
+            stmt.as_mut().$setter(true);
+            stmt
+        }))
+    };
+}
+
 /// SQL longer than this is cut short in the log, with an ellipsis. The full
 /// text of every statement is available from `schema-sync --dry-run`.
 const LOG_CHARS: usize = 200;
@@ -726,35 +736,20 @@ impl PgDumpOutput {
                 }
 
                 Node::CreateSeqStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
                 Node::CreateExtensionStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
                 Node::CreateSchemaStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
@@ -879,11 +874,28 @@ impl PgDumpOutput {
                                     }
                                 }
 
+                                nodes::AlterTableType::AT_AddInherit => {
+                                    if state == SyncState::PreData {
+                                        result.push(Statement::new(original).set_skip_if_exists());
+                                    }
+                                }
+
+                                nodes::AlterTableType::AT_ClusterOn => {
+                                    if state == SyncState::PostData {
+                                        result.push(Statement::new(original));
+                                    }
+                                }
+
                                 // AlterTableType::AtChangeOwner => {
                                 //     continue; // Don't change owners, for now.
                                 // }
                                 _ => {
-                                    if state == SyncState::PreData {
+                                    let phase = if stmt.objtype == nodes::ObjectType::OBJECT_INDEX {
+                                        SyncState::PostData
+                                    } else {
+                                        SyncState::PreData
+                                    };
+                                    if state == phase {
                                         result.push(Statement::new(original));
                                     }
                                 }
@@ -893,14 +905,12 @@ impl PgDumpOutput {
                 }
 
                 Node::CreateTrigStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_replace(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        if stmt.isconstraint {
+                            result.push(Statement::new(original).set_skip_if_exists());
+                        } else {
+                            result.push(deparsed_with!(stmt, set_replace)?);
+                        }
                     }
                 }
 
@@ -974,52 +984,81 @@ impl PgDumpOutput {
                 }
 
                 Node::ViewStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_replace(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_replace)?);
                     }
                 }
 
                 Node::CreateTableAsStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
                 Node::CreateFunctionStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_replace(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_replace)?);
                     }
                 }
 
-                Node::AlterOwnerStmt(stmt) => {
-                    if stmt.object_type != nodes::ObjectType::OBJECT_PUBLICATION
-                        && state == SyncState::PreData
-                    {
-                        result.push(Statement::new(original));
+                Node::DefineStmt(stmt) if stmt.kind == nodes::ObjectType::OBJECT_AGGREGATE => {
+                    if state == SyncState::PreData {
+                        result.push(deparsed_with!(stmt, set_replace)?);
                     }
                 }
+
+                Node::AlterOwnerStmt(stmt) => match stmt.object_type {
+                    nodes::ObjectType::OBJECT_PUBLICATION => continue,
+                    nodes::ObjectType::OBJECT_EVENT_TRIGGER => {
+                        if state == SyncState::PostData {
+                            result.push(Statement::new(original).set_ignore_errors());
+                        }
+                    }
+                    _ => {
+                        if state == SyncState::PreData {
+                            result.push(Statement::new(original));
+                        }
+                    }
+                },
 
                 Node::CreateEnumStmt(_)
                 | Node::CreateDomainStmt(_)
-                | Node::CompositeTypeStmt(_) => {
+                | Node::CompositeTypeStmt(_)
+                | Node::CreateRangeStmt(_)
+                | Node::DefineStmt(_)
+                | Node::CreateCastStmt(_)
+                | Node::CreateOpClassStmt(_)
+                | Node::CreateOpFamilyStmt(_)
+                | Node::CreateConversionStmt(_)
+                | Node::CreateAmStmt(_)
+                | Node::CreatePolicyStmt(_)
+                | Node::RuleStmt(_)
+                | Node::CreateStatsStmt(_)
+                | Node::CreateFdwStmt(_)
+                | Node::CreateForeignServerStmt(_)
+                | Node::CreateUserMappingStmt(_) => {
+                    if state == SyncState::PreData {
+                        result.push(Statement::new(original).set_skip_if_exists());
+                    }
+                }
+
+                Node::CreateEventTrigStmt(_) => {
+                    if state == SyncState::PostData {
+                        result.push(
+                            Statement::new(original)
+                                .set_skip_if_exists()
+                                .set_ignore_errors(),
+                        );
+                    }
+                }
+
+                Node::AlterEventTrigStmt(_) => {
+                    if state == SyncState::PostData {
+                        result.push(Statement::new(original).set_ignore_errors());
+                    }
+                }
+
+                Node::Invalid(node) if node.type_ == nodes::NodeTag::T_CreateForeignTableStmt => {
                     if state == SyncState::PreData {
                         result.push(Statement::new(original).set_skip_if_exists());
                     }
@@ -1030,6 +1069,19 @@ impl PgDumpOutput {
                         result.push(Statement::new(original));
                     }
                 }
+                Node::CommentStmt(stmt)
+                    if matches!(
+                        stmt.objtype,
+                        nodes::ObjectType::OBJECT_INDEX
+                            | nodes::ObjectType::OBJECT_TABCONSTRAINT
+                            | nodes::ObjectType::OBJECT_EVENT_TRIGGER
+                    ) =>
+                {
+                    if state == SyncState::PostData {
+                        result.push(Statement::new(original).set_ignore_errors());
+                    }
+                }
+
                 Node::SelectStmt(_) => continue,
                 _ => {
                     if state == SyncState::PreData {
@@ -1252,6 +1304,140 @@ FROM public.s;"#,
         assert_eq!(
             statements[0].sql,
             "CREATE OR REPLACE VIEW public.v AS SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE (summary -> 'stop'::text ->> 'tz'::text))::date AS d FROM public.s"
+        );
+    }
+
+    #[test]
+    fn test_event_triggers_run_after_post_data_ddl() {
+        let output = parse(
+            r#"
+CREATE FUNCTION public.evt() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$;
+CREATE TABLE public.t (id bigint NOT NULL);
+CREATE INDEX t_id_idx ON public.t USING btree (id);
+CREATE EVENT TRIGGER et ON ddl_command_end
+   EXECUTE FUNCTION public.evt();
+ALTER EVENT TRIGGER et DISABLE;
+ALTER EVENT TRIGGER et OWNER TO pgdog;
+COMMENT ON EVENT TRIGGER et IS 'probe';"#,
+        );
+
+        let pre_data = output.statements(SyncState::PreData).unwrap();
+        assert_eq!(pre_data.len(), 2);
+        assert!(
+            pre_data[0]
+                .sql
+                .starts_with("CREATE OR REPLACE FUNCTION public.evt()")
+        );
+        assert!(
+            pre_data[1]
+                .sql
+                .starts_with("CREATE TABLE IF NOT EXISTS public.t")
+        );
+
+        let post_data = output.statements(SyncState::PostData).unwrap();
+        let sql: Vec<_> = post_data.iter().map(|s| s.sql.as_str()).collect();
+        assert_eq!(
+            sql,
+            [
+                "DROP INDEX IF EXISTS \"public\".\"t_id_idx\"",
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS t_id_idx ON public.t USING btree (id)",
+                "CREATE EVENT TRIGGER et ON ddl_command_end\n   EXECUTE FUNCTION public.evt()",
+                "ALTER EVENT TRIGGER et DISABLE",
+                "ALTER EVENT TRIGGER et OWNER TO pgdog",
+                "COMMENT ON EVENT TRIGGER et IS 'probe'",
+            ]
+        );
+        assert!(post_data[2].skip_if_exists);
+
+        for state in [SyncState::Cutover, SyncState::PostDataValidation] {
+            assert!(output.statements(state).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_index_dependent_statements_run_after_indexes() {
+        let output = parse(
+            r#"
+CREATE TABLE zz.orders (id bigint NOT NULL, n integer);
+COMMENT ON TABLE zz.orders IS 'orders';
+CREATE INDEX orders_expr_idx ON zz.orders USING btree (((n + 1)));
+ALTER INDEX zz.orders_expr_idx ALTER COLUMN 1 SET STATISTICS 500;
+CREATE INDEX orders_n_idx ON zz.orders USING btree (n);
+ALTER TABLE zz.orders CLUSTER ON orders_n_idx;
+COMMENT ON INDEX zz.orders_n_idx IS 'by n';
+COMMENT ON CONSTRAINT orders_fk ON zz.orders IS 'fk';"#,
+        );
+
+        let pre_data: Vec<_> = output
+            .statements(SyncState::PreData)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.sql)
+            .collect();
+        let post_data: Vec<_> = output
+            .statements(SyncState::PostData)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.sql)
+            .collect();
+
+        assert_eq!(
+            pre_data,
+            [
+                "CREATE TABLE IF NOT EXISTS zz.orders (id bigint NOT NULL, n int)",
+                "COMMENT ON TABLE zz.orders IS 'orders'",
+            ]
+        );
+        assert_eq!(
+            post_data,
+            [
+                "DROP INDEX IF EXISTS \"zz\".\"orders_expr_idx\"",
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_expr_idx ON zz.orders USING btree ((n + 1))",
+                "ALTER INDEX zz.orders_expr_idx ALTER COLUMN 1 SET STATISTICS 500",
+                "DROP INDEX IF EXISTS \"zz\".\"orders_n_idx\"",
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_n_idx ON zz.orders USING btree (n)",
+                "ALTER TABLE zz.orders CLUSTER ON orders_n_idx",
+                "COMMENT ON INDEX zz.orders_n_idx IS 'by n'",
+                "COMMENT ON CONSTRAINT orders_fk ON zz.orders IS 'fk'",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_constraint_trigger_is_not_replace() {
+        let output = parse(
+            r#"
+CREATE TRIGGER t_before BEFORE INSERT ON public.t FOR EACH ROW EXECUTE FUNCTION public.f();
+CREATE CONSTRAINT TRIGGER t_after AFTER INSERT ON public.t DEFERRABLE FOR EACH ROW EXECUTE FUNCTION public.f();"#,
+        );
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 2);
+        assert!(
+            statements[0]
+                .sql
+                .starts_with("CREATE OR REPLACE TRIGGER t_before")
+        );
+        assert!(
+            statements[1]
+                .sql
+                .starts_with("CREATE CONSTRAINT TRIGGER t_after")
+        );
+        assert!(statements[1].skip_if_exists);
+    }
+
+    #[test]
+    fn test_create_aggregate_is_replace() {
+        let output =
+            parse("CREATE AGGREGATE public.pgdog_sum(integer) (SFUNC = int4_sum, STYPE = bigint);");
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(
+            statements[0].sql,
+            "CREATE OR REPLACE AGGREGATE public.pgdog_sum (int) (sfunc = int4_sum, stype = bigint)"
         );
     }
 

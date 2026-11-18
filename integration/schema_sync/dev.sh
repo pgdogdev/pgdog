@@ -9,18 +9,20 @@ DESTINATION_SHARDS=(pgdog2_shard_0 pgdog2_shard_1 pgdog2_shard_2)
 
 bash ${SCRIPT_DIR}/prepare.sh
 
-${PGDOG_BIN_PATH} \
-    schema-sync \
-    --from-database source \
-    --to-database destination \
-    --publication pgdog
+for run in 1 2; do
+    ${PGDOG_BIN_PATH} \
+        schema-sync \
+        --from-database source \
+        --to-database destination \
+        --publication pgdog
 
-${PGDOG_BIN_PATH} \
-    schema-sync \
-    --from-database source \
-    --to-database destination \
-    --publication pgdog \
-    --data-sync-complete
+    ${PGDOG_BIN_PATH} \
+        schema-sync \
+        --from-database source \
+        --to-database destination \
+        --publication pgdog \
+        --data-sync-complete
+done
 
 ${PGDOG_BIN_PATH} \
     schema-sync \
@@ -99,6 +101,12 @@ for shard in "${DESTINATION_SHARDS[@]}"; do
     fi
 
     echo "${SOURCE_SHARD} -> ${shard}: schema matches"
+    AGGREGATES=$(psql -tA -c "SELECT count(*) FROM pg_aggregate a JOIN pg_proc p ON p.oid = a.aggfnoid JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'core' AND p.proname = 'int_total'" "${shard}")
+    if [ "${AGGREGATES}" != "1" ]; then
+        echo "Aggregate core.int_total is missing on ${shard}"
+        exit 1
+    fi
+
 done
 
 rm -f source.sql destination.sql diff.txt source.sql.bak destination.sql.bak
