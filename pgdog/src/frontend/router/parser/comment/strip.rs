@@ -8,7 +8,7 @@ fn is_edge_whitespace(c: char) -> bool {
 /// whitespace on either side and between them. Returns `(rest, comment)`
 /// where `comment` is a single slice spanning from the first `/*` to the
 /// last `*/` (with any inter-comment whitespace included).
-pub(super) fn leading_block_comment(q: &str) -> Option<(&str, &str)> {
+pub(crate) fn leading_block_comment(q: &str) -> Option<(&str, &str)> {
     let start = "/*";
     let end = "*/";
 
@@ -44,7 +44,7 @@ pub(super) fn leading_block_comment(q: &str) -> Option<(&str, &str)> {
 /// whitespace on either side and between them. Returns `(rest, comment)`
 /// where `comment` is a single slice spanning from the first `/*` to the
 /// last `*/`.
-pub(super) fn trailing_block_comment(q: &str) -> Option<(&str, &str)> {
+pub(crate) fn trailing_block_comment(q: &str) -> Option<(&str, &str)> {
     let start = "/*";
     let end = "*/";
 
