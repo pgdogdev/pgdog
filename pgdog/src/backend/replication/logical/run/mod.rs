@@ -138,7 +138,7 @@ pub(crate) async fn existing_slots(
         let slot =
             ReplicationSlot::new_permanent(publication, &addr, Some(slot_name.to_owned()), number);
         match slot.verify_exists().await {
-            Ok(()) => {
+            Ok(()) | Err(Error::ReplicationSlotWalLost(_)) => {
                 slots.insert(number, slot);
             }
             Err(Error::MissingReplicationSlot(_)) => (),

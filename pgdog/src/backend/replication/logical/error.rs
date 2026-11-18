@@ -168,6 +168,9 @@ pub(crate) enum Error {
     #[error("replication slot \"{0}\" doesn't exist, but it should")]
     MissingReplicationSlot(String),
 
+    #[error("replication slot \"{0}\" lost its WAL and cannot be used")]
+    ReplicationSlotWalLost(String),
+
     #[error("replication origin {0} doesn't exist, but it should")]
     MissingReplicationOrigin(String),
 
