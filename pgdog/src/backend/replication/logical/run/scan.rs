@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use derive_more::Display;
 use futures::future::join_all;
 
-use super::super::{Error, subscriber::connect_address};
+use super::super::Error;
 use super::{ReshardingKey, ReshardingRecord, ReshardingStore, state_address};
 use crate::backend::databases::databases;
 use crate::backend::pool::Address;
@@ -140,7 +140,7 @@ async fn scan_address(address: &Address) -> Result<Vec<ReshardingScan>, String> 
 }
 
 async fn list_table(address: &Address) -> Result<Vec<ReshardingScan>, Error> {
-    let mut server = connect_address(address).await?;
+    let mut server = ReshardingStore::connect(address).await?;
     let mut found = vec![];
     let mut unreadable = vec![];
     for row in ReshardingStore::list(&mut server).await? {

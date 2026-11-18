@@ -1,14 +1,20 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
+
+use chrono::{DateTime, Utc};
 
 use pgdog_stats::ReshardingId;
 
 use super::{ReshardingKey, ReshardingRecord, Stage, TaskOwner};
 use crate::backend::server::ServerRequest;
+use crate::config::config;
 use crate::net::bind::Parameter;
+use crate::util::instance_id;
 
-pub(crate) const CREATE_TABLE: &str = include_str!("resharding.sql");
+pub(super) const APPLICATION_NAME_PREFIX: &str = "pgdog_resharding:";
 
-pub(crate) trait Query {
+pub(super) const CREATE_TABLE: &str = include_str!("resharding.sql");
+
+pub(super) trait Query {
     const SQL: &'static str;
 
     type Params<'a>;
@@ -20,26 +26,41 @@ pub(crate) trait Query {
     }
 }
 
-pub(crate) struct SetupSession;
+pub(super) struct SetupSession;
 
 impl Query for SetupSession {
-    // change tcp keepalive settings to react faster on the
-    // client socket abruption
     const SQL: &'static str = "
         SELECT set_config('application_name', $1, false),
-               set_config('tcp_keepalives_idle', '60', false),
-               set_config('tcp_keepalives_interval', '15', false),
-               set_config('tcp_keepalives_count', '4', false),
-               set_config('tcp_user_timeout', '120000', false)";
+               set_config('lock_timeout', $2, false),
+               set_config('DateStyle', 'ISO', false),
+               set_config('tcp_keepalives_idle', $3, false),
+               set_config('tcp_keepalives_interval', $4, false),
+               set_config('tcp_keepalives_count', $5, false),
+               set_config('tcp_user_timeout', $6, false)";
 
-    type Params<'a> = &'a str;
+    type Params<'a> = ();
 
-    fn params(application_name: &str) -> Vec<Parameter> {
-        vec![text(application_name)]
+    fn params(_: ()) -> Vec<Parameter> {
+        let config = config();
+        let resharding = &config.config.resharding;
+        let tcp = resharding.tcp();
+        let secs = |value: Option<Duration>| value.map_or(0, |value| value.as_secs());
+        vec![
+            text(&format!("{APPLICATION_NAME_PREFIX}{}", instance_id())),
+            text(&resharding.state_heartbeat_interval.to_string()),
+            text(&secs(tcp.time()).to_string()),
+            text(&secs(tcp.interval()).to_string()),
+            text(&tcp.retries().unwrap_or(0).to_string()),
+            text(
+                &tcp.user_timeout()
+                    .map_or(0, |value| value.as_millis())
+                    .to_string(),
+            ),
+        ]
     }
 }
 
-pub(crate) struct TableExists;
+pub(super) struct TableExists;
 
 impl Query for TableExists {
     const SQL: &'static str = "SELECT (to_regclass('pgdog.resharding') IS NOT NULL)::int";
@@ -51,11 +72,10 @@ impl Query for TableExists {
     }
 }
 
-pub(crate) struct TryLock;
+pub(super) struct Lock;
 
-impl Query for TryLock {
-    const SQL: &'static str =
-        "SELECT pg_try_advisory_lock(hashtext('pgdog.resharding'), hashtext($1))::int";
+impl Query for Lock {
+    const SQL: &'static str = "SELECT pg_advisory_lock(hashtext('pgdog.resharding'), hashtext($1))";
 
     type Params<'a> = &'a ReshardingKey;
 
@@ -64,7 +84,7 @@ impl Query for TryLock {
     }
 }
 
-pub(crate) struct Unlock;
+pub(super) struct Unlock;
 
 impl Query for Unlock {
     const SQL: &'static str =
@@ -77,7 +97,7 @@ impl Query for Unlock {
     }
 }
 
-pub(crate) struct LockHolder;
+pub(super) struct LockHolder;
 
 impl Query for LockHolder {
     const SQL: &'static str = "
@@ -98,17 +118,58 @@ impl Query for LockHolder {
     }
 }
 
-pub(crate) struct SelectRow;
+/// For the same set of columns construct:
+/// - `sql_select` - columns select list used in sql query
+/// - `index_map` - IndexMap `column_name -> index`
+macro_rules! columns {
+    (sql_select { $first:ident $(, $name:ident)* $(,)? }) => {
+        concat!(" ", stringify!($first), $(", ", stringify!($name),)* " ")
+    };
+    (index_map { $($name:ident),* $(,)? }) => {
+        [$(stringify!($name)),*]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| (name, index))
+            .collect::<indexmap::IndexMap<&'static str, usize>>()
+    };
+}
+
+/// The result columns of a `pgdog.resharding` record, in order.
+macro_rules! record_columns {
+    ($mode:ident) => {
+        columns!($mode {
+            id,
+            source_db,
+            destination_db,
+            publication,
+            command,
+            slot_name,
+            stage,
+            config,
+            instance_id,
+            run_id,
+            task_id,
+            format_version,
+            started_at,
+            resumed_at,
+        })
+    };
+}
+
+pub(super) use {columns, record_columns};
+
+pub(super) struct SelectRow;
 
 impl Query for SelectRow {
-    const SQL: &'static str = "
-        SELECT source_db, destination_db, publication, command::text, slot_name,
-               stage, config::text, instance_id, run_id::text,
-               task_id::text, format_version::text, id::text,
-               (extract(epoch FROM started_at) * 1000)::bigint::text,
-               coalesce((extract(epoch FROM resumed_at) * 1000)::bigint::text, '')
+    const SQL: &'static str = concat!(
+        "SELECT",
+        record_columns!(sql_select),
+        "
         FROM pgdog.resharding
-        WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
+        WHERE source_db = $1
+          AND destination_db = $2
+          AND publication = $3"
+    );
 
     type Params<'a> = &'a ReshardingKey;
 
@@ -117,17 +178,16 @@ impl Query for SelectRow {
     }
 }
 
-pub(crate) struct ListRows;
+pub(super) struct ListRows;
 
 impl Query for ListRows {
-    const SQL: &'static str = "
-        SELECT source_db, destination_db, publication, command::text, slot_name,
-               stage, config::text, instance_id, run_id::text,
-               task_id::text, format_version::text, id::text,
-               (extract(epoch FROM started_at) * 1000)::bigint::text,
-               coalesce((extract(epoch FROM resumed_at) * 1000)::bigint::text, '')
+    const SQL: &'static str = concat!(
+        "SELECT",
+        record_columns!(sql_select),
+        "
         FROM pgdog.resharding
-        ORDER BY source_db, destination_db, publication";
+        ORDER BY source_db, destination_db, publication"
+    );
 
     type Params<'a> = ();
 
@@ -136,7 +196,7 @@ impl Query for ListRows {
     }
 }
 
-pub(crate) struct InsertRow;
+pub(super) struct InsertRow;
 
 impl Query for InsertRow {
     const SQL: &'static str = "
@@ -146,7 +206,7 @@ impl Query for InsertRow {
             started_at
         )
         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9::uuid,
-                $10::bigint, $11::integer, $12::uuid, to_timestamp($13::bigint / 1000.0))";
+                $10::bigint, $11::integer, $12::uuid, $13::timestamp)";
 
     type Params<'a> = &'a ReshardingRecord;
 
@@ -165,16 +225,16 @@ impl Query for InsertRow {
             text(&row.owner.task_id.to_string()),
             text(&row.format_version.to_string()),
             text(&row.id.to_string()),
-            text(&unix_millis(row.started_at).to_string()),
+            text(&utc(row.started_at)),
         ]
     }
 }
 
-pub(crate) struct UpdateStage;
+pub(super) struct UpdateStage;
 
-pub(crate) struct StageUpdate {
-    pub(crate) id: ReshardingId,
-    pub(crate) stage: Stage,
+pub(super) struct StageUpdate {
+    pub(super) id: ReshardingId,
+    pub(super) stage: Stage,
 }
 
 impl Query for UpdateStage {
@@ -193,19 +253,19 @@ impl Query for UpdateStage {
     }
 }
 
-pub(crate) struct ResumeRow;
+pub(super) struct ResumeRow;
 
-pub(crate) struct ResumeUpdate<'a> {
-    pub(crate) id: ReshardingId,
-    pub(crate) owner: &'a TaskOwner,
-    pub(crate) resumed_at: SystemTime,
+pub(super) struct ResumeUpdate<'a> {
+    pub(super) id: ReshardingId,
+    pub(super) owner: &'a TaskOwner,
+    pub(super) resumed_at: SystemTime,
 }
 
 impl Query for ResumeRow {
     const SQL: &'static str = "
         UPDATE pgdog.resharding
         SET instance_id = $2, run_id = $3::uuid, task_id = $4::bigint,
-            resumed_at = to_timestamp($5::bigint / 1000.0)
+            resumed_at = $5::timestamp
         WHERE id = $1::uuid";
 
     type Params<'a> = ResumeUpdate<'a>;
@@ -216,12 +276,12 @@ impl Query for ResumeRow {
             text(update.owner.instance_id.as_str()),
             text(&update.owner.run_id.to_string()),
             text(&update.owner.task_id.to_string()),
-            text(&unix_millis(update.resumed_at).to_string()),
+            text(&utc(update.resumed_at)),
         ]
     }
 }
 
-pub(crate) struct Heartbeat;
+pub(super) struct Heartbeat;
 
 impl Query for Heartbeat {
     const SQL: &'static str = "SELECT 1";
@@ -233,7 +293,7 @@ impl Query for Heartbeat {
     }
 }
 
-pub(crate) struct DeleteRow;
+pub(super) struct DeleteRow;
 
 impl Query for DeleteRow {
     const SQL: &'static str = "DELETE FROM pgdog.resharding WHERE id = $1::uuid";
@@ -246,7 +306,7 @@ impl Query for DeleteRow {
 }
 
 #[cfg(test)]
-pub(crate) struct DeleteKey;
+pub(super) struct DeleteKey;
 
 #[cfg(test)]
 impl Query for DeleteKey {
@@ -280,7 +340,10 @@ fn lock_name(key: &ReshardingKey) -> Parameter {
     ))
 }
 
-fn unix_millis(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis() as i64)
+/// UTC time as text for a `timestamp` column.
+fn utc(time: SystemTime) -> String {
+    DateTime::<Utc>::from(time)
+        .naive_utc()
+        .format("%Y-%m-%d %H:%M:%S%.6f")
+        .to_string()
 }

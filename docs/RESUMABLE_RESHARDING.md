@@ -2,7 +2,7 @@
 
 This document describes the design for stoppable and resumable resharding. Stage 1 is implemented. The later stages are planned. For the current pipeline see [RESHARDING.md](./RESHARDING.md).
 
-Part 1 gives the plan. Part 2 gives the design that all stages share. Part 3 gives one section per implementation stage. Each stage describes the approach and the result, not the code changes.
+The Overview gives a short picture of the design. Part 1 gives the plan. Part 2 gives the design that all stages share. Part 3 gives one section per implementation stage. Each stage describes the approach and the result, not the code changes.
 
 "State" in this document means the data that pgdog saves for resume.
 
@@ -14,6 +14,103 @@ Part 1 gives the plan. Part 2 gives the design that all stages share. Part 3 giv
 |4. Schema phase resume|Planned.|
 |5. Cutover recovery|Planned.|
 |6. Operations|Planned.|
+
+# Overview
+
+This section gives a short picture of the design: the parts, how they connect, the run states, and the main tradeoffs. Stage 1 is implemented. The copy parts come with Stage 3. Part 2 and Part 3 give the details. The table copy is described in Stage 3.
+
+## How it works
+
+Every resharding run (RESHARD, COPY_DATA, REPLICATE) writes one row to the table `pgdog.resharding` on destination shard 0. The row holds the facts that Postgres does not store: the command and its options, the slot name, the stage, a snapshot of the sharding config, and the owner task. Postgres already stores the slots, the origins and the replication progress, so the row does not copy them.
+
+The run owns its row through a session advisory lock on the run key (source, destination, publication). The lock lives on a dedicated state connection. All state reads and writes use this connection. A held lock means that the run is running. A row with a free lock means that the run is paused or crashed.
+
+The copy (Stage 3) adds the table `pgdog.resharding_copy` on every destination shard. Each copied part writes its marker row to this table in the same 2PC transaction as its rows, so the destination itself records which parts are done.
+
+The option `cleanup_on_cancel` decides what a stop does. With `true` (the default), a stop drops the slots that the run created and all its origins, and deletes the row, as before. With `false`, a stop after `initializing` keeps the slots, the origins and the row, so the run can resume later or the operator can abort it.
+
+## Parts and relations
+
+```mermaid
+flowchart LR
+    subgraph pgdog
+        CMD["Admin commands<br/>RESHARD, COPY_DATA, REPLICATE<br/>WITH (cleanup_on_cancel, abort)"]
+        CLI["CLI data-sync"]
+        TASKS["Root tasks<br/>ReshardTask (RESHARD, COPY_DATA, CLI),<br/>ReplicationTask (REPLICATE),<br/>AbortReshardingTask (WITH abort)"]
+        COPY["Table copy<br/>one part = one table<br/>from one source shard"]
+        STATE["ReshardingState<br/>slots, origins, current run"]
+        STORE["ReshardingStore<br/>state connection, lock,<br/>reconnect, heartbeat"]
+        SHOW["SHOW RESHARDING<br/>run scan"]
+    end
+    subgraph source["Source cluster"]
+        SLOTS[("Replication slots")]
+        DATA[("Source tables")]
+    end
+    subgraph dest["Destination cluster"]
+        TABLE[("Shard 0:<br/>pgdog.resharding<br/>+ advisory lock")]
+        ORIGINS[("Replication origins")]
+        SHARD[("Every destination shard<br/>one 2PC transaction per part:<br/>copied rows of the table<br/>+ pgdog.resharding_copy: marker row<br/>(table, source shard, copy LSN)")]
+    end
+    CP["Control plane (EE)"]
+
+    CMD --> TASKS
+    CLI --> TASKS
+    TASKS --> STATE
+    TASKS --> COPY
+    STATE --> STORE
+    STORE -- "row writes, lock, heartbeat" --> TABLE
+    STATE -- "create, keep, drop" --> SLOTS
+    STATE -- "create, keep, drop" --> ORIGINS
+    DATA -- "snapshot at copy LSN" --> COPY
+    COPY -- "PREPARE on all shards,<br/>then COMMIT PREPARED" --> SHARD
+    SHOW -- "read rows, check locks" --> TABLE
+    TASKS -- "task updates" --> CP
+```
+
+| Part | Role |
+|---|---|
+| Admin commands and CLI | Start a run, choose `cleanup_on_cancel`, or abort a stopped run with `WITH (abort)`. |
+| Root tasks | `ReshardTask` and `ReplicationTask` start the run and decide on cleanup when they end. Subtasks (copy, schema sync) share the same run state. `AbortReshardingTask` cleans up a stopped run. |
+| Table copy | Copies each part from its own source snapshot. In Stage 3, commits each part with 2PC on all destination shards, together with its marker row. |
+| `ReshardingState` | Shared by all tasks of one run. Holds the slots, the origins and the current run. Decides what a stop keeps or drops. |
+| `ReshardingStore` | Owns the state connection and the lock. Reconnects and takes the lock again after a lost connection. Runs the heartbeat while the run lives. |
+| `pgdog.resharding` | One row for each unfinished run, on destination shard 0. |
+| `pgdog.resharding_copy` (Stage 3) | One table on each destination shard, with one marker row for each copied part (table, source shard, copy LSN). Every part writes its marker on every destination shard, so all shards hold the same rows. The marker is written in the same transaction as the part's rows, so it commits or rolls back with them. |
+| `SHOW RESHARDING` | Reads the rows of every configured database and shows each run as running or paused, from the lock state. |
+| Control plane | Gets the task definitions and status, as for other tasks. It is not the store of the state. |
+
+## Run states
+
+```mermaid
+stateDiagram-v2
+    [*] --> Initializing: start, row inserted, lock held
+    Initializing --> Running: slots created (stage copy_tables or replication)
+    Initializing --> [*]: stop or error, objects dropped, row deleted
+    Running --> [*]: run ends or cutover, row deleted
+    Running --> [*]: stop with cleanup_on_cancel true, row deleted
+    Running --> Paused: stop with cleanup_on_cancel false, lock released
+    Running --> Paused: pgdog crash, Postgres frees the lock
+    Paused --> [*]: WITH (abort), objects dropped, row deleted
+    Paused --> Running: resume (Stage 2, not implemented)
+```
+
+A crash in `initializing` also leaves a paused row. Abort then drops every slot with the run's name.
+
+## Pros and cons
+
+**Pros**
+
+- Works in open source, enterprise and the CLI. Needs only the destination database.
+- Postgres frees the lock when the owner session ends. No lease logic in pgdog.
+- Any pgdog instance can see a stopped run and abort it, so slots never leak.
+- Copy parts are all or nothing on every shard, so resume never copies a done part again and never truncates.
+
+**Cons**
+
+- Adds pgdog tables to the user's destination shards.
+- The lock gives no fencing: between a lost connection and the relock, another instance can take the lock.
+- A paused run keeps its slots, and the slots hold source WAL until resume or abort.
+- The resumable copy needs 2PC on the destination (`max_prepared_transactions > 0`).
 
 # Part 1. Plan
 
@@ -158,7 +255,7 @@ SM2 can be revisited if resumable resharding becomes an enterprise-only feature,
 
 ```mermaid
 erDiagram
-  RESHARDING ||--o{ PART_MARKER : "one per destination shard"
+  RESHARDING ||--o{ RESHARDING_COPY : "one per destination shard"
   RESHARDING {
     uuid id PK
     text source_db UK
@@ -173,10 +270,10 @@ erDiagram
     uuid run_id
     bigint task_id
     int format_version
-    timestamptz started_at
-    timestamptz resumed_at "null until a resume"
+    timestamp started_at "UTC"
+    timestamp resumed_at "UTC, null until a resume"
   }
-  PART_MARKER {
+  RESHARDING_COPY {
     uuid resharding_id PK
     text table_schema PK
     text table_name PK
@@ -185,7 +282,7 @@ erDiagram
   }
 ```
 
-Stage 3 records which table parts are copied in table `PART_MARKER`, one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `RESHARDING`. It refers to the run by `resharding_id`. A marker from an earlier run with the same key has another id, so a new run never reads it as its own.
+Stage 3 records which table parts are copied in the table `pgdog.resharding_copy` (`RESHARDING_COPY`), one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `RESHARDING`. It refers to the run by `resharding_id`. A marker from an earlier run with the same key has another id, so a new run never reads it as its own.
 
 The primary key of `RESHARDING` is `id`, a UUID v7 that pgdog generates when it creates the row. A resume keeps the id. The key (source, destination, publication) is `UNIQUE`: lookup and the advisory lock use it, and it allows one unfinished run per key. Stage updates, resume and delete find the row by `id` only. A stale owner thus cannot change the row of a newer run with the same key. The owner columns (`instance_id`, `run_id`, `task_id`) name the root task of the attempt that wrote the row.
 
@@ -222,9 +319,9 @@ Row meaning. Each row stores the format version of the pgdog that wrote it.
 
 ## Ownership
 
-The owner holds a session advisory lock on the run key (source, destination, publication). It uses a dedicated state connection. Postgres frees the lock when the owner session ends. After a host or network failure, TCP keepalive on the state session ends it in about 2 minutes.
+The owner holds a session advisory lock on the run key (source, destination, publication). It uses a dedicated state connection. Postgres frees the lock when the owner session ends. After a host or network failure, TCP keepalive on the state session ends it in about 2 minutes, with the `[resharding] tcp` defaults.
 
-All state writes use this connection. The watchdog runs a heartbeat every 5 s. It stops the run at once when the query fails, and after 30 s with no reply. A slow reply under 30 s only logs a warning. The lock gives no fencing: in that time the old owner can still apply changes, while another instance can take the free lock, for example to abort. A lease survives short network breaks, but it needs owner and expiry columns.
+All state reads and writes use this connection. When a query on it fails and leaves the connection unusable, the store drops the connection, waits `[resharding] retry_delay` (default 1 s), opens a new one, takes the lock again and runs the query again. It repeats this up to `[resharding] retry_max_attempts` times (default 10, `0` retries forever). A SQL error on a usable connection goes to the caller with no reconnect, so the lock stays. A lock held by another session also goes to the caller at once. A dropped connection sends `Terminate` when its socket still works, so the old backend ends and frees the lock before the relock waits out `lock_timeout`. Only when the network fails in one direction can the old backend keep the lock until its keepalive ends it; then the relock fails with `ReshardingLocked`, the run stops, and the operator resumes it. When the attempts run out, the query returns the last error, and its caller handles it as before. When a run starts, its store also starts a heartbeat: a query every `[resharding] state_heartbeat_interval` (default 5 s) through the same path, so a lost lock is taken back even when the run writes nothing. The heartbeat ends when the store drops. It stops the run's root task only when another session holds the lock. While the state connection cannot be restored, for example while destination shard 0 is down, it logs a warning and tries again at the next interval. Stopping would not help: no other session can take the lock while its shard is down, and replication has its own retry budget. A connection that hangs without an error ends at the socket on both sides. `[resharding] tcp` sets the TCP settings of all resharding connections, in place of `[tcp]`. The state connection also sets them on its Postgres session as `tcp_keepalives_*` and `tcp_user_timeout`. The default is keep-alive after 60 s idle, every 15 s, 4 probes, and a user timeout of 2 minutes, so a hung connection ends in about 2 minutes. `TCP_USER_TIMEOUT` and the keep-alive count work only on Linux. The lock gives no fencing: between the loss and the relock, the old owner can still apply changes, while another instance can take the free lock, for example to abort. A lease survives short network breaks, but it needs owner and expiry columns.
 
 ## Resumable run state
 
@@ -307,19 +404,19 @@ Abort and resume search shard 0 of the destination. A cutover deletes the row, s
 
 Goal: a resumable run never leaks slots or origins. The operator can see and abort it. No resume yet.
 
-In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Cancel" covers every way a run stops before it ends: `STOP_TASK`, an error, a shutdown, a crash and a lost state connection.
+In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Cancel" covers every way a run stops before it ends: `STOP_TASK`, an error, a shutdown, a crash and a lock held by another session.
 
 ### Approach
 
 1. Parse `cleanup_on_cancel`. The default is `true`. The flag decides only what happens on stop or error. Every run is recorded.
-2. Open a dedicated state connection to destination shard 0. Create `pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication). Fail if the key has a row.
+2. Open a dedicated state connection to destination shard 0. Create `pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication) with `pg_advisory_lock`. The connection's `lock_timeout` is `[resharding] state_heartbeat_interval` (default 5 s), so a run waits that long for an old session to end, then fails. Fail if the key has a row.
 3. Probe the slots before the run creates them. If all slots exist, the run reuses them, and a live run keeps them on stop. If only some slots exist, refuse.
 4. Capture the config snapshot: the shard counts and sharding rules of both clusters.
 5. Insert the row right after the key check: command with its options, publication, slot name, stage `initializing`, config snapshot, owner task (instance id, run id, task id), format version, start time. While the stage is `initializing`, a stop or error always drops the slots that the run created and all its origins, deletes the row and releases the lock, also with `cleanup_on_cancel false`. After a crash in `initializing`, the row stays, and abort drops every slot with the run's name.
 6. Write `copy_tables` when the copy path has created all forward slots. Write `replication` when replication has all forward slots and origins. A write never moves the stored stage back.
-7. Every 5 s the owner runs a query on its state connection (heartbeat, lock watchdog). If the query fails, or gives no reply in 30 s, the connection and the lock count as lost, and the run stops.
-8. On stop, error, shutdown or lock loss, with `cleanup_on_cancel false`: stop tasks, keep slots and origins, release the lock. With `true`: drop the slots that the run created and all its origins, then delete the row and release the lock. If the state connection is broken, the delete opens a new connection and takes the lock again. If the drop fails, or another instance holds the lock, the row stays, so abort can finish the cleanup. After a crash, Postgres frees the lock and the row stays.
-9. Cutover ends the run, with no resume point inside it: drop the forward slots and origins, delete the row and release the lock, then create the reverse slots. A failed forward drop does not stop the cutover. pgdog logs a warning, and the operator drops the remaining forward slots and origins by hand. A crash inside cutover is not resumable. The reverse phase has no row and no lock, so abort and resume after the cutover fail with `NoResharding`. A stop or an error during reverse replication drops the reverse slots and origins, also with `cleanup_on_cancel false`.
+7. Every `[resharding] state_heartbeat_interval` (default 5 s) the store runs a heartbeat query on its state connection. A state query that leaves the connection unusable reconnects, takes the lock again and runs again, up to `[resharding] retry_max_attempts` times with `retry_delay` between attempts. A hung connection ends at the socket in about 2 minutes. The run stops only if another session holds the lock. A heartbeat that cannot reconnect logs a warning and tries again at the next interval.
+8. On stop, error, shutdown or lock loss, with `cleanup_on_cancel false`: stop tasks, keep slots and origins, release the lock. With `true`: drop the slots that the run created and all its origins, then delete the row and release the lock. A broken state connection reconnects as in step 7. If the drop fails, or another instance holds the lock, the row stays, so abort can finish the cleanup. After a crash, Postgres frees the lock and the row stays.
+9. Cutover ends the run, with no resume point inside it: delete the row and release the lock, drop the forward slots and origins, then create the reverse slots. A failed row delete stops the cutover before any slot is dropped, so the run keeps its slots and pauses or cleans up as in step 8. A failed forward drop does not stop the cutover. pgdog logs a warning, and the operator drops the remaining forward slots and origins by hand. A crash inside cutover is not resumable. The reverse phase has no row and no lock, so abort and resume after the cutover fail with `NoResharding`. A stop or an error during reverse replication drops the reverse slots and origins, also with `cleanup_on_cancel false`.
 10. At the end of a run with no cutover, delete the row.
 
 Before the cutover, every automatic cleanup path skips runs with `cleanup_on_cancel false`. For them, only abort and the normal run end drop objects.
@@ -355,7 +452,7 @@ Exclude the state table from the schema dump. A later run can use this destinati
 |2|`WITH (abort)` after 1.|Row gone. All slots with the run's name and all its origins gone, also slots that existed before the run.|
 |3|REPLICATE with the default `cleanup_on_cancel true`. STOP_TASK.|A row while it runs. On stop, today's cleanup, then the row is deleted.|
 
-Unit tests on a real Postgres: idempotent DDL, lock conflict with the owner name, write failure after the lock connection is lost, writes with an old row id, writes after a failed relock. Unit tests for the config validator. An integration test proves that the cutover deletes the row and releases the lock, that abort after the cutover fails, and that a stop during reverse replication drops the reverse slots and origins.
+Unit tests on a real Postgres: lock conflict with the owner name, writes reconnect and take the lock again after the lock connection is lost, the relock waits for the lock holder, writes with an old row id, writes after a failed relock. Unit tests for the config validator. An integration test proves that the cutover deletes the row and releases the lock, that abort after the cutover fails, and that a stop during reverse replication drops the reverse slots and origins.
 
 Result: a stopped run shows paused with its slots, and abort drops every slot and origin of the run.
 
@@ -454,9 +551,53 @@ Goal: COPY_DATA and RESHARD survive a stop or crash during copy and table sync. 
 - The copy always uses 2PC on a multi-shard destination, independent of the client 2PC setting. The destination needs `max_prepared_transactions > 0`.
 - The resumable copy runs `PREPARE TRANSACTION` and `COMMIT PREPARED` directly. It does not register with the 2PC `Manager`. The transaction name is `__pgdog_rsh_<run>_<part>_<attempt>_<shard>`. `Manager` recovery must not touch this prefix, and the resume rules must not touch `Manager` names.
 - A single-shard destination commits each copy with synchronous commit on.
-- Copy progress is stored in a marker table on each destination shard (shard marker).
+- Copy progress is stored in the table `pgdog.resharding_copy` on each destination shard (shard marker).
 - A start command with `WITH (resume)` accepts runs stopped in copy, table sync and replication, also RESHARD runs.
 - `WITH (abort)` also rolls back the prepared transactions of the run.
+
+### Table copy
+
+The copy splits the work into parts. A part is one publication table from one source shard. Each part is all or nothing on every destination shard, and records its own completion on the destination, so a resume knows which parts are done without any write to the state row.
+
+```mermaid
+sequenceDiagram
+    participant Src as Source shard N
+    participant P as pgdog copy
+    participant D0 as Destination shard 0
+    participant D1 as Destination shard 1
+
+    P->>Src: temporary slot, snapshot at copy LSN
+    P->>D0: BEGIN
+    P->>D1: BEGIN
+    Src-->>P: COPY rows of the table
+    P->>D0: rows routed to shard 0
+    P->>D1: rows routed to shard 1
+    P->>D0: insert marker (table, source shard N, copy LSN)
+    P->>D1: insert marker (table, source shard N, copy LSN)
+    P->>D0: PREPARE TRANSACTION
+    P->>D1: PREPARE TRANSACTION
+    Note over P,D1: all shards prepared: commit decision made
+    P->>D0: COMMIT PREPARED
+    P->>D1: COMMIT PREPARED
+    Note over D0,D1: part done: rows and marker durable on every shard
+```
+
+Every destination shard gets the transaction and the marker, also when it gets no rows. The marker commits or rolls back with the rows. A committed marker on any shard proves that all shards prepared, because the first commit starts only after all prepares.
+
+On resume, the copy reads the markers and the prepared transactions of the run on each destination shard, and gives each part one status before any copy starts:
+
+```mermaid
+flowchart TD
+    PART["Part: table T from source shard N"] --> MARK{"Committed marker<br/>on any shard?"}
+    MARK -- no --> ROLL["Roll back prepared transactions of the part.<br/>Copy the part again with a new copy LSN."]
+    MARK -- yes --> PREP{"Prepared transactions<br/>left on some shards?"}
+    PREP -- yes --> COMMIT["COMMIT PREPARED on those shards.<br/>Part done."]
+    PREP -- no --> ALL{"Marker on every shard?"}
+    ALL -- yes --> DONE["Part done. Skip it.<br/>Its copy LSN is the watermark<br/>for table sync and replication."]
+    ALL -- no --> LOST["Part lost on a shard (failover).<br/>Refuse. The operator decides."]
+```
+
+A part copied again gets a later copy LSN. The forward slot was created before every copy, so replication still covers every change after each part's copy LSN. pgdog never truncates a destination table: a table with rows and no done part refuses resume.
 
 ### Marking a part complete
 
@@ -503,7 +644,7 @@ Each shard inserts a marker (source table, source shard, copy LSN) in its copy t
 
 Without truncate, a part that a failover lost cannot be copied again, because its rows on other shards stay. Resume can only detect the loss and refuse. The operator then decides.
 
-The marker table is a new object on each shard. Exclude it from the dump and from `FOR ALL TABLES` publications.
+The table `pgdog.resharding_copy` is a new object on each shard. Exclude it from the dump and from `FOR ALL TABLES` publications.
 
 Rules:
 
@@ -542,7 +683,7 @@ Result: a copy crash never copies complete parts again, never truncates, leaves 
 
 ### Open questions
 
-- Schema exclusion: the publication table list and `pg_dump` exclude `pgdog.resharding`. A `FOR ALL TABLES` publication still sends its changes, and apply skips them because the table is not in its list. Stage 3 must exclude the marker tables the same way.
+- Schema exclusion: the publication table list and `pg_dump` exclude `pgdog.resharding`. A `FOR ALL TABLES` publication still sends its changes, and apply skips them because the table is not in its list. Stage 3 must exclude `pgdog.resharding_copy` the same way.
 
 ## Stage 4. Schema phase resume
 

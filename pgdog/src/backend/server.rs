@@ -1,8 +1,9 @@
 //! PostgreSQL server connection.
 
-use std::{ops::Deref, sync::Arc, time::Duration};
+use std::{borrow::Cow, ops::Deref, sync::Arc, time::Duration};
 
 use bytes::{BufMut, BytesMut};
+use pgdog_config::Tcp;
 use rustls_pki_types::ServerName;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -229,7 +230,7 @@ impl Server {
         ))))
     }
 
-    async fn open(addr: &Address, config: &ConfigAndUsers) -> Result<Stream, Error> {
+    async fn open(addr: &Address, config: &ConfigAndUsers, tcp: &Tcp) -> Result<Stream, Error> {
         #[cfg(test)]
         if addr.host == super::fake_server::HOST {
             return Ok(super::fake_server::connect());
@@ -237,10 +238,10 @@ impl Server {
 
         let stream = TcpStream::connect(addr.addr().await?).await?;
 
-        if let Err(err) = tweak(&stream, &config.config.tcp) {
+        if let Err(err) = tweak(&stream, tcp) {
             warn!(
                 "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
-                config.config.tcp, err, addr,
+                tcp, err, addr,
             );
         }
 
@@ -258,7 +259,11 @@ impl Server {
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
         let config = config();
-        let mut stream = Self::open(addr, &config).await?;
+        let tcp = match connect_reason {
+            ConnectReason::Resharding => Cow::Owned(config.config.resharding.tcp()),
+            _ => Cow::Borrowed(&config.config.tcp),
+        };
+        let mut stream = Self::open(addr, &config, &tcp).await?;
 
         let tls = UpstreamTlsSettings::resolve(&config.config.general, &addr.tls);
 

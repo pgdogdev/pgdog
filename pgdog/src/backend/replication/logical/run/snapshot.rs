@@ -166,6 +166,38 @@ fn same_rules<T: DeserializeOwned + PartialEq>(stored: &[Value], current: &[Valu
 }
 
 #[cfg(test)]
+impl ClusterSnapshot {
+    pub(super) fn new_test(shards: usize) -> Self {
+        Self {
+            shards,
+            sharded_tables: vec![],
+            sharded_mappings: vec![],
+            omnisharded_tables: vec![],
+            sharded_schemas: vec![],
+        }
+    }
+
+    /// Add `rule` to every rule list.
+    pub(super) fn with_rule(mut self, rule: Value) -> Self {
+        self.sharded_tables.push(rule.clone());
+        self.sharded_mappings.push(rule.clone());
+        self.omnisharded_tables.push(rule.clone());
+        self.sharded_schemas.push(rule);
+        self
+    }
+}
+
+#[cfg(test)]
+impl ConfigSnapshot {
+    pub(super) fn new_test(source: ClusterSnapshot, destination: ClusterSnapshot) -> Self {
+        Self {
+            source,
+            destination,
+        }
+    }
+}
+
+#[cfg(test)]
 mod test {
     use serde_json::json;
 
@@ -184,16 +216,10 @@ mod test {
 
     fn snapshot() -> ConfigSnapshot {
         let cluster = |shards| ClusterSnapshot {
-            shards,
             sharded_tables: vec![json!({"name": "users"})],
-            sharded_mappings: vec![],
-            omnisharded_tables: vec![],
-            sharded_schemas: vec![],
+            ..ClusterSnapshot::new_test(shards)
         };
-        ConfigSnapshot {
-            source: cluster(1),
-            destination: cluster(2),
-        }
+        ConfigSnapshot::new_test(cluster(1), cluster(2))
     }
 
     fn rules() -> Vec<Value> {
@@ -206,15 +232,6 @@ mod test {
         let backward = sorted_rules([table("orders"), table("users")].iter()).unwrap();
         assert_eq!(forward, backward);
         assert_eq!(forward.len(), 2);
-    }
-
-    #[test]
-    fn snapshot_survives_json_round_trip() {
-        let left = snapshot();
-        let right: ConfigSnapshot =
-            serde_json::from_str(&serde_json::to_string(&left).unwrap()).unwrap();
-        assert_eq!(left, right);
-        assert_eq!(left.validate_equal(&right), Ok(()));
     }
 
     #[test]

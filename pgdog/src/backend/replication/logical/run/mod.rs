@@ -17,11 +17,9 @@ mod queries;
 pub(crate) mod scan;
 pub(crate) mod snapshot;
 mod store;
-pub(crate) mod watchdog;
 
 pub(crate) use snapshot::ConfigSnapshot;
 pub(crate) use store::ReshardingStore;
-pub(crate) use watchdog::LockWatchdog;
 
 pub(crate) async fn state_address(destination: &Cluster) -> Result<Address, Error> {
     Ok(destination

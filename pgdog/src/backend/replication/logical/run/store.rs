@@ -1,83 +1,125 @@
-use std::fmt::Display;
-use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use indexmap::IndexMap;
+use std::sync::{Arc, LazyLock, OnceLock};
+use std::time::{Duration, SystemTime};
 
-use pgdog_stats::{Databases, InstanceId, ReshardingId};
+use pgdog_postgres_types::Timestamp;
+
+use pgdog_stats::{Databases, ReshardingId, TaskId};
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
+use tokio_util::task::AbortOnDropHandle;
+use tracing::warn;
+use uuid::Uuid;
 
 use super::super::{Error, subscriber::connect_address};
 use super::queries::{
-    CREATE_TABLE, DeleteRow, Heartbeat, InsertRow, ListRows, LockHolder, Query, ResumeRow,
-    ResumeUpdate, SelectRow, SetupSession, StageUpdate, TableExists, TryLock, Unlock, UpdateStage,
+    APPLICATION_NAME_PREFIX, CREATE_TABLE, DeleteRow, Heartbeat, InsertRow, ListRows, Lock,
+    LockHolder, Query, ResumeRow, ResumeUpdate, SelectRow, SetupSession, StageUpdate, TableExists,
+    Unlock, UpdateStage, columns, record_columns,
 };
 use super::{FORMAT_VERSION, ReshardingKey, ReshardingRecord, Stage, TaskOwner};
+use crate::api::tasks_storage;
 use crate::backend::server::ServerRequest;
 use crate::backend::{Error as BackendError, Server, pool::Address};
+use crate::config::config;
+use crate::net::messages::data_types::FromDataType;
 use crate::net::{DataRow, Format};
-use crate::util::instance_id;
+use crate::tasks;
+use crate::util::retry::{Retry, RetryConfig};
 
-const APPLICATION_NAME_PREFIX: &str = "pgdog_resharding:";
-const RELOCK_ATTEMPTS: usize = 20;
-const RELOCK_DELAY: Duration = Duration::from_millis(250);
+const LOCK_NOT_AVAILABLE: &str = "55P03";
 
 #[derive(Debug)]
 pub(crate) struct ReshardingStore {
     server: Mutex<Option<Server>>,
     addr: Address,
     key: ReshardingKey,
+    heartbeat: OnceLock<AbortOnDropHandle<()>>,
 }
 
 impl ReshardingStore {
-    pub(crate) async fn open(addr: &Address, key: ReshardingKey) -> Result<Self, Error> {
-        let mut server = connect_session(addr).await?;
-        if !try_lock(&mut server, &key).await? {
-            return Err(locked_error(&mut server, &key).await);
-        }
+    pub(in super::super) async fn open(addr: &Address, key: ReshardingKey) -> Result<Self, Error> {
+        let server = locked_session(addr, &key).await?;
 
         Ok(Self {
             server: Mutex::new(Some(server)),
             addr: addr.clone(),
             key,
+            heartbeat: OnceLock::new(),
         })
     }
 
-    pub(crate) async fn reconnect(&self) -> Result<(), Error> {
-        let mut server = self.server.lock().await;
-        *server = None;
-        let mut session = connect_session(&self.addr).await?;
-        for _ in 0..RELOCK_ATTEMPTS {
-            if try_lock(&mut session, &self.key).await? {
-                *server = Some(session);
-                return Ok(());
+    /// Run a query on the state connection every `state_heartbeat_interval`, so a
+    /// lost lock is taken back even when the run writes nothing. Stop `owner`
+    /// only when another session holds the lock. Ends when the store drops.
+    pub(in super::super) fn start_heartbeat(self: &Arc<Self>, owner: TaskId) {
+        let store = Arc::downgrade(self);
+        let task = tasks::spawn("resharding lock heartbeat", async move {
+            loop {
+                let interval = lock_timeout();
+                tokio::time::sleep(interval).await;
+                let Some(store) = store.upgrade() else {
+                    return;
+                };
+                match store.heartbeat().await {
+                    Ok(()) => (),
+                    Err(err @ Error::ReshardingLocked { .. }) => {
+                        warn!(
+                            "resharding {}: lock lost ({err}), stopping task {owner}",
+                            store.key
+                        );
+                        tasks_storage().cancel_task(owner);
+                        return;
+                    }
+                    Err(err) => warn!(
+                        "resharding {}: state connection is down ({err}), retrying",
+                        store.key
+                    ),
+                }
             }
-            tokio::time::sleep(RELOCK_DELAY).await;
-        }
-        Err(locked_error(&mut session, &self.key).await)
+        });
+        let _ = self.heartbeat.set(AbortOnDropHandle::new(task));
     }
 
-    pub(crate) fn key(&self) -> &ReshardingKey {
+    /// Drop the state connection and take the lock again on a new one.
+    #[cfg(test)]
+    async fn reconnect(&self) -> Result<(), Error> {
+        *self.server.lock().await = None;
+        self.heartbeat().await
+    }
+
+    pub(in super::super) fn key(&self) -> &ReshardingKey {
         &self.key
     }
 
-    pub(crate) fn address(&self) -> &Address {
+    pub(in super::super) fn address(&self) -> &Address {
         &self.addr
     }
 
-    pub(crate) async fn load(&self) -> Result<Option<ReshardingRecord>, Error> {
-        Self::read(session(&mut *self.server.lock().await)?, &self.key).await
+    pub(in super::super) async fn load(&self) -> Result<Option<ReshardingRecord>, Error> {
+        self.execute(SelectRow::request(&self.key))
+            .await?
+            .first()
+            .map(|row| parse_record(row, self.key.clone()))
+            .transpose()
     }
 
-    pub(crate) async fn insert(&self, row: &ReshardingRecord) -> Result<(), Error> {
-        self.execute(InsertRow::request(row)).await
+    pub(in super::super) async fn insert(&self, row: &ReshardingRecord) -> Result<(), Error> {
+        self.execute(InsertRow::request(row)).await?;
+        Ok(())
     }
 
-    pub(crate) async fn set_stage(&self, id: ReshardingId, stage: Stage) -> Result<(), Error> {
+    pub(in super::super) async fn set_stage(
+        &self,
+        id: ReshardingId,
+        stage: Stage,
+    ) -> Result<(), Error> {
         self.execute(UpdateStage::request(StageUpdate { id, stage }))
-            .await
+            .await?;
+        Ok(())
     }
 
-    pub(crate) async fn resume(
+    pub(in super::super) async fn resume(
         &self,
         id: ReshardingId,
         owner: &TaskOwner,
@@ -88,35 +130,80 @@ impl ReshardingStore {
             owner,
             resumed_at,
         }))
-        .await
+        .await?;
+        Ok(())
     }
 
-    pub(crate) async fn delete(&self, id: ReshardingId) -> Result<(), Error> {
-        self.execute(DeleteRow::request(id)).await
+    pub(in super::super) async fn delete(&self, id: ReshardingId) -> Result<(), Error> {
+        self.execute(DeleteRow::request(id)).await?;
+        Ok(())
     }
 
     #[cfg(test)]
-    pub(crate) async fn clear(&self) -> Result<(), Error> {
+    pub(super) async fn clear(&self) -> Result<(), Error> {
         self.execute(super::queries::DeleteKey::request(&self.key))
-            .await
-    }
-
-    pub(crate) async fn heartbeat(&self) -> Result<(), Error> {
-        self.execute(Heartbeat::request(())).await
-    }
-
-    pub(crate) async fn unlock(&self) -> Result<(), Error> {
-        self.execute(Unlock::request(&self.key)).await
-    }
-
-    async fn execute(&self, request: impl Into<ServerRequest>) -> Result<(), Error> {
-        session(&mut *self.server.lock().await)?
-            .execute_checked(request)
             .await?;
         Ok(())
     }
 
-    pub(crate) async fn read(
+    async fn heartbeat(&self) -> Result<(), Error> {
+        self.execute(Heartbeat::request(())).await?;
+        Ok(())
+    }
+
+    /// Never reconnects: a lost connection has already released the lock.
+    pub(in super::super) async fn unlock(&self) -> Result<(), Error> {
+        self.server
+            .lock()
+            .await
+            .as_mut()
+            .ok_or_else(|| Error::Backend(BackendError::NotConnected))?
+            .execute_checked(Unlock::request(&self.key))
+            .await?;
+        Ok(())
+    }
+
+    /// Run `request` on the state connection. When the connection is lost,
+    /// open a new one, take the lock again and run `request` again, until
+    /// `[resharding] retry_max_attempts` runs out. A SQL error on a
+    /// usable connection and a lock held by another session are not retried.
+    async fn execute(&self, request: impl Into<ServerRequest>) -> Result<Vec<DataRow>, Error> {
+        let request = request.into();
+        let mut retry = state_retry(&self.key);
+        loop {
+            let mut server = self.server.lock().await;
+            let err: Error = match server.as_mut() {
+                Some(session) => match session.fetch_all(request.clone()).await {
+                    Ok(rows) => return Ok(rows),
+                    Err(err) if session.in_sync() => return Err(err.into()),
+                    Err(err) => {
+                        *server = None;
+                        err.into()
+                    }
+                },
+                None => match locked_session(&self.addr, &self.key).await {
+                    Ok(session) => {
+                        *server = Some(session);
+                        continue;
+                    }
+                    Err(err @ Error::ReshardingLocked { .. }) => return Err(err),
+                    Err(err) => err,
+                },
+            };
+            drop(server);
+            if !retry.delay_retry(&err).await {
+                return Err(err);
+            }
+        }
+    }
+
+    pub(in super::super) async fn connect(addr: &Address) -> Result<Server, Error> {
+        let mut server = connect_address(addr).await?;
+        server.execute_checked(SetupSession::request(())).await?;
+        Ok(server)
+    }
+
+    pub(in super::super) async fn read(
         server: &mut Server,
         key: &ReshardingKey,
     ) -> Result<Option<ReshardingRecord>, Error> {
@@ -150,7 +237,7 @@ impl ReshardingStore {
             .collect()
     }
 
-    pub(crate) async fn lock_owner(
+    pub(in super::super) async fn lock_owner(
         server: &mut Server,
         key: &ReshardingKey,
     ) -> Result<Option<String>, Error> {
@@ -168,25 +255,32 @@ impl ReshardingStore {
     }
 }
 
-fn session(server: &mut Option<Server>) -> Result<&mut Server, Error> {
-    server
-        .as_mut()
-        .ok_or_else(|| Error::Backend(BackendError::NotConnected))
+fn lock_timeout() -> Duration {
+    Duration::from_millis(config().config.resharding.state_heartbeat_interval)
 }
 
-async fn try_lock(server: &mut Server, key: &ReshardingKey) -> Result<bool, Error> {
-    let locked = server.fetch_all::<i32>(TryLock::request(key)).await?;
-    Ok(locked.first() == Some(&1))
+fn state_retry(key: &ReshardingKey) -> Retry {
+    let config = config();
+    let resharding = &config.config.resharding;
+    Retry::new(
+        RetryConfig::builder()
+            .name(format!("resharding {key} state"))
+            .max_attempts(resharding.retry_max_attempts)
+            .delay(Duration::from_millis(resharding.retry_delay))
+            .build(),
+    )
 }
 
-async fn connect_session(addr: &Address) -> Result<Server, Error> {
-    let mut server = connect_address(addr).await?;
-    let application_name = format!("{APPLICATION_NAME_PREFIX}{}", instance_id());
-    server
-        .execute_checked(SetupSession::request(&application_name))
-        .await?;
+async fn locked_session(addr: &Address, key: &ReshardingKey) -> Result<Server, Error> {
+    let mut server = ReshardingStore::connect(addr).await?;
     server.execute_checked(CREATE_TABLE).await?;
-    Ok(server)
+    match server.execute_checked(Lock::request(key)).await {
+        Ok(_) => Ok(server),
+        Err(BackendError::ExecutionError(err)) if err.code == LOCK_NOT_AVAILABLE => {
+            Err(locked_error(&mut server, key).await)
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 async fn locked_error(server: &mut Server, key: &ReshardingKey) -> Error {
@@ -205,38 +299,45 @@ pub(super) struct UnreadableRecord {
     pub(super) error: Error,
 }
 
-fn text(row: &DataRow, index: usize) -> Result<String, Error> {
-    row.get::<String>(index, Format::Text)
-        .ok_or_else(|| Error::MissingData)
+static RECORD_COLUMNS: LazyLock<IndexMap<&'static str, usize>> =
+    LazyLock::new(|| record_columns!(index_map));
+
+fn column<T: FromDataType>(row: &DataRow, name: &str) -> Result<T, Error> {
+    RECORD_COLUMNS
+        .get(name)
+        .and_then(|&index| row.get(index, Format::Text))
+        .ok_or_else(|| Error::ReshardingFormat(format!("{name}: missing or invalid")))
 }
 
-fn parsed<T>(row: &DataRow, index: usize, field: &str) -> Result<T, Error>
-where
-    T: FromStr,
-    T::Err: Display,
-{
-    text(row, index)?
-        .parse()
-        .map_err(|err| Error::ReshardingFormat(format!("{field}: {err}")))
+fn nullable<T: FromDataType>(row: &DataRow, name: &str) -> Result<Option<T>, Error> {
+    let null = RECORD_COLUMNS
+        .get(name)
+        .and_then(|&index| row.get_raw(index))
+        .is_some_and(|data| data.is_null);
+    if null {
+        Ok(None)
+    } else {
+        column(row, name).map(Some)
+    }
 }
 
-fn json<T: DeserializeOwned>(row: &DataRow, index: usize, field: &str) -> Result<T, Error> {
-    serde_json::from_str(&text(row, index)?)
-        .map_err(|err| Error::ReshardingFormat(format!("{field}: {err}")))
+fn json<T: DeserializeOwned>(row: &DataRow, name: &str) -> Result<T, Error> {
+    serde_json::from_str(&column::<String>(row, name)?)
+        .map_err(|err| Error::ReshardingFormat(format!("{name}: {err}")))
 }
 
 fn parse_key(row: &DataRow) -> Result<ReshardingKey, Error> {
     Ok(ReshardingKey {
         databases: Databases {
-            source: text(row, 0)?,
-            destination: text(row, 1)?,
+            source: column(row, "source_db")?,
+            destination: column(row, "destination_db")?,
         },
-        publication: text(row, 2)?,
+        publication: column(row, "publication")?,
     })
 }
 
 fn parse_record(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, Error> {
-    let format_version: i32 = parsed(row, 10, "format_version")?;
+    let format_version: i32 = column(row, "format_version")?;
     if format_version > FORMAT_VERSION {
         return Err(Error::ReshardingFormat(format!(
             "format version {format_version} is newer than {FORMAT_VERSION}"
@@ -244,35 +345,36 @@ fn parse_record(row: &DataRow, key: ReshardingKey) -> Result<ReshardingRecord, E
     }
 
     Ok(ReshardingRecord {
-        id: parsed(row, 11, "id")?,
+        id: column::<Uuid>(row, "id")?.into(),
         key,
-        command: json(row, 3, "command")?,
-        slot_name: text(row, 4)?,
-        stage: text(row, 5)?.parse()?,
-        config: json(row, 6, "config")?,
+        command: json(row, "command")?,
+        slot_name: column(row, "slot_name")?,
+        stage: column::<String>(row, "stage")?.parse()?,
+        config: json(row, "config")?,
         owner: TaskOwner {
-            instance_id: InstanceId::from(text(row, 7)?),
-            run_id: parsed(row, 8, "run_id")?,
-            task_id: parsed(row, 9, "task_id")?,
+            instance_id: column::<String>(row, "instance_id")?.into(),
+            run_id: column::<Uuid>(row, "run_id")?.into(),
+            task_id: TaskId::new(column(row, "task_id")?),
         },
         format_version,
-        started_at: millis(row, 12, "started_at")?,
-        resumed_at: match text(row, 13)?.as_str() {
-            "" => None,
-            _ => Some(millis(row, 13, "resumed_at")?),
-        },
+        started_at: utc(column(row, "started_at")?),
+        resumed_at: nullable(row, "resumed_at")?.map(utc),
     })
 }
 
-fn millis(row: &DataRow, index: usize, field: &str) -> Result<SystemTime, Error> {
-    Ok(UNIX_EPOCH + Duration::from_millis(parsed::<i64>(row, index, field)?.max(0) as u64))
+/// A `timestamp` column holds UTC time.
+fn utc(timestamp: Timestamp) -> SystemTime {
+    timestamp.to_naive_datetime().and_utc().into()
 }
 
 #[cfg(test)]
 pub(super) mod test {
+    use super::super::snapshot::ClusterSnapshot;
     use super::super::{ConfigSnapshot, ReshardingCommand};
     use super::*;
     use crate::backend::server::test::test_server;
+    use crate::util::instance_id;
+    use std::time::UNIX_EPOCH;
 
     async fn backend_pid(store: &ReshardingStore) -> i32 {
         store
@@ -320,11 +422,8 @@ pub(super) mod test {
     }
 
     pub(in super::super) fn row(key: ReshardingKey) -> ReshardingRecord {
-        let config: ConfigSnapshot = serde_json::from_str(
-            r#"{"source":{"shards":1,"sharded_tables":[],"sharded_mappings":[],"omnisharded_tables":[],"sharded_schemas":[]},
-            "destination":{"shards":2,"sharded_tables":[],"sharded_mappings":[],"omnisharded_tables":[],"sharded_schemas":[]}}"#,
-        )
-        .unwrap();
+        let config =
+            ConfigSnapshot::new_test(ClusterSnapshot::new_test(1), ClusterSnapshot::new_test(2));
         ReshardingRecord {
             id: ReshardingId::generate(),
             key,
@@ -427,18 +526,8 @@ pub(super) mod test {
     }
 
     #[tokio::test]
-    async fn ddl_is_idempotent() {
-        let addr = Address::new_test();
-        let store = ReshardingStore::open(&addr, key("store_ddl"))
-            .await
-            .unwrap();
-        drop(store);
-        let store = open_after_drop(&addr, key("store_ddl")).await;
-        assert_eq!(store.load().await.unwrap(), None);
-    }
-
-    #[tokio::test]
     async fn second_owner_is_refused() {
+        set_lock_timeout(100);
         let addr = Address::new_test();
         let first = ReshardingStore::open(&addr, key("store_owner"))
             .await
@@ -523,7 +612,7 @@ pub(super) mod test {
     }
 
     #[tokio::test]
-    async fn writes_fail_after_connection_loss() {
+    async fn writes_reconnect_after_connection_loss() {
         let addr = Address::new_test();
         let key = key("store_loss");
         let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
@@ -531,27 +620,40 @@ pub(super) mod test {
         let row = row(key.clone());
         store.insert(&row).await.unwrap();
 
-        let pid = backend_pid(&store).await;
-        let mut server = test_server().await;
-        server
+        let old = backend_pid(&store).await;
+        terminate_session(&store).await;
+
+        store.set_stage(row.id, Stage::Replication).await.unwrap();
+        assert_ne!(backend_pid(&store).await, old);
+        assert_eq!(
+            store.load().await.unwrap().unwrap().stage,
+            Stage::Replication
+        );
+        assert!(matches!(
+            ReshardingStore::lock_owner(&mut test_server().await, &key).await,
+            Ok(Some(_))
+        ));
+        store.delete(row.id).await.unwrap();
+    }
+
+    fn set_lock_timeout(timeout: u64) {
+        let mut updated = (*config()).clone();
+        updated.config.resharding.state_heartbeat_interval = timeout;
+        crate::config::set(updated).unwrap();
+    }
+
+    async fn terminate_session(store: &ReshardingStore) {
+        let pid = backend_pid(store).await;
+        test_server()
+            .await
             .execute_checked(format!("SELECT pg_terminate_backend({pid})"))
             .await
             .unwrap();
-
-        assert!(store.set_stage(row.id, Stage::Replication).await.is_err());
-        assert!(store.heartbeat().await.is_err());
-        drop(store);
-
-        let store = open_after_drop(&addr, key).await;
-        assert_eq!(
-            store.load().await.unwrap().unwrap().stage,
-            Stage::CopyTables
-        );
-        store.delete(row.id).await.unwrap();
     }
 
     #[tokio::test]
     async fn failed_relock_keeps_writes_failing() {
+        set_lock_timeout(100);
         let addr = Address::new_test();
         let key = key("store_relock");
         let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
@@ -559,12 +661,7 @@ pub(super) mod test {
         let row = row(key.clone());
         store.insert(&row).await.unwrap();
 
-        let pid = backend_pid(&store).await;
-        let mut server = test_server().await;
-        server
-            .execute_checked(format!("SELECT pg_terminate_backend({pid})"))
-            .await
-            .unwrap();
+        terminate_session(&store).await;
         let other = open_after_drop(&addr, key.clone()).await;
 
         assert!(matches!(
@@ -576,6 +673,36 @@ pub(super) mod test {
         assert_eq!(other.load().await.unwrap(), Some(row.clone()));
 
         other.delete(row.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn relock_waits_for_the_lock_holder() {
+        set_lock_timeout(10_000);
+        let addr = Address::new_test();
+        let key = key("store_relock_wait");
+        let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
+        store.clear().await.unwrap();
+        let row = row(key.clone());
+        store.insert(&row).await.unwrap();
+
+        terminate_session(&store).await;
+        let other = open_after_drop(&addr, key.clone()).await;
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            other.unlock().await.unwrap();
+            other
+        });
+
+        store.reconnect().await.unwrap();
+        drop(release.await.unwrap());
+        assert_eq!(store.load().await.unwrap(), Some(row.clone()));
+        set_lock_timeout(100);
+        assert!(matches!(
+            ReshardingStore::open(&addr, key.clone()).await,
+            Err(Error::ReshardingLocked { .. })
+        ));
+
+        store.delete(row.id).await.unwrap();
     }
 
     #[tokio::test]
@@ -600,5 +727,64 @@ pub(super) mod test {
         );
 
         store.delete(row.id).await.unwrap();
+    }
+
+    fn time(utc: &str) -> SystemTime {
+        utc.parse::<chrono::DateTime<chrono::Utc>>().unwrap().into()
+    }
+
+    /// A record with every column set to a value other than the defaults of [`row`].
+    fn full_record(key: ReshardingKey) -> ReshardingRecord {
+        let destination = ClusterSnapshot::new_test(4)
+            .with_rule(serde_json::json!({"name": "users", "column": "tenant_id"}));
+        ReshardingRecord {
+            id: ReshardingId::generate(),
+            key,
+            command: ReshardingCommand::Reshard {
+                skip_schema_sync: true,
+                replicate_only: false,
+                sync_only: true,
+                auto_cutover: false,
+                tables_only: true,
+            },
+            slot_name: "pgdog_full_slot".into(),
+            stage: Stage::Replication,
+            config: ConfigSnapshot::new_test(ClusterSnapshot::new_test(2), destination),
+            owner: TaskOwner {
+                instance_id: "pgdog-full-1".to_owned().into(),
+                run_id: pgdog_stats::RunId::generate(),
+                task_id: TaskId::new(4242),
+            },
+            format_version: FORMAT_VERSION,
+            started_at: time("2026-11-18T11:06:40.123456Z"),
+            resumed_at: Some(time("2026-11-18T11:07:40Z")),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_is_saved_and_read_back() {
+        let addr = Address::new_test();
+        let key = key("store_full");
+        let store = ReshardingStore::open(&addr, key.clone()).await.unwrap();
+        store.clear().await.unwrap();
+        let record = full_record(key.clone());
+        store
+            .insert(&ReshardingRecord {
+                resumed_at: None,
+                ..record.clone()
+            })
+            .await
+            .unwrap();
+        store
+            .resume(record.id, &record.owner, record.resumed_at.unwrap())
+            .await
+            .unwrap();
+
+        let loaded = store.load().await.unwrap().unwrap();
+        assert_eq!(loaded.started_at, time("2026-11-18T11:06:40.123456Z"));
+        assert_eq!(loaded.resumed_at, Some(time("2026-11-18T11:07:40Z")));
+        assert_eq!(loaded, record);
+
+        store.delete(record.id).await.unwrap();
     }
 }

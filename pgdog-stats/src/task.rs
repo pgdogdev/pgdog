@@ -884,6 +884,38 @@ mod test {
     }
 
     #[test]
+    fn test_unknown_field_in_known_kind_is_ignored() {
+        assert_eq!(
+            serde_json::from_str::<TaskDefinition>(
+                r#"{"name":"reshard","kind":"reshard","databases":{"source":"prod","destination":"prod_sharded"},"skip_schema_sync":false,"replicate_only":false,"sync_only":false,"auto_cutover":true,"cleanup_on_cancel":false,"resume":true}"#
+            )
+            .unwrap(),
+            TaskDefinition::from(ReshardDefinition {
+                databases: databases(),
+                skip_schema_sync: false,
+                replicate_only: false,
+                sync_only: false,
+                auto_cutover: true,
+                cleanup_on_cancel: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_unknown_abort_command_reads_as_unknown() {
+        assert_eq!(
+            serde_json::from_str::<TaskDefinition>(
+                r#"{"name":"abort_resharding","kind":"abort_resharding","databases":{"source":"prod","destination":"prod_sharded"},"command":"rebalance"}"#
+            )
+            .unwrap(),
+            TaskDefinition::from(AbortReshardingDefinition {
+                databases: databases(),
+                command: CommandKind::Unknown,
+            })
+        );
+    }
+
+    #[test]
     fn test_abort_resharding_definition() {
         let definition = TaskDefinition::from(AbortReshardingDefinition {
             databases: databases(),

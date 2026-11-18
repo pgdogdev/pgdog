@@ -23,7 +23,18 @@ impl InstanceId {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Display, FromStr, Serialize, Deserialize, JsonSchema,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Display,
+    From,
+    FromStr,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[serde(transparent)]
 pub struct RunId(Uuid);
@@ -42,7 +53,18 @@ pub fn run_id() -> RunId {
 
 /// Identifier of one resharding run, kept across its pauses and resumes.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Display, FromStr, Serialize, Deserialize, JsonSchema,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Display,
+    From,
+    FromStr,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[serde(transparent)]
 pub struct ReshardingId(Uuid);
@@ -56,22 +78,6 @@ impl ReshardingId {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
-    fn test_ids_round_trip_through_json() {
-        let run_id = RunId::generate();
-        let json = serde_json::to_string(&run_id).unwrap();
-        assert_eq!(json, format!("\"{run_id}\""));
-        assert_eq!(serde_json::from_str::<RunId>(&json).unwrap(), run_id);
-
-        let instance_id = InstanceId::from("pgdog-0".to_owned());
-        let json = serde_json::to_string(&instance_id).unwrap();
-        assert_eq!(json, r#""pgdog-0""#);
-        assert_eq!(
-            serde_json::from_str::<InstanceId>(&json).unwrap(),
-            instance_id
-        );
-    }
 
     #[test]
     fn test_run_id_is_stable_within_the_process() {

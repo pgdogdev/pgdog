@@ -24,7 +24,7 @@ use crate::backend::replication::logical::publisher::replication_stream::{
 };
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::run::{LockWatchdog, ReshardingCommand};
+use crate::backend::replication::logical::run::ReshardingCommand;
 use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
@@ -171,16 +171,12 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
     /// forward phase returns [`Error::ReplicationAborted`].
     async fn run(mut self, ctx: &TaskContext<T>) -> Result<(), Error> {
         let cancel = ctx.cancellation_token();
-        let _watchdog = if self.state.run_store().is_some() {
-            None
-        } else {
+        if !self.state.has_run() {
             let command = ReshardingCommand::Replicate {
                 auto_cutover: self.cutover == CutoverMode::Auto,
             };
-            let root_id = ctx.root_id();
-            self.state.start_run(command, root_id).await?;
-            Some(LockWatchdog::start(&self.state, root_id))
-        };
+            self.state.start_run(command, ctx.root_id()).await?;
+        }
         let state = self.state.clone();
         let result = self.replicate_loop(ctx, self.cutover).await;
         self.resume_traffic().await;
