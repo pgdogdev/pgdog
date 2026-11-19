@@ -204,6 +204,14 @@ pub(crate) type LruHasher = lru::DefaultHasher;
 #[cfg(feature = "bench")]
 pub(crate) type LruHasher = foldhash::fast::FixedState;
 
+// We merge the groups in GROUP BY in a HashMap with `GroupHasher` (`Aggregates::mappings`), then sort the rows (e.g., for ORDER BY) starting from the order of that HashMap
+// Std by default uses a random seed causing that order and thus the number of comparisons of the sort change from run to run
+// `Buffer::sort` performs allocations in all these comparisons, causing the allocation counts change too (due to # of comparisons changing)
+#[cfg(not(any(test, feature = "bench")))]
+pub(crate) type GroupHasher = std::collections::hash_map::RandomState;
+#[cfg(any(test, feature = "bench"))]
+pub(crate) type GroupHasher = std::hash::BuildHasherDefault<std::hash::DefaultHasher>;
+
 #[cfg(test)]
 mod test {
 

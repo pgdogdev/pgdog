@@ -12,6 +12,7 @@ use crate::{
         Decoder,
         messages::{DataRow, Datum},
     },
+    util::GroupHasher,
 };
 use pgdog_postgres_types::{DataType, Error as TypeError};
 
@@ -259,7 +260,7 @@ struct GroupState<'a> {
 #[derive(Debug)]
 pub(super) struct Aggregates<'a> {
     rows: &'a VecDeque<DataRow>,
-    mappings: HashMap<Grouping, GroupState<'a>>,
+    mappings: HashMap<Grouping, GroupState<'a>, GroupHasher>,
     decoder: &'a Decoder,
     aggregate: &'a Aggregate,
     helper_columns: HashMap<usize, HelperColumns>,
@@ -330,7 +331,7 @@ impl<'a> Aggregates<'a> {
             Some(Self {
                 rows,
                 decoder,
-                mappings: HashMap::new(),
+                mappings: HashMap::default(),
                 aggregate,
                 helper_columns,
             })
