@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use pgdog_config::ServerAuth;
-use rand::Rng;
+use rand::RngExt;
 use tokio::spawn;
 use tokio::task::yield_now;
 use tokio::time::{Instant, sleep, timeout};

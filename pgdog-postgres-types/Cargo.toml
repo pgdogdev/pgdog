@@ -8,7 +8,7 @@ chrono = "0.4"
 bytes.workspace = true
 thiserror = "*"
 uuid.workspace = true
-serde = { version = "*", features = ["derive"]}
+serde.workspace = true
 schemars.workspace = true
 pgdog-vector = { path = "../pgdog-vector" }
 rust_decimal = { version = "1.36", features = ["db-postgres"] }

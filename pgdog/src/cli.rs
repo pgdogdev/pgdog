@@ -191,7 +191,7 @@ pub(crate) enum Commands {
 /// Generate and print a SCRAM-SHA-256 hash from a plaintext password.
 #[allow(clippy::print_stdout)]
 pub(crate) fn hash_password(password: &str) {
-    use rand::Rng;
+    use rand::RngExt;
 
     let salt: [u8; 16] = rand::rng().random();
     let iterations = std::num::NonZeroU32::new(4096).unwrap();
