@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use pgdog_config::MirroringLevel;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use tokio::select;
 use tokio::sync::mpsc::*;
 use tokio::time::Instant;

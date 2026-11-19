@@ -2,7 +2,7 @@
 //! default routing behavior determined by the query parser.
 
 use pgdog_config::Role;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 
 use crate::net::{Parameters, parameter::ParameterValue};
 
