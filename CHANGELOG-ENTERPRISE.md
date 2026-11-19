@@ -28,8 +28,6 @@ the most optimal way to share those changes.
 - Control plane logging improvements (it was too verbose by default)
 - Resharding cutover would incorrectly wait for stale instances, blocking cutover if a PgDog process has recently rebooted
 
-#### Bug fixes
-
 ### v2026-11-12
 
 **OS version**: [v0.1.65](CHANGELOG.md#v0165)
