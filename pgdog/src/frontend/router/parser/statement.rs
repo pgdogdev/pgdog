@@ -71,8 +71,9 @@ enum Relation<'a> {
 #[derive(Debug, Default, Clone)]
 struct SearchContext<'a> {
     /// Stores `Relations` encountered
-    /// E.g., for FROM users u JOIN orders ON .., we have u -> Table(users) and orders -> Table(orders).
-    /// Key is alias (u) or table name for tables that don't have alias (orders)
+    /// E.g., for FROM users u JOIN orders ON .., we have u -> Table(users)
+    /// Key is alias (u) or the name of CTEs without an alias (c in WITH c AS (..) SELECT .. FROM c)
+    /// We don't store tables without an alias (orders) because `resolve_column` returns the columns belonging to those tables as-is
     relations: HashMap<&'a str, Relation<'a>>,
     /// The primary table from the FROM clause (if simple)
     table: Option<Table<'a>>,
@@ -179,14 +180,16 @@ impl<'a> SearchContext<'a> {
                 // E.g., if we consider the CTE WITH users AS (..) SELECT .. FROM users)
                 // - for FROM users, Postgres then uses the CTE users (instead of the table users)
                 // Names with a schema (e.g., public.users) can't be CTEs (so those are always tables)
-                let relation = if table.schema.is_none() && cte_names.contains(table.name) {
-                    Relation::Cte
+                if table.schema.is_none() && cte_names.contains(table.name) {
+                    self.relations
+                        .insert(table.alias.unwrap_or(table.name), Relation::Cte);
                 } else {
                     self.tables.push(table);
-                    Relation::Table(table)
-                };
-                self.relations
-                    .insert(table.alias.unwrap_or(table.name), relation);
+                    // We only store tables with an alias, which keeps `relations` empty (no allocation and no hashing) for most statements, e.g., SELECT .. FROM users WHERE id = $1
+                    if let Some(alias) = table.alias {
+                        self.relations.insert(alias, Relation::Table(table));
+                    }
+                }
             }
 
             Node::JoinExpr(join) => {
