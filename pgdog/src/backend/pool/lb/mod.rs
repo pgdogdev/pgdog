@@ -53,6 +53,12 @@ impl Candidate for &Target {
     }
 }
 
+fn has_unbanned_replica(candidates: &[impl Candidate]) -> bool {
+    candidates
+        .iter()
+        .any(|target| target.role() == Role::Replica && !target.banned())
+}
+
 /// Decide if the primary stays in `candidates` for a read.
 ///
 /// `candidates` must already exclude resharding-only targets and replicas
@@ -62,11 +68,7 @@ impl Candidate for &Target {
 fn primary_reads(rw_split: ReadWriteSplit, read_only: bool, candidates: &[impl Candidate]) -> bool {
     use ReadWriteSplit::*;
 
-    let has_unbanned_replica = || {
-        candidates
-            .iter()
-            .any(|target| target.role() == Role::Replica && !target.banned())
-    };
+    let has_unbanned_replica = || has_unbanned_replica(candidates);
 
     match rw_split {
         // If `read_only` is true, only allow if there's no replicas.
@@ -426,8 +428,6 @@ impl LoadBalancer {
         use LoadBalancingStrategy::*;
         use smallvec::SmallVec;
 
-        let ignore_ban = request.label.is_some();
-
         let mut candidates: SmallVec<[&Target; 32]> = self
             .targets
             .iter()
@@ -455,7 +455,10 @@ impl LoadBalancer {
             return Err(Error::AllReplicasDown);
         }
 
-        // Exclude banned targets from balancing unless a label explicitly selects them.
+        // Let labeled requests use banned targets when no unbanned replica remains.
+        let ignore_ban = request.label.is_some() && !has_unbanned_replica(&candidates);
+
+        // Exclude banned targets from balancing unless they are needed as a fallback.
         let mut healthy: SmallVec<[&Target; 32]> = candidates
             .iter()
             .copied()

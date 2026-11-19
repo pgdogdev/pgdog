@@ -36,6 +36,26 @@ async fn test_label_filtering() {
 }
 
 #[tokio::test]
+async fn test_label_respects_ban_when_unbanned_replica_exists() {
+    let replicas = labeled_replicas();
+    replicas.targets[0].ban.ban(Error::ManualBan, Duration::MAX);
+
+    let mut route = Route::read(ShardWithPriority::default());
+    route.label = Some("reporting".into());
+    let request = LbRequest::new(Default::default(), &route, false, Instant::now());
+
+    for _ in 0..4 {
+        let conn = replicas
+            .get(&request)
+            .await
+            .expect("unbanned labeled replica");
+        assert_eq!(conn.pool.id(), replicas.targets[1].pool.id());
+    }
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
 async fn test_label_ignores_ban() {
     let replicas = labeled_replicas();
     let target = &replicas.targets[1];
