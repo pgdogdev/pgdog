@@ -22,7 +22,7 @@ rust_decimal = { version = "1.42.0", features = ["macros"] }
 
 [dev-dependencies]
 postgres-native-tls = "0.5"
-serial_test = "3"
+serial_test = "4"
 reqwest.workspace = true
 rand = "0.9"
 chrono-tz = "0.10.4"
