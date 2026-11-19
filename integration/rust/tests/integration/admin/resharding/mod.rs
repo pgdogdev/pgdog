@@ -29,7 +29,7 @@ const SLOT_FILTER: &str = "slot_name LIKE '__pgdog_repl_%'";
 const POLL: Duration = Duration::from_millis(200);
 
 async fn drop_test_schema_on(pool: &Pool<Postgres>) {
-    pool.execute(format!("DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE").as_str())
+    pool.execute(unsafe_sql!("DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE"))
         .await
         .expect("test schema cleanup must succeed");
 }
@@ -54,7 +54,7 @@ async fn drain_tasks(admin: &Pool<Postgres>) {
                 }
 
                 if let Some(id) = task.id {
-                    let _ = admin.execute(format!("STOP_TASK {id}").as_str()).await;
+                    let _ = admin.execute(unsafe_sql!("STOP_TASK {id}")).await;
                 }
             }
             sleep(POLL).await;
@@ -66,20 +66,17 @@ async fn drain_tasks(admin: &Pool<Postgres>) {
 
 async fn drop_test_slots(direct: &Pool<Postgres>) {
     let _ = direct
-        .execute(
-            format!(
-                "SELECT pg_terminate_backend(active_pid) \
+        .execute(unsafe_sql!(
+            "SELECT pg_terminate_backend(active_pid) \
                  FROM pg_replication_slots \
                  WHERE ({SLOT_FILTER}) AND active_pid IS NOT NULL"
-            )
-            .as_str(),
-        )
+        ))
         .await;
 
     timeout(Duration::from_secs(10), async {
         loop {
             let any_active = direct
-                .fetch_optional(sqlx::query(&format!(
+                .fetch_optional(sqlx::query(unsafe_sql!(
                     "SELECT bool_or(active) AS active FROM pg_replication_slots WHERE {SLOT_FILTER}"
                 )))
                 .await
@@ -97,19 +94,16 @@ async fn drop_test_slots(direct: &Pool<Postgres>) {
     .expect("replication slots did not deactivate");
 
     let _ = direct
-        .execute(
-            format!(
-                "SELECT pg_drop_replication_slot(slot_name) \
+        .execute(unsafe_sql!(
+            "SELECT pg_drop_replication_slot(slot_name) \
                  FROM pg_replication_slots \
                  WHERE ({SLOT_FILTER}) AND NOT active"
-            )
-            .as_str(),
-        )
+        ))
         .await;
 }
 
 async fn test_slot_names(pool: &Pool<Postgres>) -> Vec<String> {
-    sqlx::query_scalar(&format!(
+    sqlx::query_scalar(unsafe_sql!(
         "SELECT slot_name FROM pg_replication_slots WHERE {SLOT_FILTER} ORDER BY slot_name"
     ))
     .fetch_all(pool)
@@ -133,7 +127,7 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
     drop_all_test_slots(direct).await;
 
     let _ = direct
-        .execute(format!("DROP PUBLICATION IF EXISTS {TEST_PUB}").as_str())
+        .execute(unsafe_sql!("DROP PUBLICATION IF EXISTS {TEST_PUB}"))
         .await;
 
     drop_test_schemas(direct).await;
@@ -195,9 +189,9 @@ async fn fail_if_task_errored(admin: &Pool<Postgres>, task_id: i64) {
 }
 
 async fn relation_present(pool: &Pool<Postgres>, name: &str) -> bool {
-    pool.fetch_one(
-        format!("SELECT to_regclass('{TEST_SCHEMA}.{name}') IS NOT NULL AS present").as_str(),
-    )
+    pool.fetch_one(unsafe_sql!(
+        "SELECT to_regclass('{TEST_SCHEMA}.{name}') IS NOT NULL AS present"
+    ))
     .await
     .unwrap()
     .get::<bool, _>("present")
@@ -229,10 +223,12 @@ async fn shard_row_count(db: &str, table: &str) -> i64 {
     if !relation_present(&pool, table).await {
         return 0;
     }
-    pool.fetch_one(format!("SELECT COUNT(*)::bigint AS n FROM {TEST_SCHEMA}.{table}").as_str())
-        .await
-        .unwrap()
-        .get::<i64, _>("n")
+    pool.fetch_one(unsafe_sql!(
+        "SELECT COUNT(*)::bigint AS n FROM {TEST_SCHEMA}.{table}"
+    ))
+    .await
+    .unwrap()
+    .get::<i64, _>("n")
 }
 
 async fn wait_for_rows_each_shard(
@@ -281,14 +277,13 @@ async fn wait_for_task(admin: &Pool<Postgres>, desc: &str, pred: impl Fn(&Task) 
 
 async fn create_test_table(direct: &Pool<Postgres>) {
     direct
-        .execute(format!("CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}").as_str())
+        .execute(unsafe_sql!("CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}"))
         .await
         .expect("test schema creation must succeed");
     direct
-        .execute(
-            format!("CREATE TABLE {TEST_SCHEMA}.{TEST_TABLE} (id BIGSERIAL PRIMARY KEY, val TEXT)")
-                .as_str(),
-        )
+        .execute(unsafe_sql!(
+            "CREATE TABLE {TEST_SCHEMA}.{TEST_TABLE} (id BIGSERIAL PRIMARY KEY, val TEXT)"
+        ))
         .await
         .unwrap();
 }
@@ -296,10 +291,9 @@ async fn create_test_table(direct: &Pool<Postgres>) {
 async fn seed_rows(direct: &Pool<Postgres>, n: i64) {
     direct
         .execute(
-            format!(
+            unsafe_sql!(
                 "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) SELECT 'v' || g FROM generate_series(1, {n}) g"
-            )
-            .as_str(),
+            ),
         )
         .await
         .unwrap();
@@ -307,14 +301,14 @@ async fn seed_rows(direct: &Pool<Postgres>, n: i64) {
 
 async fn create_publication(direct: &Pool<Postgres>) {
     direct
-        .execute(
-            format!("CREATE PUBLICATION {TEST_PUB} FOR TABLE {TEST_SCHEMA}.{TEST_TABLE}").as_str(),
-        )
+        .execute(unsafe_sql!(
+            "CREATE PUBLICATION {TEST_PUB} FOR TABLE {TEST_SCHEMA}.{TEST_TABLE}"
+        ))
         .await
         .unwrap();
 }
 
-async fn run_task_command(admin: &Pool<Postgres>, command: &str) -> i64 {
+async fn run_task_command(admin: &Pool<Postgres>, command: impl sqlx::SqlSafeStr + Send) -> i64 {
     admin
         .fetch_one(command)
         .await

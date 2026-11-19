@@ -58,7 +58,10 @@ async fn test_admin_termination_retry() {
     // Terminate one of the backend connections
     let pid_to_terminate = pids[0];
     admin_pool
-        .execute(format!("SELECT pg_terminate_backend({})", pid_to_terminate).as_str())
+        .execute(unsafe_sql!(
+            "SELECT pg_terminate_backend({})",
+            pid_to_terminate
+        ))
         .await
         .unwrap();
 
@@ -70,9 +73,7 @@ async fn test_admin_termination_retry() {
     // 2. Discard it and fetch another connection
     // 3. Return a working connection to the client
     for i in 0..10 {
-        let result = pool
-            .fetch_one(format!("SELECT {} as num", i).as_str())
-            .await;
+        let result = pool.fetch_one(unsafe_sql!("SELECT {} as num", i)).await;
 
         // The query should succeed - PgDog should transparently handle the terminated connection
         assert!(

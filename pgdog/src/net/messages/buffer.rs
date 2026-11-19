@@ -218,8 +218,8 @@ mod test {
 
         spawn(async move {
             let mut conn = TcpStream::connect(addr).await.unwrap();
-            use rand::{Rng, SeedableRng, rngs::StdRng};
-            let mut rng = StdRng::from_os_rng();
+            use rand::{RngExt, rngs::StdRng};
+            let mut rng: StdRng = rand::make_rng();
 
             for i in 0..5000 {
                 let msg = Sync.to_bytes();

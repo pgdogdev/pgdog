@@ -20,13 +20,13 @@ pub async fn advisory_locks_with_functions() {
     ];
 
     for func_to_try in funcs {
-        sqlx::raw_sql(format!("SELECT pg_advisory_lock({func_to_try})").as_str())
+        sqlx::raw_sql(unsafe_sql!("SELECT pg_advisory_lock({func_to_try})"))
             .execute(sharded_conn)
             .await
             .unwrap();
 
         let lock_acquired: bool =
-            sqlx::query_scalar(format!("SELECT pg_try_advisory_lock({func_to_try})").as_str())
+            sqlx::query_scalar(unsafe_sql!("SELECT pg_try_advisory_lock({func_to_try})"))
                 .fetch_one(sharded_conn_2)
                 .await
                 .unwrap();
@@ -45,13 +45,13 @@ pub async fn advisory_locks_with_2_params() {
     let funcs = ["1, 2", "2, 1"];
 
     for func_to_try in funcs {
-        sqlx::raw_sql(format!("SELECT pg_advisory_lock({func_to_try})").as_str())
+        sqlx::raw_sql(unsafe_sql!("SELECT pg_advisory_lock({func_to_try})"))
             .execute(sharded_conn)
             .await
             .unwrap();
 
         let lock_acquired: bool =
-            sqlx::query_scalar(format!("SELECT pg_try_advisory_lock({func_to_try})").as_str())
+            sqlx::query_scalar(unsafe_sql!("SELECT pg_try_advisory_lock({func_to_try})"))
                 .fetch_one(sharded_conn_2)
                 .await
                 .unwrap();
@@ -120,7 +120,7 @@ pub async fn advisory_locks_with_transactions() {
 
     for lock in [1, 2] {
         let lock_acquired: bool =
-            sqlx::query_scalar(format!("SELECT pg_try_advisory_lock({lock})").as_str())
+            sqlx::query_scalar(unsafe_sql!("SELECT pg_try_advisory_lock({lock})"))
                 .fetch_one(sharded_conn_3)
                 .await
                 .unwrap();
@@ -134,7 +134,7 @@ pub async fn advisory_locks_unlock_all() {
     let sharded_conn = connections_sqlx().await;
     let sharded_conn = sharded_conn.get(1).unwrap();
     for lock in [1, 2] {
-        sqlx::raw_sql(format!("SELECT pg_advisory_lock({lock})").as_str())
+        sqlx::raw_sql(unsafe_sql!("SELECT pg_advisory_lock({lock})"))
             .execute(sharded_conn)
             .await
             .unwrap();
@@ -151,7 +151,7 @@ pub async fn advisory_locks_unlock_all() {
 
     for lock in [1, 2] {
         let lock_acquired: bool =
-            sqlx::query_scalar(format!("SELECT pg_try_advisory_lock({lock})").as_str())
+            sqlx::query_scalar(unsafe_sql!("SELECT pg_try_advisory_lock({lock})"))
                 .fetch_one(sharded_conn_2)
                 .await
                 .unwrap();
@@ -171,7 +171,7 @@ pub async fn advisory_locks_catalog_table() {
     let sharded_conn = connections_sqlx().await;
     let sharded_conn = sharded_conn.get(1).unwrap();
     for lock in [1, 2] {
-        sqlx::raw_sql(format!("SELECT pg_advisory_lock({lock})").as_str())
+        sqlx::raw_sql(unsafe_sql!("SELECT pg_advisory_lock({lock})"))
             .execute(sharded_conn)
             .await
             .unwrap();

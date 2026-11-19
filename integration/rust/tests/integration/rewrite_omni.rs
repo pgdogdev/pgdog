@@ -25,13 +25,10 @@ async fn test_omni_only_pk_rewrite() {
         // Configure sharding.
         let mut t = pool.begin().await.unwrap();
         t.execute("DELETE FROM pgdog.config").await.unwrap();
-        t.execute(
-            format!(
-                "INSERT INTO pgdog.config (shard, shards) VALUES ({}, 2)",
-                shard
-            )
-            .as_str(),
-        )
+        t.execute(unsafe_sql!(
+            "INSERT INTO pgdog.config (shard, shards) VALUES ({}, 2)",
+            shard
+        ))
         .await
         .unwrap();
         t.commit().await.unwrap();

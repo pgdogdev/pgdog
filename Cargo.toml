@@ -22,7 +22,7 @@ edition = "2024"
 pgdog-plugin = { path = "./pgdog-plugin", version = "0.5.0", default-features = false }
 pgdog-config = { path = "./pgdog-config", version = "0.1.0" }
 pgdog-postgres-types = { path = "./pgdog-postgres-types"}
-pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "89937b1" }
+pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "a4784fc603563d3db8e9f381347f039f39b1dd85" }
 pgdog-util = { path = "./pgdog-util", version = "0.1.0" }
 bon = "3.9"
 derive_more = { version = "2", features = ["display", "from"] }
@@ -34,6 +34,9 @@ reqwest = { version = "0.13", features = ["json"] }
 bytes = "1"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 parking_lot = "0.12"
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 futures-util = "0.3.32"
 tokio = { version = "1.54", features = ["full"]}
 

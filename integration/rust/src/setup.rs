@@ -73,17 +73,14 @@ pub struct Backend {
 }
 
 pub async fn backends(application_name: &str, pool: &Pool<Postgres>) -> Vec<Backend> {
-    pool.fetch_all(
-        format!(
-            "SELECT pid::INTEGER,
+    pool.fetch_all(unsafe_sql!(
+        "SELECT pid::INTEGER,
             backend_start::TEXT
         FROM pg_stat_activity
         WHERE application_name = '{}'
         ORDER BY backend_start",
-            application_name
-        )
-        .as_str(),
-    )
+        application_name
+    ))
     .await
     .unwrap()
     .into_iter()

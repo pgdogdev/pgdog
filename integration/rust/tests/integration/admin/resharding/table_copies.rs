@@ -77,13 +77,16 @@ async fn test_show_table_copies_during_copy() {
     create_test_table(&direct).await;
     seed_rows(&direct, SEEDED_ROWS).await;
     direct
-        .execute(format!("ANALYZE {TEST_SCHEMA}.{TEST_TABLE}").as_str())
+        .execute(unsafe_sql!("ANALYZE {TEST_SCHEMA}.{TEST_TABLE}"))
         .await
         .unwrap();
     create_publication(&direct).await;
 
-    let task_id =
-        run_task_command(&admin, &format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}")).await;
+    let task_id = run_task_command(
+        &admin,
+        unsafe_sql!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}"),
+    )
+    .await;
 
     wait_for_task(&admin, "the copy_data child task", |task| {
         task.parent_id == Some(task_id) && task.kind == "copy_data"

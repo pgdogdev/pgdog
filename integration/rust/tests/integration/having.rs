@@ -143,13 +143,10 @@ async fn prepared_having_parameter_typed_and_untyped() -> Result<(), Box<dyn std
 async fn reset_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     cleanup(pool).await;
     for shard in [0, 1] {
-        pool.execute(
-            format!(
-                "/* pgdog_shard: {shard} */ \
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {shard} */ \
                  CREATE TABLE having_merge_test(customer_id BIGINT, order_id BIGINT, tag JSONB)"
-            )
-            .as_str(),
-        )
+        ))
         .await?;
     }
     admin_sqlx().await.execute("RELOAD").await?;
@@ -157,16 +154,16 @@ async fn reset_table(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn seed(pool: &PgPool, shard: usize, statement: &str) -> Result<(), sqlx::Error> {
-    pool.execute(format!("/* pgdog_shard: {shard} */ {statement}").as_str())
+    pool.execute(unsafe_sql!("/* pgdog_shard: {shard} */ {statement}"))
         .await?;
     Ok(())
 }
 
 async fn cleanup(pool: &PgPool) {
     for shard in [0, 1] {
-        pool.execute(
-            format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS having_merge_test").as_str(),
-        )
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS having_merge_test"
+        ))
         .await
         .ok();
     }
