@@ -6,4 +6,3 @@ edition = "2024"
 [dependencies]
 colored = "3.0"
 tokio.workspace = true
-which = "7"
