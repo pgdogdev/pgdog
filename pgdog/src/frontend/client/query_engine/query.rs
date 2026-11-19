@@ -7,8 +7,8 @@ use crate::{
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
-        DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
-        RowDescription, ToBytes, TransactionState,
+        DataRow, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage, Query,
+        ReadyForQuery, RowDescription, ToBytes, TransactionState,
     },
     parameters::is_session_identity,
     state::State,
@@ -155,6 +155,23 @@ impl QueryEngine {
                             ErrorResponse::unsupported(&err),
                         )
                         .await?;
+                    }
+                    // If Postgres returns errors while we fetch rows (e.g., division by zero in the SELECT of a subquery), we return those errors to the client
+                    Err(multi_step::Error::Execution(error)) => {
+                        if let Some(transaction) = context.transaction.as_mut() {
+                            transaction.set_error();
+                        }
+
+                        if client_request
+                            .messages
+                            .iter()
+                            .any(|message| matches!(message, ProtocolMessage::Parse(_)))
+                        {
+                            let bytes_sent = context.stream.send(&ParseComplete).await?;
+                            self.stats.sent(bytes_sent);
+                        }
+
+                        self.error_response(context, client_request, *error).await?;
                     }
                     Err(err) => return Err(err.into()),
                 }
