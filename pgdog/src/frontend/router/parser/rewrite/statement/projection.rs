@@ -12,7 +12,7 @@ use super::offset::{self, OffsetPlan};
 use super::order_by;
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{
-    Aggregate, AggregateFunction, Function, GroupByKey, HavingRewritePlan, OrderBy,
+    Aggregate, AggregateFunction, Function, HavingRewritePlan, OrderBy, aggregate::GroupByKey,
 };
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};

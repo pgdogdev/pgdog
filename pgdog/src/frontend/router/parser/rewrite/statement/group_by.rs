@@ -6,7 +6,7 @@ use super::{
     Error,
     projection::{HiddenAliases, expands_star},
 };
-use crate::frontend::router::parser::{Aggregate, GroupByKey};
+use crate::frontend::router::parser::{Aggregate, aggregate::GroupByKey};
 
 const ALIAS_PREFIX: &str = "__pgdog_group_";
 

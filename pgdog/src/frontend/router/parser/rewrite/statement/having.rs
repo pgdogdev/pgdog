@@ -7,7 +7,9 @@ use pg_raw_parse::{
 };
 
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{AggregateFunction, GroupByKey, HavingRewritePlan};
+use crate::frontend::router::parser::{
+    AggregateFunction, HavingRewritePlan, aggregate::GroupByKey,
+};
 
 use super::{
     Error, offset,

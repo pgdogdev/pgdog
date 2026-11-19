@@ -245,7 +245,7 @@ fn is_cte(stmt: &nodes::SelectStmt, name: &str) -> bool {
 
 /// How a cross-shard merge finds the value of a `GROUP BY` item.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum GroupByKey {
+pub(super) enum GroupByKey {
     /// `GROUP BY 1`: the `SELECT` list item at this position.
     Ordinal(usize),
     /// A column that's also in the `SELECT` list, at this position.
@@ -263,12 +263,12 @@ pub(crate) enum GroupByKey {
 }
 
 impl GroupByKey {
-    pub(crate) const UNRESOLVED_ALIAS: &str = "GROUP BY on a SELECT alias is only supported when FROM has just tables \
+    pub(super) const UNRESOLVED_ALIAS: &str = "GROUP BY on a SELECT alias is only supported when FROM has just tables \
          PgDog has loaded the schema for";
-    pub(crate) const GROUPING_SET: &str = "GROUPING SETS, ROLLUP and CUBE are unsupported";
+    pub(super) const GROUPING_SET: &str = "GROUPING SETS, ROLLUP and CUBE are unsupported";
 
     /// Classify every `GROUP BY` item, in order.
-    pub(crate) fn parse<'a>(
+    pub(super) fn parse<'a>(
         stmt: &'a nodes::SelectStmt,
         schema: &'a Schema,
     ) -> impl Iterator<Item = Self> + 'a {
@@ -277,7 +277,7 @@ impl GroupByKey {
             .map(move |node| Self::new(stmt, node, schema))
     }
 
-    pub(crate) fn new(stmt: &nodes::SelectStmt, node: Node<'_>, schema: &Schema) -> Self {
+    pub(super) fn new(stmt: &nodes::SelectStmt, node: Node<'_>, schema: &Schema) -> Self {
         match node {
             // We use 0-indexed arrays, Postgres uses 1-indexed.
             Node::A_Const(c) => c
@@ -308,7 +308,7 @@ impl GroupByKey {
     }
 
     /// Position of the key in the `SELECT` list, if it's there.
-    pub(crate) fn position(self) -> Option<usize> {
+    fn position(self) -> Option<usize> {
         match self {
             Self::Ordinal(index) | Self::SelectedColumn(index) | Self::Alias(index) => Some(index),
             Self::Unselected | Self::UnresolvedAlias | Self::GroupingSet => None,
@@ -350,7 +350,7 @@ impl Aggregate {
     }
 
     /// Same as [`Self::parse`], for `GROUP BY` keys that are already classified.
-    pub(crate) fn with_keys(
+    pub(super) fn with_keys(
         stmt: &nodes::SelectStmt,
         schema: &Schema,
         keys: impl IntoIterator<Item = GroupByKey>,
