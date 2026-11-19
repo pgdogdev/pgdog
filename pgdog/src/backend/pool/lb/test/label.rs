@@ -23,6 +23,36 @@ fn labeled_replicas() -> LoadBalancer {
 }
 
 #[tokio::test]
+async fn test_label_required() {
+    let reporting = create_test_pool_config("127.0.0.1", 5432);
+    let mut analytics = create_test_pool_config("localhost", 5432);
+    analytics.address.labels = vec!["analytics".into()];
+    analytics.address.label_required = true;
+
+    let replicas = LoadBalancer::new(
+        &None,
+        &[reporting, analytics],
+        LoadBalancingStrategy::RoundRobin,
+        ReadWriteSplit::ExcludePrimary,
+        Default::default(),
+    );
+    replicas.launch();
+
+    for (label, target) in [(None, 0), (Some("analytics"), 1)] {
+        let mut route = Route::read(ShardWithPriority::default());
+        route.label = label.map(str::to_owned);
+        let request = LbRequest::new(Default::default(), &route, false, Instant::now());
+
+        for _ in 0..4 {
+            let conn = replicas.get(&request).await.expect("eligible replica");
+            assert_eq!(conn.pool.id(), replicas.targets[target].pool.id());
+        }
+    }
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
 async fn test_label_filtering() {
     let replicas = labeled_replicas();
     let mut route = Route::read(ShardWithPriority::default());

@@ -234,6 +234,10 @@ pub struct Database {
     /// Labels.
     #[serde(default)]
     pub labels: Vec<String>,
+
+    /// Only queries containing labels will be routed to this replica.
+    #[serde(default)]
+    pub label_required: bool,
 }
 
 impl Database {

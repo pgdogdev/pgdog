@@ -443,6 +443,8 @@ impl LoadBalancer {
 
         if let Some(ref label) = request.label {
             candidates.retain(|target| target.pool.addr().labels.contains(label));
+        } else {
+            candidates.retain(|target| !target.pool.addr().label_required);
         }
 
         let primary_reads = primary_reads(self.rw_split, request.read_only, &candidates);

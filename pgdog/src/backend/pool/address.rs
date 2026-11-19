@@ -51,6 +51,9 @@ pub(crate) struct Address {
     pub(crate) tls: ServerTls,
     /// Labels.
     pub(crate) labels: Vec<String>,
+    /// Labels are required for this host to be included in the load balancer
+    /// target list.
+    pub(crate) label_required: bool,
 }
 
 impl Address {
@@ -95,6 +98,7 @@ impl Address {
             configured_role: database.role,
             tls: database.tls.clone(),
             labels: database.labels.clone(),
+            label_required: database.label_required,
         }
     }
 
@@ -228,6 +232,7 @@ impl Address {
             configured_role: Role::Primary,
             tls: ServerTls::default(),
             labels: vec![],
+            label_required: false,
         }
     }
 }
