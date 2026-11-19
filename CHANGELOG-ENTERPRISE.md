@@ -3,6 +3,33 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-11-19
+
+**OS version**: [v0.1.66](CHANGELOG.md#v0166)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-19`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-19` |
+
+#### Features
+
+- IAP authentication (JWT) for the control plane (in production on GCP)
+- QoS comment now supports custom regex to detect `unit`
+- Control plane metrics can now be filtered by user, database, and role
+- Added `host`, `port`, and `workers` (CPU threads) configs to `control.toml`
+- QoS page in the control plane UI now supports pagination to render thousands of unit graphs
+- Log warning if control plane authentication is disabled
+
+#### Bug fixes
+
+- Command queue would use a lot of memory during query cancellation request bursts
+- Control plane memory allocator will now return unused memory back to the operating system
+- Control plane logging improvements (it was too verbose by default)
+- Resharding cutover would incorrectly wait for stale instances, blocking cutover if a PgDog process has recently rebooted
+
+#### Bug fixes
+
 ### v2026-11-12
 
 **OS version**: [v0.1.65](CHANGELOG.md#v0165)
