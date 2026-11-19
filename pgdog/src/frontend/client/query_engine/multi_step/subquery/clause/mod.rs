@@ -2,5 +2,6 @@
 
 mod from_clause;
 mod insert_select;
+mod join_from;
 mod where_clause;
 mod with_clause;

@@ -17,7 +17,8 @@ use crate::{
             insert::Subquery,
             subquery::{
                 from_clause::parse_from_clause, insert_select::parse_insert_select,
-                where_clause::parse_where_clause, with_clause::parse_with_clause,
+                join_from::table_at_location, where_clause::parse_where_clause,
+                with_clause::parse_with_clause,
             },
         },
     },
@@ -32,6 +33,16 @@ impl<'ast> SubqueryMulti<'ast> {
         subquery: &Subquery,
         entire_ast: Node<'ast>,
     ) -> Result<(Owned<SelectStmt>, Bind), Error> {
+        if let Subquery::JoinFrom(join_fetch) = subquery {
+            let table = table_at_location(entire_ast, join_fetch.location)
+                .expect("The parser took `location` from this statement");
+
+            return Ok((
+                owned(|mem| Self::new_select_from_table(mem, table)),
+                self.current_level_bind.clone(),
+            ));
+        }
+
         let subquery_ast: Node<'ast> = self.parse_out_relevant_query_to_send(subquery, entire_ast);
 
         // We might have to reference earlier statements and perform a re-write. E.g., if we have CTE b referencing CTE a, then we need to include the re-written CTE (w/ unnest) here
@@ -62,6 +73,7 @@ impl<'ast> SubqueryMulti<'ast> {
             Subquery::WhereClauseCte(alias) => {
                 parse_where_clause(entire_ast).and_then(|subselect| parse_with_clause(subselect, alias))
             }
+            Subquery::JoinFrom(_) => unreachable!("`new_select_to_fetch_rows_of_subquery` handles JoinFrom"),
         }.expect("We already ran these methods in the parser originally. No reason they shouldn't pass here.")
     }
 

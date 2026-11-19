@@ -34,6 +34,22 @@ pub(crate) enum Subquery {
 
     /// CTE present in WHERE clause
     WhereClauseCte(String),
+
+    /// SELECT with JOIN(s) of two sharded tables where we fetch the rows of the table after JOIN from all shards first
+    /// e.g., in SELECT .. FROM users x JOIN orders y ON x.status = y.status, we fetch orders y, then send the statement to all shards with the fetched rows in place of orders y
+    JoinFrom(JoinFetch),
+}
+
+/// The table after JOIN that we fetch from all shards first
+/// E.g., for SELECT * FROM users x JOIN orders y ON x.status = y.status, we fetch orders y with SELECT * FROM orders y
+#[derive(Debug, Clone)]
+pub(crate) struct JoinFetch {
+    /// The position where the table starts in the SQL of the statement, e.g., 27 for orders in the example above
+    /// We find orders y in the AST with this position to build SELECT * FROM orders y and to put the fetched rows in place of orders y
+    pub(crate) location: i32,
+    /// The alias of the table (y in the example above), or the name of the table if the table doesn't have an alias
+    /// When we rewrite the statement, we use this name as the alias of the fetched rows
+    pub(crate) name: String,
 }
 
 #[derive(Debug, Clone)]

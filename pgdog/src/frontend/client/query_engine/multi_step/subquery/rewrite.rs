@@ -80,6 +80,9 @@ impl<'ast> SubqueryMulti<'ast> {
             Subquery::Cte(alias) => {
                 self.handle_with_clause(alias, mem, stmt, row_description, data_rows, new_bind)
             }
+            Subquery::JoinFrom(join_fetch) => {
+                self.handle_join_from(join_fetch, mem, stmt, row_description, data_rows, new_bind)
+            }
         }
     }
 }

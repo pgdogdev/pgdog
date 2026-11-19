@@ -146,15 +146,15 @@
 --       relevant to subqueries
 -- 
 -- Sharding key on one side only
---   [A1] [select] .. FROM <st1> JOIN <st2> ON <st1>.<col> = <st2>.<key>
+-- [DONE] [A1] [select] .. FROM <st1> JOIN <st2> ON <st1>.<col> = <st2>.<key>
 --       condition: <col> has sharding key values of rows on other shards
---   [A1 A2 A3 A4 Q5] [insert] INSERT INTO <st1> SELECT .. FROM <st2> JOIN .. ON ..
+-- [DONE] [A1 A2 A3 A4 Q5] [insert] INSERT INTO <st1> SELECT .. FROM <st2> JOIN .. ON ..
 --       relevant to subqueries
 --       case: co-located on the key
 --       case: key on one side only
 
 -- Sharding key on neither side
---   [A1] [select] .. FROM <st1> <join> <st2> ON <st1>.<col> = <st2>.<col>
+-- [DONE] [A1] [select] .. FROM <st1> <join> <st2> ON <st1>.<col> = <st2>.<col>
 --       case: <join> = JOIN
 --       case: <join> = LEFT JOIN
 
