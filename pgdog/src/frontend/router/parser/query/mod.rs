@@ -109,10 +109,18 @@ impl QueryParser {
             | Command::StartTransaction { route, .. }
             | Command::CommitTransaction { route, .. }
             | Command::RollbackTransaction { route, .. } => {
-                route.label = context
-                    .router_context
-                    .comment
-                    .and_then(|comment| comment.label.clone());
+                route.label = match context.router_context.comment {
+                    // Comment role has higher priority than SET,
+                    // so any role/comment set there will ignore label set via `SET pgdog.role`.
+                    Some(comment) if comment.role.is_some() || comment.label.is_some() => {
+                        comment.label.clone()
+                    }
+                    _ => context
+                        .router_context
+                        .parameter_hints
+                        .compute_label()
+                        .map(str::to_owned),
+                };
 
                 if route.is_cross_shard() && context.shards == 1 {
                     context
