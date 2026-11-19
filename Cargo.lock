@@ -280,7 +280,7 @@ version = "0.13.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b00953a69b2cfb471d13d72538d2e66930832340b0f31deadd404b48c573c5"
 dependencies = [
- "bindgen 0.72.1",
+ "bindgen",
  "cc",
  "cmake",
  "dunce",
@@ -759,26 +759,6 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.71.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
-dependencies = [
- "bitflags 2.11.1",
- "cexpr",
- "clang-sys",
- "itertools 0.13.0",
- "log",
- "prettyplease",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash",
- "shlex 1.3.0",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
@@ -1248,15 +1228,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
-name = "crc32c"
-version = "0.6.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a47af21622d091a8f0fb295b88bc886ac74efcc613efc19f5d0b21de5c89e47"
-dependencies = [
- "rustc_version",
-]
-
-[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1491,7 +1462,6 @@ version = "0.1.0"
 dependencies = [
  "colored",
  "tokio",
- "which",
 ]
 
 [[package]]
@@ -1690,12 +1660,6 @@ dependencies = [
  "quote",
  "syn 2.0.118",
 ]
-
-[[package]]
-name = "env_home"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
 
 [[package]]
 name = "equivalent"
@@ -2507,10 +2471,8 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "futures-util",
- "itertools 0.15.0",
  "libc",
  "native-tls",
- "ordered-float",
  "parking_lot",
  "pg_stream",
  "pgdog-regress",
@@ -3094,15 +3056,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ordered-float"
-version = "4.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "outref"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3163,7 +3116,7 @@ name = "pg_internals"
 version = "0.1.0"
 source = "git+https://github.com/pgdogdev/pg-internals?rev=ce5c26f2501d787cdb84f610176a92880944dbcd#ce5c26f2501d787cdb84f610176a92880944dbcd"
 dependencies = [
- "bindgen 0.72.1",
+ "bindgen",
  "cc",
  "clang-sys",
  "phf 0.13.1",
@@ -3181,7 +3134,7 @@ name = "pg_raw_parse"
 version = "0.1.0"
 source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1#89937b1a9c39bbb53b679f12aba3ff7c5ab3c093"
 dependencies = [
- "bindgen 0.72.1",
+ "bindgen",
  "cc",
  "convert_case 0.11.0",
  "generativity",
@@ -3198,7 +3151,7 @@ name = "pg_raw_parse"
 version = "0.1.0"
 source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85#a4784fc603563d3db8e9f381347f039f39b1dd85"
 dependencies = [
- "bindgen 0.72.1",
+ "bindgen",
  "cc",
  "convert_case 0.11.0",
  "generativity",
@@ -3244,7 +3197,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
- "crc32c",
  "csv-core",
  "dashmap",
  "derive_builder",
@@ -3371,7 +3323,6 @@ dependencies = [
 name = "pgdog-plugin"
 version = "0.5.0"
 dependencies = [
- "bindgen 0.71.1",
  "libloading",
  "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-postgres-types",
@@ -3400,7 +3351,6 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "once_cell",
- "parking_lot",
  "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-plugin",
  "serde",
@@ -5795,18 +5745,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "which"
-version = "7.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d643ce3fd3e5b54854602a080f34fb10ab75e0b813ee32d00ca2b44fa74762"
-dependencies = [
- "either",
- "env_home",
- "rustix",
- "winsafe",
-]
-
-[[package]]
 name = "whoami"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6079,12 +6017,6 @@ checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
 ]
-
-[[package]]
-name = "winsafe"
-version = "0.0.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wiremock"
