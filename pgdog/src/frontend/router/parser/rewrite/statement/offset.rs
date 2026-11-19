@@ -3,7 +3,7 @@ use std::ops::Deref;
 use pg_raw_parse::{ConstValue, Node, deparse, make, nodes};
 
 use crate::frontend::ClientRequest;
-use crate::frontend::router::parser::Limit;
+use crate::frontend::router::parser::{Limit, LimitClause};
 use crate::net::ProtocolMessage;
 
 use super::*;
@@ -32,12 +32,14 @@ impl OffsetPlan {
         }
 
         // Resolve actual values: use literal if known, otherwise read from Bind.
+        // Expressions were already computed by `LimitClause` when routing.
+        let routed = *route.limit();
         let mut limit_val = self.limit.limit;
         let mut offset_val = self.limit.offset;
 
         for message in request.messages.iter_mut() {
             if let ProtocolMessage::Bind(bind) = message {
-                if limit_val.is_none() {
+                if limit_val.is_none() && self.limit_param > 0 {
                     let idx = self.limit_param - 1;
                     limit_val = Some(
                         bind.parameter(idx)?
@@ -47,7 +49,7 @@ impl OffsetPlan {
                             as usize,
                     );
                 }
-                if offset_val.is_none() {
+                if offset_val.is_none() && self.offset_param > 0 {
                     let idx = self.offset_param - 1;
                     offset_val = Some(
                         bind.parameter(idx)?
@@ -63,8 +65,8 @@ impl OffsetPlan {
         }
 
         route.set_limit(Limit {
-            limit: limit_val,
-            offset: offset_val,
+            limit: limit_val.or(routed.limit),
+            offset: offset_val.or(routed.offset),
         });
 
         Ok(())
@@ -146,20 +148,22 @@ impl OffsetPlan {
 enum LimitValueInfo {
     Literal(usize),
     Param(usize),
+    /// Computed by [`LimitClause`] when the route is built.
+    Expression,
 }
 
 impl LimitValueInfo {
     fn literal(&self) -> Option<usize> {
         match self {
             LimitValueInfo::Literal(v) => Some(*v),
-            LimitValueInfo::Param(_) => None,
+            LimitValueInfo::Param(_) | LimitValueInfo::Expression => None,
         }
     }
 
     fn param_index(&self) -> usize {
         match self {
             LimitValueInfo::Param(i) => *i,
-            LimitValueInfo::Literal(_) => 0,
+            LimitValueInfo::Literal(_) | LimitValueInfo::Expression => 0,
         }
     }
 }
@@ -172,6 +176,8 @@ fn extract_limit_value(node: Node<'_>) -> Option<LimitValueInfo> {
         Node::ParamRef(nodes::ParamRef { number, .. }) => {
             Some(LimitValueInfo::Param(*number as usize))
         }
+        Node::None => None,
+        node if LimitClause::is_computable(node) => Some(LimitValueInfo::Expression),
         _ => None,
     }
 }
@@ -249,21 +255,12 @@ pub(super) fn unsupported_limit(select: &nodes::SelectStmt) -> Option<&'static s
     if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
         return Some("FETCH FIRST WITH TIES is unsupported");
     }
-    if !is_decodable(select.limit_count()) || !is_decodable(select.limit_offset()) {
-        return Some("LIMIT and OFFSET must be integers or parameters");
+    if !LimitClause::is_computable(select.limit_count())
+        || !LimitClause::is_computable(select.limit_offset())
+    {
+        return Some("LIMIT and OFFSET must be integer arithmetic over literals and parameters");
     }
     None
-}
-
-/// Whether the route can read this LIMIT or OFFSET value, see [`LimitClause`].
-///
-/// [`LimitClause`]: crate::frontend::router::parser::LimitClause
-fn is_decodable(node: Node<'_>) -> bool {
-    match node {
-        Node::None | Node::ParamRef(_) => true,
-        Node::A_Const(constant) => matches!(constant.val(), None | Some(ConstValue::Integer(_))),
-        _ => false,
-    }
 }
 
 impl StatementRewrite<'_> {
@@ -422,6 +419,55 @@ mod tests {
     fn test_limit_offset_skipped_no_limit() {
         let plan = run_limit_offset("SELECT * FROM t OFFSET 5", &sharded_schema());
         assert!(plan.offset.is_none());
+    }
+
+    #[test]
+    fn test_limit_offset_detection_expressions() {
+        let plan = run_limit_offset(
+            "SELECT * FROM t LIMIT 1 + 1 OFFSET $1::int",
+            &sharded_schema(),
+        );
+        let offset = plan.offset.unwrap();
+        assert_eq!(offset.limit, Limit::default());
+        assert_eq!(offset.limit_param, 0);
+        assert_eq!(offset.offset_param, 0);
+    }
+
+    #[test]
+    fn test_limit_offset_skipped_not_computable() {
+        let plan = run_limit_offset(
+            "SELECT * FROM t LIMIT (SELECT 1) OFFSET 5",
+            &sharded_schema(),
+        );
+        assert!(plan.offset.is_none());
+    }
+
+    #[test]
+    fn test_apply_after_route_expressions_keep_routed_values() {
+        let plan = OffsetPlan {
+            limit: Limit::default(),
+            limit_param: 0,
+            offset_param: 0,
+            prepare_execute: false,
+        };
+        let mut request = ClientRequest::from(vec![
+            ProtocolMessage::Parse(Parse::named(
+                "s",
+                "SELECT * FROM t LIMIT 1 + 1 OFFSET $1::int",
+            )),
+            ProtocolMessage::Bind(Bind::new_params("s", &[Parameter::new(b"3")])),
+        ]);
+        let mut route = cross_shard_route();
+        route.set_limit(Limit {
+            limit: Some(2),
+            offset: Some(3),
+        });
+        request.route = Some(route);
+        plan.apply_after_route(&mut request).unwrap();
+
+        let route = request.route.unwrap();
+        assert_eq!(route.limit().limit, Some(2));
+        assert_eq!(route.limit().offset, Some(3));
     }
 
     #[test]
