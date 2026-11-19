@@ -187,7 +187,7 @@ async fn transaction_time_select_equality() {
 
 /// Helper method to run a query twice, in one transaction, in both simple and extended protocol,
 /// and assert that the response is equal (and of the correct type)
-async fn run_and_assert_eq<T>(query: &str, col: &str)
+async fn run_and_assert_eq<T>(query: &'static str, col: &str)
 where
     T: PartialEq
         + std::fmt::Debug
@@ -670,29 +670,25 @@ async fn test_simple_extended_and_prepare(
         .await
         .unwrap();
 
-    let row1 = sqlx::raw_sql(
-        format!("INSERT INTO dummy_omni_table(id, {cols}) VALUES (1, {vals}) RETURNING *").as_str(),
-    )
+    let row1 = sqlx::raw_sql(unsafe_sql!(
+        "INSERT INTO dummy_omni_table(id, {cols}) VALUES (1, {vals}) RETURNING *"
+    ))
     .fetch_one(&mut *transaction)
     .await
     .unwrap();
 
     // By putting the Bind parameter first, it forces us to use the Binary text format, testing vs the already tested String.
-    let row2 = sqlx::query(
-        format!("INSERT INTO dummy_omni_table(id, {cols}) VALUES ($1, {vals}) RETURNING *")
-            .as_str(),
-    )
+    let row2 = sqlx::query(unsafe_sql!(
+        "INSERT INTO dummy_omni_table(id, {cols}) VALUES ($1, {vals}) RETURNING *"
+    ))
     .bind(2)
     .fetch_one(&mut *transaction)
     .await
     .unwrap();
 
-    sqlx::raw_sql(
-        format!(
-            "PREPARE stmt AS INSERT INTO dummy_omni_table(id, {cols}) VALUES ($1, {vals}) RETURNING *"
-        )
-        .as_str(),
-    )
+    sqlx::raw_sql(unsafe_sql!(
+        "PREPARE stmt AS INSERT INTO dummy_omni_table(id, {cols}) VALUES ($1, {vals}) RETURNING *"
+    ))
     .execute(&mut *transaction)
     .await
     .unwrap();
@@ -718,10 +714,9 @@ async fn reusable_func_test(
     conn.execute("DROP TABLE IF EXISTS dummy_omni_table")
         .await
         .unwrap();
-    conn.execute(
-        format!("CREATE TABLE IF NOT EXISTS dummy_omni_table(id BIGSERIAL PRIMARY KEY, {schema})")
-            .as_str(),
-    )
+    conn.execute(unsafe_sql!(
+        "CREATE TABLE IF NOT EXISTS dummy_omni_table(id BIGSERIAL PRIMARY KEY, {schema})"
+    ))
     .await
     .unwrap();
     admin_sqlx().await.execute("RELOAD").await.unwrap();
@@ -782,7 +777,7 @@ where
     ] {
         let mut sesh = conn.begin().await.unwrap();
 
-        sesh.execute(format!("SET TIME ZONE '{insertion_tz}'").as_str())
+        sesh.execute(unsafe_sql!("SET TIME ZONE '{insertion_tz}'"))
             .await
             .unwrap();
 
@@ -1033,7 +1028,7 @@ async fn fetch_rows_with_tz(
     sesh: &mut Transaction<'_, Postgres>,
     fetch_tz: &str,
 ) -> (Vec<PgRow>, Vec<PgRow>) {
-    sesh.execute(format!("SET TIME ZONE '{fetch_tz}'").as_str())
+    sesh.execute(unsafe_sql!("SET TIME ZONE '{fetch_tz}'"))
         .await
         .unwrap();
 

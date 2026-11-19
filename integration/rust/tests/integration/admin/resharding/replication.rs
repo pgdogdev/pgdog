@@ -25,10 +25,10 @@ pub(super) async fn prepare_replication(admin: &Pool<Postgres>, direct: &Pool<Po
 
 pub(super) async fn start_replication(admin: &Pool<Postgres>, slot: Option<&str>) -> i64 {
     let command = match slot {
-        Some(slot) => format!("REPLICATE pgdog pgdog_sharded {TEST_PUB} {slot}"),
-        None => format!("REPLICATE pgdog pgdog_sharded {TEST_PUB}"),
+        Some(slot) => unsafe_sql!("REPLICATE pgdog pgdog_sharded {TEST_PUB} {slot}"),
+        None => unsafe_sql!("REPLICATE pgdog pgdog_sharded {TEST_PUB}"),
     };
-    let task_id = run_task_command(admin, &command).await;
+    let task_id = run_task_command(admin, command).await;
     wait_for_task(admin, "replication ready", |task| {
         task.id == Some(task_id) && task.inner_status == "replicating"
     })
@@ -50,7 +50,7 @@ pub(super) async fn wait_for_values(
         let shard = connection_sqlx_direct_db(database).await;
         poll(&format!("replicated values on {database}"), || async {
             fail_if_task_errored(admin, task_id).await;
-            let actual = sqlx::query_as::<_, (i64, String)>(&format!(
+            let actual = sqlx::query_as::<_, (i64, String)>(unsafe_sql!(
                 "SELECT id, val FROM {TEST_SCHEMA}.{TEST_TABLE} ORDER BY id"
             ))
             .fetch_all(&shard)
@@ -74,26 +74,24 @@ async fn test_replicate_streams_changes_without_copying_existing_rows() {
 
         let task_id = start_replication(&admin, None).await;
         direct
-            .execute(
-                format!(
-                    "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) \
+            .execute(unsafe_sql!(
+                "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) \
                      VALUES (2, 'inserted'), (3, 'removed')"
-                )
-                .as_str(),
-            )
+            ))
             .await
             .expect("source inserts must succeed");
         wait_for_values(&admin, task_id, &[(2, "inserted"), (3, "removed")]).await;
 
         direct
-            .execute(
-                format!("UPDATE {TEST_SCHEMA}.{TEST_TABLE} SET val = 'updated' WHERE id = 2")
-                    .as_str(),
-            )
+            .execute(unsafe_sql!(
+                "UPDATE {TEST_SCHEMA}.{TEST_TABLE} SET val = 'updated' WHERE id = 2"
+            ))
             .await
             .expect("source update must succeed");
         direct
-            .execute(format!("DELETE FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 3").as_str())
+            .execute(unsafe_sql!(
+                "DELETE FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 3"
+            ))
             .await
             .expect("source delete must succeed");
         wait_for_values(&admin, task_id, &[(2, "updated")]).await;
@@ -133,7 +131,7 @@ async fn test_stop_task() {
         );
 
         let row = admin
-            .fetch_one(format!("STOP_TASK {task_id}").as_str())
+            .fetch_one(unsafe_sql!("STOP_TASK {task_id}"))
             .await
             .unwrap();
         assert_eq!(row.get::<String, _>("stop_task"), "OK");
@@ -160,8 +158,11 @@ async fn test_cutover_starts_reverse_replication() {
         seed_rows(&direct, 20).await;
         create_publication(&direct).await;
 
-        let task_id =
-            run_task_command(&admin, &format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}")).await;
+        let task_id = run_task_command(
+            &admin,
+            unsafe_sql!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}"),
+        )
+        .await;
 
         wait_for_task(&admin, "copy_data replicating", |t| {
             t.id == Some(task_id) && t.inner_status == "replicating"
@@ -196,19 +197,16 @@ async fn test_cutover_starts_reverse_replication() {
         })
         .await;
         connections[0]
-            .execute(
-                format!(
-                    "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) \
+            .execute(unsafe_sql!(
+                "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) \
                      VALUES (1001, 'written_after_cutover')"
-                )
-                .as_str(),
-            )
+            ))
             .await
             .expect("writes through the new source must succeed");
 
         for database in ["shard_0", "shard_1"] {
             let shard = connection_sqlx_direct_db(database).await;
-            let value: String = sqlx::query_scalar(&format!(
+            let value: String = sqlx::query_scalar(unsafe_sql!(
                 "SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1001"
             ))
             .fetch_one(&shard)
@@ -221,7 +219,7 @@ async fn test_cutover_starts_reverse_replication() {
             "the post-cutover row to replicate back to the old source",
             || async {
                 fail_if_task_errored(&admin, task_id).await;
-                let value: Option<String> = sqlx::query_scalar(&format!(
+                let value: Option<String> = sqlx::query_scalar(unsafe_sql!(
                     "SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1001"
                 ))
                 .fetch_optional(&direct)
@@ -233,7 +231,7 @@ async fn test_cutover_starts_reverse_replication() {
         .await;
 
         admin
-            .execute(format!("STOP_TASK {task_id}").as_str())
+            .execute(unsafe_sql!("STOP_TASK {task_id}"))
             .await
             .expect("the migration task must stop");
         wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
@@ -285,8 +283,11 @@ async fn test_three_cutovers_alternate_the_traffic_target() {
         seed_rows(&direct, 20).await;
         create_publication(&direct).await;
 
-        let task_id =
-            run_task_command(&admin, &format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}")).await;
+        let task_id = run_task_command(
+            &admin,
+            unsafe_sql!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}"),
+        )
+        .await;
 
         wait_for_task(&admin, "copy_data replicating", |t| {
             t.id == Some(task_id) && t.inner_status == "replicating"
@@ -305,7 +306,7 @@ async fn test_three_cutovers_alternate_the_traffic_target() {
         fail_if_task_errored(&admin, task_id).await;
 
         admin
-            .execute(format!("STOP_TASK {task_id}").as_str())
+            .execute(unsafe_sql!("STOP_TASK {task_id}"))
             .await
             .expect("the migration task must stop");
         wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;

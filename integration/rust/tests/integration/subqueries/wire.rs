@@ -211,7 +211,7 @@ async fn fetch_pg_stat_statement(
         // PERF(jkaczman): Technically, this could be a singular query send that doesn't filter by datname,
         // then we break it apart ourselves.
         let statements = sqlx::raw_sql(
-            format!("SELECT application_name, query FROM pg_stat_monitor WHERE datname = 'shard_{shard}' ORDER BY stats_since ASC").as_str(),
+            unsafe_sql!("SELECT application_name, query FROM pg_stat_monitor WHERE datname = 'shard_{shard}' ORDER BY stats_since ASC"),
         )
         .fetch_all(&sharded_conn)
         .await

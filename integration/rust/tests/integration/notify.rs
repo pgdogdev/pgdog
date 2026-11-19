@@ -23,7 +23,7 @@ async fn test_listener_restarts_and_resubscribes_after_backend_termination() {
         timeout(Duration::from_secs(10), async {
             loop {
                 notifier
-                    .execute(format!("NOTIFY \"{channel}\", '{payload}'").as_str())
+                    .execute(unsafe_sql!("NOTIFY \"{channel}\", '{payload}'"))
                     .await
                     .expect("send notification through PgDog");
 
@@ -134,7 +134,7 @@ async fn test_notify() {
             let mut conn = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
                 .await
                 .unwrap();
-            conn.execute(format!("NOTIFY {channel}, '{channel}'").as_str())
+            conn.execute(unsafe_sql!("NOTIFY {channel}, '{channel}'"))
                 .await
                 .unwrap();
         });
@@ -178,7 +178,7 @@ async fn test_notify_payload_with_quote() {
         .await
         .unwrap();
     notifier
-        .execute(format!("NOTIFY {channel}, 'it''s here'").as_str())
+        .execute(unsafe_sql!("NOTIFY {channel}, 'it''s here'"))
         .await
         .expect("NOTIFY with an escaped quote in the payload");
 
@@ -211,7 +211,7 @@ async fn test_unlisten_all_stops_notifications() {
 
     for channel in &channels {
         notifier
-            .execute(format!("NOTIFY {channel}, 'before'").as_str())
+            .execute(unsafe_sql!("NOTIFY {channel}, 'before'"))
             .await
             .unwrap();
         let notification = timeout(Duration::from_secs(10), listener.recv())
@@ -227,7 +227,7 @@ async fn test_unlisten_all_stops_notifications() {
 
     for channel in &channels {
         notifier
-            .execute(format!("NOTIFY {channel}, 'after'").as_str())
+            .execute(unsafe_sql!("NOTIFY {channel}, 'after'"))
             .await
             .unwrap();
     }

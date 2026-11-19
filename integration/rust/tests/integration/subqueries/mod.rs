@@ -57,58 +57,58 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
 
     let setup_sql_list = if first_time_running {
         vec![
-            format!(
+            unsafe_sql!(
                 "DROP TABLE IF EXISTS {subpackages_table}, {suborders_table}, {subusers_table}, {substates_table}"
             ),
-            format!(
+            unsafe_sql!(
                 "CREATE TABLE {subusers_table} (id BIGINT PRIMARY KEY, username text, status text, profile jsonb, signed_up date, last_ip inet, tags varchar[], media_ids bigint[])"
             ),
-            format!("CREATE TABLE {substates_table} (state text PRIMARY KEY, shipping text)"),
-            format!(
+            unsafe_sql!("CREATE TABLE {substates_table} (state text PRIMARY KEY, shipping text)"),
+            unsafe_sql!(
                 "CREATE TABLE {suborders_table} (id BIGINT PRIMARY KEY, user_id BIGINT REFERENCES {subusers_table}(id), state text REFERENCES {substates_table}(state), created_at TIMESTAMPTZ)"
             ),
-            format!(
+            unsafe_sql!(
                 "CREATE TABLE {subpackages_table} (id BIGINT PRIMARY KEY, user_id BIGINT REFERENCES {subusers_table}(id), order_id BIGINT REFERENCES {suborders_table}(id), shipped_at TIMESTAMPTZ , estimated_arrival_time TIMESTAMPTZ)"
             ),
         ]
     } else {
-        vec![format!(
+        vec![unsafe_sql!(
             "TRUNCATE {subusers_table}, {substates_table}, {suborders_table}, {subpackages_table}"
         )]
     };
 
     let setup_sql_inserts = [
-        format!("INSERT INTO {substates_table}(state, shipping) VALUES ('CA', 'quick')"),
-        format!("INSERT INTO {substates_table}(state, shipping) VALUES ('NC', 'not quick')"),
-        format!(
+        unsafe_sql!("INSERT INTO {substates_table}(state, shipping) VALUES ('CA', 'quick')"),
+        unsafe_sql!("INSERT INTO {substates_table}(state, shipping) VALUES ('NC', 'not quick')"),
+        unsafe_sql!(
             "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip, tags, media_ids) VALUES (1, 'test', 'VIP', '{{\"plan\": \"pro\"}}', '2026-01-01', '10.0.0.1', '{{a,b}}', '{{1,2}}')"
         ),
-        format!(
+        unsafe_sql!(
             "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip, tags, media_ids) VALUES (2, 'test2', 'regular', '{{\"plan\": \"free\"}}', '2026-02-01', '192.168.0.2', '{{}}', '{{}}')"
         ),
-        format!(
+        unsafe_sql!(
             "INSERT INTO {subusers_table}(id, username, status, profile, signed_up, last_ip, tags, media_ids) VALUES (3, 'test3', 'VIP', '{{\"plan\": \"pro\"}}', '2026-03-01', '10.0.0.3', '{{c,NULL}}', '{{3}}')"
         ),
-        format!("INSERT INTO {subusers_table}(id, username, status) VALUES (4, 'test4', NULL)"),
-        format!(
+        unsafe_sql!("INSERT INTO {subusers_table}(id, username, status) VALUES (4, 'test4', NULL)"),
+        unsafe_sql!(
             "INSERT INTO {suborders_table}(id, user_id, state, created_at) VALUES (1, 1, 'CA', '2026-10-12 14:30:00 America/New_York')"
         ),
-        format!(
+        unsafe_sql!(
             "INSERT INTO {suborders_table}(id, user_id, state, created_at) VALUES (2, 1, 'CA', '2026-10-13 14:30:00 America/New_York')"
         ),
-        format!(
+        unsafe_sql!(
             "INSERT INTO {suborders_table}(id, user_id, state, created_at) VALUES (3, 2, 'NC', '2026-10-13 14:25:00 America/New_York')"
         ),
     ];
 
     // Aggregate both our direct database and the proxy with our tables...
     for setup_sql in setup_sql_list {
-        sqlx::raw_sql(setup_sql.as_str())
+        sqlx::raw_sql(setup_sql.clone())
             .execute(&sharded_conn)
             .await
             .unwrap();
 
-        sqlx::raw_sql(setup_sql.as_str())
+        sqlx::raw_sql(setup_sql)
             .execute(&direct_postgres)
             .await
             .unwrap();
@@ -116,12 +116,12 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
 
     // Aggregate both our direct database and the proxy with our data
     for setup_sql_insert in setup_sql_inserts {
-        sqlx::raw_sql(setup_sql_insert.as_str())
+        sqlx::raw_sql(setup_sql_insert.clone())
             .execute(&sharded_conn)
             .await
             .unwrap();
 
-        sqlx::raw_sql(setup_sql_insert.as_str())
+        sqlx::raw_sql(setup_sql_insert)
             .execute(&direct_postgres)
             .await
             .unwrap();

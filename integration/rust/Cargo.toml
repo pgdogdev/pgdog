@@ -9,7 +9,7 @@ test = true
 [dependencies]
 tokio-postgres = {version = "0.7.13", features = ["with-uuid-1"]}
 native-tls = "0.2"
-sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal", "chrono", "json", "rust_decimal", "uuid"]}
+sqlx = { version = "0.9.1", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal", "chrono", "json", "rust_decimal", "uuid"]}
 tokio.workspace = true
 futures-util.workspace = true
 uuid.workspace = true

@@ -18,22 +18,21 @@ fn numbered_table(i: usize) -> String {
 }
 
 async fn create_table(pool: &Pool<Postgres>, table: &str) {
-    pool.execute(format!("CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}").as_str())
+    pool.execute(unsafe_sql!("CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}"))
         .await
         .expect("test schema creation must succeed");
-    pool.execute(
-        format!("CREATE TABLE {TEST_SCHEMA}.{table} (id BIGSERIAL PRIMARY KEY, val TEXT)").as_str(),
-    )
+    pool.execute(unsafe_sql!(
+        "CREATE TABLE {TEST_SCHEMA}.{table} (id BIGSERIAL PRIMARY KEY, val TEXT)"
+    ))
     .await
     .unwrap();
 }
 
 async fn seed_table(direct: &Pool<Postgres>, table: &str, n: i64) {
     direct
-        .execute(
-            format!("INSERT INTO {TEST_SCHEMA}.{table} (val) SELECT 'v' || g FROM generate_series(1, {n}) g")
-                .as_str(),
-        )
+        .execute(unsafe_sql!(
+            "INSERT INTO {TEST_SCHEMA}.{table} (val) SELECT 'v' || g FROM generate_series(1, {n}) g"
+        ))
         .await
         .unwrap();
 }
@@ -44,7 +43,9 @@ fn table_progress(row: &PgRow) -> TaskProgress {
 
 async fn set_parallel_within_table(admin: &Pool<Postgres>, readers: usize) {
     admin
-        .execute(format!("SET resharding_parallel_within_table_copies TO {readers}").as_str())
+        .execute(unsafe_sql!(
+            "SET resharding_parallel_within_table_copies TO {readers}"
+        ))
         .await
         .unwrap();
 }
@@ -67,12 +68,11 @@ async fn copy_data(parallel_within_table: usize) {
         // errors silently leaves the table with its default identity.
         direct
             .execute(
-                format!(
+                unsafe_sql!(
                     "ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} ALTER COLUMN val SET NOT NULL;
                      ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} ADD CONSTRAINT {secondary_index} UNIQUE (val);
                      ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} REPLICA IDENTITY USING INDEX {secondary_index}"
-                )
-                .as_str(),
+                ),
             )
             .await
             .unwrap();
@@ -80,7 +80,7 @@ async fn copy_data(parallel_within_table: usize) {
         create_publication(&direct).await;
 
         let row = admin
-            .fetch_one(format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}").as_str())
+            .fetch_one(unsafe_sql!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}"))
             .await
             .unwrap();
         let task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
@@ -109,8 +109,7 @@ async fn copy_data(parallel_within_table: usize) {
             assert_eq!(identity, "i");
             let error = shard
                 .execute(
-                    format!("INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) VALUES (21, 'v1')")
-                        .as_str(),
+                    unsafe_sql!("INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) VALUES (21, 'v1')"),
                 )
                 .await
                 .unwrap_err();
@@ -136,7 +135,7 @@ async fn test_copy_data_parallel() {
 }
 
 /// Runs `seed` to create the rows within the test table that will be copied to the dest.
-async fn copy_seeded(seed: &str, expected: i64) {
+async fn copy_seeded(seed: impl sqlx::SqlSafeStr + Send, expected: i64) {
     let direct = connection_sqlx_direct().await;
     let admin = admin_sqlx().await;
     cleanup(&admin, &direct).await;
@@ -148,8 +147,11 @@ async fn copy_seeded(seed: &str, expected: i64) {
         direct.execute(seed).await.unwrap();
         create_publication(&direct).await;
 
-        let task_id =
-            run_task_command(&admin, &format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}")).await;
+        let task_id = run_task_command(
+            &admin,
+            unsafe_sql!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}"),
+        )
+        .await;
 
         wait_for_relation_on_shards(&admin, task_id, TEST_TABLE).await;
         wait_for_rows_each_shard(&admin, task_id, TEST_TABLE, expected).await;
@@ -170,15 +172,15 @@ async fn test_copy_data_empty_table() {
 
 #[tokio::test]
 async fn test_copy_data_leading_dead_blocks() {
-    let seed = format!(
+    let seed = unsafe_sql!(
         "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) SELECT 'v' || g FROM generate_series(1, 10000) g;
          DELETE FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id <= 5000"
     );
-    copy_seeded(&seed, 5000).await;
+    copy_seeded(seed, 5000).await;
 }
 
 async fn table_checksum(pool: &Pool<Postgres>) -> (i64, String) {
-    sqlx::query_as(&format!(
+    sqlx::query_as(unsafe_sql!(
         "SELECT count(*), coalesce(sum(hashtextextended(id::text || ':' || val, 0)), 0)::text \
          FROM {TEST_SCHEMA}.{TEST_TABLE}"
     ))
@@ -208,23 +210,20 @@ async fn copy_data_with_concurrent_writes(parallel_within_table: usize) {
         let writes = async {
             for i in 0..WRITES {
                 direct
-                    .execute(
-                        format!(
-                            "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) VALUES ('new' || {i});
+                    .execute(unsafe_sql!(
+                        "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) VALUES ('new' || {i});
                              UPDATE {TEST_SCHEMA}.{TEST_TABLE} SET val = val || 'x' WHERE id = {};
                              DELETE FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = {}",
-                            i * 37 % ROW_COUNT + 1,
-                            i * 101 % ROW_COUNT + 1,
-                        )
-                        .as_str(),
-                    )
+                        i * 37 % ROW_COUNT + 1,
+                        i * 101 % ROW_COUNT + 1,
+                    ))
                     .await
                     .unwrap();
             }
         };
 
-        let command = format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}");
-        let copy = run_task_command(&admin, &command);
+        let command = unsafe_sql!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}");
+        let copy = run_task_command(&admin, command);
         let (task_id, ()) = tokio::join!(copy, writes);
 
         let expected = table_checksum(&direct).await;
@@ -274,7 +273,9 @@ async fn test_failed_copy_cancels_siblings_and_rolls_back() {
         .collect::<Vec<_>>()
         .join(", ");
     direct
-        .execute(format!("CREATE PUBLICATION {TEST_PUB} FOR TABLE {tables}").as_str())
+        .execute(unsafe_sql!(
+            "CREATE PUBLICATION {TEST_PUB} FOR TABLE {tables}"
+        ))
         .await
         .unwrap();
 
@@ -283,16 +284,18 @@ async fn test_failed_copy_cancels_siblings_and_rolls_back() {
         let shard = connection_sqlx_direct_db(db).await;
         create_table(&shard, &poisoned).await;
         shard
-            .execute(
-                format!("INSERT INTO {TEST_SCHEMA}.{poisoned} (id, val) VALUES (1, 'poison')")
-                    .as_str(),
-            )
+            .execute(unsafe_sql!(
+                "INSERT INTO {TEST_SCHEMA}.{poisoned} (id, val) VALUES (1, 'poison')"
+            ))
             .await
             .unwrap();
     }
 
-    let task_id =
-        run_task_command(&admin, &format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}")).await;
+    let task_id = run_task_command(
+        &admin,
+        unsafe_sql!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}"),
+    )
+    .await;
 
     wait_for_task(&admin, "the copy-data run to fail", |task| {
         task.id == Some(task_id) && matches!(task.status, TaskProgress::Error { .. })

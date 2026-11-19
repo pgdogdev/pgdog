@@ -11,17 +11,14 @@ async fn limit_without_order_by_across_shards() -> Result<(), Box<dyn std::error
     // Guarantee five rows on each shard so a per-shard LIMIT exceeds the global limit.
     for shard in [0, 1] {
         transaction
-            .execute(
-                format!(
-                    "/* pgdog_shard: {shard} */ INSERT INTO sharded (id) VALUES (1), (2), (3), (4), (5)"
-                )
-                .as_str(),
-            )
+            .execute(unsafe_sql!(
+                "/* pgdog_shard: {shard} */ INSERT INTO sharded (id) VALUES (1), (2), (3), (4), (5)"
+            ))
             .await?;
     }
 
     for (limit, expected) in [(5_i64, 5), (0, 0), (100, 10)] {
-        let rows = sqlx::raw_sql(&format!("SELECT id FROM sharded LIMIT {limit}"))
+        let rows = sqlx::raw_sql(unsafe_sql!("SELECT id FROM sharded LIMIT {limit}"))
             .fetch_all(&mut *transaction)
             .await?;
         assert_eq!(rows.len(), expected, "simple protocol LIMIT {limit}");
@@ -90,24 +87,21 @@ async fn limit_across_shards() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn reset_table(pool: &PgPool, table: &str, schema: &str) -> Result<(), sqlx::Error> {
     for shard in [0, 1] {
-        pool.execute(
-            format!(
-                "/* pgdog_shard: {} */ DROP TABLE IF EXISTS {}",
-                shard, table
-            )
-            .as_str(),
-        )
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {} */ DROP TABLE IF EXISTS {}",
+            shard,
+            table
+        ))
         .await
         .ok();
     }
     for shard in [0, 1] {
-        pool.execute(
-            format!(
-                "/* pgdog_shard: {} */ CREATE TABLE {} {}",
-                shard, table, schema
-            )
-            .as_str(),
-        )
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {} */ CREATE TABLE {} {}",
+            shard,
+            table,
+            schema
+        ))
         .await?;
     }
     admin_sqlx().await.execute("RELOAD").await?;
@@ -115,15 +109,19 @@ async fn reset_table(pool: &PgPool, table: &str, schema: &str) -> Result<(), sql
 }
 
 async fn seed(pool: &PgPool, shard: usize, stmt: &str) -> Result<(), sqlx::Error> {
-    pool.execute(format!("/* pgdog_shard: {} */ {}", shard, stmt).as_str())
+    pool.execute(unsafe_sql!("/* pgdog_shard: {} */ {}", shard, stmt))
         .await?;
     Ok(())
 }
 
 async fn cleanup(pool: &PgPool, table: &str) {
     for shard in [0, 1] {
-        pool.execute(format!("/* pgdog_shard: {} */ DROP TABLE {}", shard, table).as_str())
-            .await
-            .ok();
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {} */ DROP TABLE {}",
+            shard,
+            table
+        ))
+        .await
+        .ok();
     }
 }
