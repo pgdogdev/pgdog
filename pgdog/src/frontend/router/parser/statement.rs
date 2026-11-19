@@ -675,32 +675,11 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         table_name: Option<&str>,
         schema: Option<&str>,
     ) -> Option<&'b ShardedTable> {
-        // Omnisharded config takes priority over sharded tables:
-        // a sharding key on an omnisharded table doesn't route.
-        if table_name.is_some_and(|name| self.schema.tables.omnishards().contains_key(name)) {
-            return None;
-        }
-
-        // Try named table configs first
-        if let Some(table_name) = table_name {
-            let column = Column {
-                name: column_name,
-                table: Some(table_name),
-                schema,
-            };
-            if let Some(sharded_table) = self.schema.tables().get_table(column)
-                && sharded_table.name.is_some()
-            {
-                return Some(sharded_table);
-            }
-        }
-
-        // Column-only config: user explicitly wants any table with this column to be sharded
-        self.schema
-            .tables
-            .tables()
-            .iter()
-            .find(|t| t.name.is_none() && t.column == column_name)
+        self.schema.tables().sharding_key(Column {
+            name: column_name,
+            table: table_name,
+            schema,
+        })
     }
 
     fn compute_shard(

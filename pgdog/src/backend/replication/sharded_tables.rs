@@ -247,6 +247,32 @@ impl ShardedTables {
 
         None
     }
+
+    /// Sharded table config for a column, if the column is a sharding key.
+    ///
+    /// Configs that name a table match that table's column. Configs with only
+    /// a column match that column on any table.
+    pub(crate) fn sharding_key(&self, column: Column<'_>) -> Option<&ShardedTable> {
+        // Omnisharded config takes priority over sharded tables:
+        // a sharding key on an omnisharded table doesn't route.
+        if column
+            .table
+            .is_some_and(|name| self.omnishards().contains_key(name))
+        {
+            return None;
+        }
+
+        if let Some(table) = self.get_table(column)
+            && table.name.is_some()
+        {
+            return Some(table);
+        }
+
+        // Column-only config: user explicitly wants any table with this column to be sharded
+        self.tables()
+            .iter()
+            .find(|table| table.name.is_none() && table.column == column.name)
+    }
 }
 
 #[cfg(test)]
