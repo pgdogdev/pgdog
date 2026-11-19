@@ -62,19 +62,55 @@ fn create_auto_test_pool_config(host: &str, port: u16) -> PoolConfig {
     config
 }
 
-fn setup_test_replicas() -> LoadBalancer {
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
+fn replica_pool_configs(count: usize) -> Vec<PoolConfig> {
+    ["127.0.0.1", "localhost"]
+        .into_iter()
+        .cycle()
+        .take(count)
+        .map(|host| create_test_pool_config(host, 5432))
+        .collect()
+}
 
-    let replicas = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
-    replicas
+#[bon::builder(finish_fn = build)]
+fn test_lb<'a>(
+    primary: Option<Pool>,
+    configs: &'a [PoolConfig],
+    #[builder(default)] strategy: LoadBalancingStrategy,
+    #[builder(default)] rw_split: ReadWriteSplit,
+    #[builder(default)] bans: &'a [usize],
+) -> LoadBalancer {
+    let lb = LoadBalancer::new(&primary, configs, strategy, rw_split, Default::default());
+    for &idx in bans {
+        lb.targets[idx].ban.ban(Error::ManualBan, Duration::MAX);
+    }
+    lb
+}
+
+impl<S: test_lb_builder::IsComplete> TestLbBuilder<'_, S> {
+    fn launch(self) -> LoadBalancer {
+        let lb = self.build();
+        lb.launch();
+        lb
+    }
+}
+
+async fn checkout_shares(lb: &LoadBalancer, checkouts: usize) -> Vec<usize> {
+    let request = Request::default();
+    let mut shares = vec![0; lb.targets.len()];
+    for _ in 0..checkouts {
+        let conn = lb.get(&request).await.unwrap();
+        let idx = lb
+            .targets
+            .iter()
+            .position(|target| target.pool.id() == conn.pool.id())
+            .expect("connection comes from a load balancer target");
+        shares[idx] += 1;
+    }
+    shares
+}
+
+fn setup_test_replicas() -> LoadBalancer {
+    test_lb().configs(&replica_pool_configs(2)).launch()
 }
 
 fn set_lsn_stats(target: &Target, replica: bool, lsn: u64) {
@@ -102,15 +138,11 @@ async fn test_include_primary_if_replica_banned_only_primary() {
     primary.address.configured_role = Role::Primary;
     let pool = Pool::new(&primary);
 
-    let lb = LoadBalancer::new(
-        &Some(pool),
-        &[],
-        LoadBalancingStrategy::default(),
-        ReadWriteSplit::IncludePrimaryIfReplicaBanned,
-        Default::default(),
-    );
-
-    lb.launch();
+    let lb = test_lb()
+        .primary(pool)
+        .configs(&[])
+        .rw_split(ReadWriteSplit::IncludePrimaryIfReplicaBanned)
+        .launch();
 
     let conn = lb.get(&Request::default()).await.unwrap();
     drop(conn);
@@ -246,14 +278,10 @@ async fn test_primary_pool_banning() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .launch();
 
     // Test primary ban exists
     assert!(replicas.primary_target().is_some());
@@ -403,14 +431,11 @@ async fn test_read_write_split_exclude_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::ExcludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .rw_split(ReadWriteSplit::ExcludePrimary)
+        .launch();
 
     let request = Request::default();
 
@@ -436,17 +461,12 @@ async fn test_read_write_split_exclude_primary() {
 async fn test_lsn_filtering() {
     let primary = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
     let primary_id = primary.id();
-    let replicas = LoadBalancer::new(
-        &Some(primary),
-        &[
-            create_test_pool_config("127.0.0.1", 5432),
-            create_test_pool_config("localhost", 5432),
-        ],
-        LoadBalancingStrategy::RoundRobin,
-        ReadWriteSplit::ExcludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary)
+        .configs(&replica_pool_configs(2))
+        .strategy(LoadBalancingStrategy::RoundRobin)
+        .rw_split(ReadWriteSplit::ExcludePrimary)
+        .launch();
     // Include positions across the high bit of the unsigned LSN.
     for (behind, caught_up, ahead) in [(100, 200, 201), ((1 << 63) - 1, 1 << 63, (1 << 63) + 1)] {
         set_lsn_stats(&replicas.targets[0], true, behind);
@@ -476,17 +496,12 @@ async fn test_lsn_filtering() {
 async fn test_include_primary_if_replica_lag() {
     let primary = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
     let primary_id = primary.id();
-    let replicas = LoadBalancer::new(
-        &Some(primary),
-        &[
-            create_test_pool_config("127.0.0.1", 5432),
-            create_test_pool_config("localhost", 5432),
-        ],
-        LoadBalancingStrategy::RoundRobin,
-        ReadWriteSplit::IncludePrimaryIfReplicaLag,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary)
+        .configs(&replica_pool_configs(2))
+        .strategy(LoadBalancingStrategy::RoundRobin)
+        .rw_split(ReadWriteSplit::IncludePrimaryIfReplicaLag)
+        .launch();
     set_lsn_stats(&replicas.targets[0], true, 100);
     set_lsn_stats(&replicas.targets[1], true, 200);
 
@@ -524,15 +539,10 @@ async fn test_user_read_only_include_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    // Use `IncludePrimary`
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .launch();
 
     // Notice that we `read` to true and `read_only` to true.
     let request = Request::new(
@@ -570,14 +580,10 @@ async fn test_user_read_only_include_primary_no_replicas() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .launch();
 
     // Ban the replica
     let replica_ban = &replicas.targets[0].ban;
@@ -618,14 +624,10 @@ async fn test_read_write_split_include_primary() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .launch();
 
     let request = Request::default();
 
@@ -672,14 +674,12 @@ async fn test_prefer_primary_optin_read_honors_read_write_split() {
             create_test_pool_config("127.0.0.1", 5432),
         ];
 
-        let lb = LoadBalancer::new(
-            &Some(primary_pool),
-            &replica_configs,
-            LoadBalancingStrategy::RoundRobin,
-            split,
-            Default::default(),
-        );
-        lb.launch();
+        let lb = test_lb()
+            .primary(primary_pool)
+            .configs(&replica_configs)
+            .strategy(LoadBalancingStrategy::RoundRobin)
+            .rw_split(split)
+            .launch();
 
         let request = Request::default();
         let mut ids = HashSet::new();
@@ -718,16 +718,12 @@ async fn test_read_write_split_exclude_primary_no_replicas() {
     let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
-    let replica_configs = [];
-
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::RoundRobin,
-        ReadWriteSplit::ExcludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&[])
+        .strategy(LoadBalancingStrategy::RoundRobin)
+        .rw_split(ReadWriteSplit::ExcludePrimary)
+        .launch();
 
     let request = Request::default();
 
@@ -757,14 +753,10 @@ async fn test_read_write_split_exclude_primary_no_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = LoadBalancer::new(
-        &None,
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::ExcludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .configs(&replica_configs)
+        .rw_split(ReadWriteSplit::ExcludePrimary)
+        .launch();
 
     let request = Request::default();
 
@@ -785,17 +777,14 @@ async fn test_read_write_split_exclude_primary_all_replicas_banned() {
     let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
     primary_pool.launch();
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &[
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&[
             create_test_pool_config("localhost", 5432),
             create_test_pool_config("127.0.0.1", 5432),
-        ],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::ExcludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+        ])
+        .rw_split(ReadWriteSplit::ExcludePrimary)
+        .launch();
 
     replicas.targets[0]
         .ban
@@ -818,17 +807,14 @@ async fn test_read_write_split_exclude_primary_one_replica_banned() {
     let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
     primary_pool.launch();
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &[
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&[
             create_test_pool_config("localhost", 5432),
             create_test_pool_config("127.0.0.1", 5432),
-        ],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::ExcludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+        ])
+        .rw_split(ReadWriteSplit::ExcludePrimary)
+        .launch();
 
     replicas.targets[0]
         .ban
@@ -852,14 +838,7 @@ async fn test_read_write_split_include_primary_no_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = LoadBalancer::new(
-        &None,
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb().configs(&replica_configs).launch();
 
     let request = Request::default();
 
@@ -884,14 +863,10 @@ async fn test_read_write_split_with_banned_primary() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .launch();
 
     // Ban the primary
     let primary_ban = &replicas.targets.last().unwrap().ban;
@@ -925,14 +900,10 @@ async fn test_read_write_split_with_banned_replicas() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .launch();
 
     // Ban the replica
     let replica_ban = &replicas.targets[0].ban;
@@ -966,14 +937,11 @@ async fn test_prefer_primary_with_banned_replicas_falls_back_to_primary() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::PreferPrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .rw_split(ReadWriteSplit::PreferPrimary)
+        .launch();
 
     let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
@@ -1005,14 +973,12 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::RoundRobin,
-        ReadWriteSplit::ExcludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .strategy(LoadBalancingStrategy::RoundRobin)
+        .rw_split(ReadWriteSplit::ExcludePrimary)
+        .launch();
 
     let request = Request::default();
 
@@ -1048,16 +1014,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
 
 #[tokio::test]
 async fn test_monitor_shuts_down_immediately() {
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
-
-    let replicas = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let replicas = test_lb().configs(&replica_pool_configs(2)).build();
 
     replicas
         .targets
@@ -1111,14 +1068,7 @@ async fn test_monitor_clears_expired_bans() {
 async fn test_monitor_does_not_ban_single_target() {
     let pool_config = create_test_pool_config("127.0.0.1", 5432);
 
-    let replicas = LoadBalancer::new(
-        &None,
-        &[pool_config],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb().configs(&[pool_config]).launch();
 
     replicas.targets[0].health().toggle(false);
 
@@ -1180,14 +1130,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
         },
     };
 
-    let replicas = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb().configs(&[pool_config1, pool_config2]).launch();
 
     replicas.targets[0].health().toggle(false);
 
@@ -1237,14 +1180,11 @@ async fn test_include_primary_if_replica_banned_no_bans() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimaryIfReplicaBanned,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .rw_split(ReadWriteSplit::IncludePrimaryIfReplicaBanned)
+        .launch();
 
     let request = Request::default();
 
@@ -1274,14 +1214,11 @@ async fn test_include_primary_if_replica_banned_with_ban() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let replicas = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimaryIfReplicaBanned,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .rw_split(ReadWriteSplit::IncludePrimaryIfReplicaBanned)
+        .launch();
 
     // Ban the replica
     let replica_ban = &replicas.targets[0].ban;
@@ -1324,14 +1261,10 @@ async fn test_has_replicas_with_primary_and_replicas() {
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
 
-    let lb = LoadBalancer::new(
-        &Some(primary_pool),
-        &replica_configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb.launch();
+    let lb = test_lb()
+        .primary(primary_pool)
+        .configs(&replica_configs)
+        .launch();
 
     assert!(lb.has_replicas());
 
@@ -1344,14 +1277,7 @@ async fn test_has_replicas_primary_only() {
     let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
-    let lb = LoadBalancer::new(
-        &Some(primary_pool),
-        &[],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb.launch();
+    let lb = test_lb().primary(primary_pool).configs(&[]).launch();
 
     assert!(!lb.has_replicas());
 
@@ -1360,13 +1286,7 @@ async fn test_has_replicas_primary_only() {
 
 #[tokio::test]
 async fn test_has_replicas_empty() {
-    let lb = LoadBalancer::new(
-        &None,
-        &[],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb().configs(&[]).build();
 
     assert!(!lb.has_replicas());
 }
@@ -1407,30 +1327,20 @@ async fn test_move_conns_to_with_removed_replica_matches_by_address() {
     // Old LB: three replica [127.0.0.1, 8.8.8.8, 1.1.1.1]
     // New LB: two replica [8.8.8.8, 1.1.1.1] (shifted backwards by 1; numbers changed)
     // After they move, verify [8.8.8.8, 1.1.1.1] maintains its connections.
-    let lb_old = LoadBalancer::new(
-        &None,
-        &[
+    let lb_old = test_lb()
+        .configs(&[
             create_test_pool_config_with_db_num("127.0.0.1", 5432, 1),
             create_test_pool_config_with_db_num("8.8.8.8", 5432, 2),
             create_test_pool_config_with_db_num("1.1.1.1", 5432, 3),
-        ],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb_old.launch();
+        ])
+        .launch();
 
-    let lb_new = LoadBalancer::new(
-        &None,
-        &[
+    let lb_new = test_lb()
+        .configs(&[
             create_test_pool_config_with_db_num("8.8.8.8", 5432, 1),
             create_test_pool_config_with_db_num("1.1.1.1", 5432, 2),
-        ],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb_new.launch();
+        ])
+        .launch();
 
     // Record the role on the old target [8.8.8.8]; verify it was persisted.
     lb_old.targets[1].set_role(Role::Primary);
@@ -1459,23 +1369,13 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
     let pool_config2 = create_test_pool_config("localhost", 5432);
 
-    let lb_old = LoadBalancer::new(
-        &None,
-        std::slice::from_ref(&pool_config1),
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb_old.launch();
+    let lb_old = test_lb()
+        .configs(std::slice::from_ref(&pool_config1))
+        .launch();
 
-    let lb_new = LoadBalancer::new(
-        &None,
-        &[pool_config1.clone(), pool_config2.clone()],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb_new.launch();
+    let lb_new = test_lb()
+        .configs(&[pool_config1.clone(), pool_config2.clone()])
+        .launch();
 
     // Record the role on the old target so we can verify it was carried over.
     lb_old.targets[0].set_role(Role::Primary);
@@ -1509,13 +1409,10 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
     let existing_replica_config = create_auto_test_pool_config("localhost", 5432);
 
     let old_primary = Pool::new(&primary_config);
-    let lb_old = LoadBalancer::new(
-        &Some(old_primary),
-        std::slice::from_ref(&existing_replica_config),
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb_old = test_lb()
+        .primary(old_primary)
+        .configs(std::slice::from_ref(&existing_replica_config))
+        .build();
 
     set_lsn_stats(&lb_old.targets[0], true, 100);
     set_lsn_stats(&lb_old.targets[1], false, 200);
@@ -1525,13 +1422,10 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
     let added_replica_config = create_auto_test_pool_config("localhost", 5433);
 
     let new_primary = Pool::new(&primary_config);
-    let lb_new = LoadBalancer::new(
-        &Some(new_primary),
-        &[existing_replica_config, added_replica_config],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb_new = test_lb()
+        .primary(new_primary)
+        .configs(&[existing_replica_config, added_replica_config])
+        .build();
 
     lb_old.move_conns_to(&lb_new).unwrap();
 
@@ -1559,13 +1453,7 @@ async fn test_auto_targets_remain_replicas_when_stats_are_invalid() {
     let config1 = create_auto_test_pool_config("127.0.0.1", 5432);
     let config2 = create_auto_test_pool_config("localhost", 5432);
 
-    let lb = LoadBalancer::new(
-        &None,
-        &[config1, config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb().configs(&[config1, config2]).build();
 
     assert!(
         lb.targets
@@ -1592,13 +1480,7 @@ async fn test_redetect_roles_marks_auto_targets_replicas_when_all_valid_targets_
     let config1 = create_auto_test_pool_config("127.0.0.1", 5432);
     let config2 = create_auto_test_pool_config("localhost", 5432);
 
-    let lb = LoadBalancer::new(
-        &None,
-        &[config1, config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb().configs(&[config1, config2]).build();
 
     set_lsn_stats(&lb.targets[0], true, 100);
     set_lsn_stats(&lb.targets[1], true, 90);
@@ -1628,13 +1510,7 @@ async fn test_auto_mode_waits_for_primary_election() {
     let mut config = create_auto_test_pool_config("127.0.0.1", 5432);
     config.config.checkout_timeout = Duration::from_millis(10);
 
-    let lb = LoadBalancer::new(
-        &None,
-        &[config],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb().configs(&[config]).build();
 
     assert!(matches!(
         lb.get_primary(&Request::default()).await,
@@ -1645,13 +1521,7 @@ async fn test_auto_mode_waits_for_primary_election() {
 #[tokio::test]
 async fn test_auto_mode_primary_election_releases_writes() {
     let config = create_auto_test_pool_config("127.0.0.1", 5432);
-    let lb = LoadBalancer::new(
-        &None,
-        &[config],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb().configs(&[config]).build();
     lb.targets[0].pool.launch();
     let election = lb.clone();
 
@@ -1674,13 +1544,7 @@ async fn test_auto_mode_waits_for_each_new_primary() {
     let first = create_auto_test_pool_config("127.0.0.1", 5432);
     let second = create_auto_test_pool_config("localhost", 5432);
 
-    let lb = LoadBalancer::new(
-        &None,
-        &[first, second],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb().configs(&[first, second]).build();
     lb.targets.iter().for_each(|target| target.pool.launch());
 
     // primary is not defined initially
@@ -1736,13 +1600,9 @@ async fn test_auto_mode_waits_for_each_new_primary() {
 
 #[tokio::test]
 async fn test_election_channel_no_race_condition() {
-    let lb = LoadBalancer::new(
-        &None,
-        &[create_auto_test_pool_config("127.0.0.1", 5432)],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb()
+        .configs(&[create_auto_test_pool_config("127.0.0.1", 5432)])
+        .build();
     lb.targets[0].pool.launch();
 
     // make sure there is no primary
@@ -1764,13 +1624,7 @@ async fn test_election_channel_no_race_condition() {
 #[tokio::test]
 async fn test_static_replica_only_does_not_wait_for_primary() {
     let config = create_test_pool_config("127.0.0.1", 5432);
-    let lb = LoadBalancer::new(
-        &None,
-        &[config],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let lb = test_lb().configs(&[config]).build();
 
     let started = Instant::now();
     assert!(matches!(
@@ -1839,19 +1693,21 @@ fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> Poo
     }
 }
 
+fn weighted_replica_pool_configs(weights: &[u8]) -> Vec<PoolConfig> {
+    ["127.0.0.1", "localhost"]
+        .into_iter()
+        .cycle()
+        .zip(weights)
+        .map(|(host, &lb_weight)| create_test_pool_config_weighted(host, 5432, lb_weight))
+        .collect()
+}
+
 #[tokio::test]
 async fn test_weighted_round_robin_smooth_distribution() {
-    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 5);
-    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 1);
-
-    let lb = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::WeightedRoundRobin,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb.launch();
+    let lb = test_lb()
+        .configs(&weighted_replica_pool_configs(&[5, 1]))
+        .strategy(LoadBalancingStrategy::WeightedRoundRobin)
+        .launch();
 
     let request = Request::default();
 
@@ -1876,17 +1732,10 @@ async fn test_weighted_round_robin_smooth_distribution() {
 
 #[tokio::test]
 async fn test_weighted_round_robin_equal_weights() {
-    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 1);
-    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 1);
-
-    let lb = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::WeightedRoundRobin,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    lb.launch();
+    let lb = test_lb()
+        .configs(&weighted_replica_pool_configs(&[1, 1]))
+        .strategy(LoadBalancingStrategy::WeightedRoundRobin)
+        .launch();
 
     let request = Request::default();
 
@@ -1908,78 +1757,128 @@ async fn test_weighted_round_robin_equal_weights() {
 
 #[tokio::test]
 async fn test_weighted_round_robin_zero_weight_never_selected() {
-    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 0);
-    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 10);
+    let lb = test_lb()
+        .configs(&weighted_replica_pool_configs(&[0, 10]))
+        .strategy(LoadBalancingStrategy::WeightedRoundRobin)
+        .launch();
 
-    let lb = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::WeightedRoundRobin,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
+    let shares = checkout_shares(&lb, 20).await;
+
+    assert_eq!(
+        shares,
+        vec![0, 20],
+        "Pool with weight 0 should never be selected first"
     );
-    lb.launch();
-
-    let request = Request::default();
-
-    let expected_id = lb.targets[1].pool.id();
-    for _ in 0..20 {
-        let conn = lb.get(&request).await.unwrap();
-        assert_eq!(
-            conn.pool.id(),
-            expected_id,
-            "Pool with weight 0 should never be selected first"
-        );
-    }
 
     lb.shutdown();
 }
 
 #[tokio::test]
 async fn test_weighted_round_robin_proportional_distribution() {
-    let pool_config1 = create_test_pool_config_weighted("127.0.0.1", 5432, 3);
-    let pool_config2 = create_test_pool_config_weighted("localhost", 5432, 1);
+    let lb = test_lb()
+        .configs(&weighted_replica_pool_configs(&[3, 1]))
+        .strategy(LoadBalancingStrategy::WeightedRoundRobin)
+        .launch();
 
-    let lb = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::WeightedRoundRobin,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
+    let shares = checkout_shares(&lb, 40).await;
+
+    assert_eq!(
+        shares,
+        vec![30, 10],
+        "Pool A (weight 3) should get 3/4 of requests"
     );
-    lb.launch();
 
-    let request = Request::default();
+    lb.shutdown();
+}
 
-    let pool_a = lb.targets[0].pool.id();
+#[tokio::test]
+async fn test_round_robin_splits_banned_turns_evenly() {
+    let lb = test_lb()
+        .configs(&replica_pool_configs(4))
+        .strategy(LoadBalancingStrategy::RoundRobin)
+        .bans(&[1, 2])
+        .launch();
 
-    // Over 40 rounds (10 full cycles of total_weight=4), A should get exactly 30
-    let mut a_count = 0;
-    for _ in 0..40 {
-        let conn = lb.get(&request).await.unwrap();
-        if conn.pool.id() == pool_a {
-            a_count += 1;
-        }
+    let shares = checkout_shares(&lb, 40).await;
+
+    assert_eq!(
+        shares,
+        vec![20, 0, 0, 20],
+        "banned turns must not all go to the next target in list order"
+    );
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_round_robin_splits_banned_turns_evenly_across_wrap() {
+    let lb = test_lb()
+        .configs(&replica_pool_configs(4))
+        .strategy(LoadBalancingStrategy::RoundRobin)
+        .bans(&[2, 3])
+        .launch();
+
+    let shares = checkout_shares(&lb, 40).await;
+
+    assert_eq!(
+        shares,
+        vec![20, 20, 0, 0],
+        "banned turns at the end of the list must not all go to the first target"
+    );
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_get_returns_all_replicas_down_when_all_targets_banned() {
+    for strategy in [
+        LoadBalancingStrategy::Random,
+        LoadBalancingStrategy::RoundRobin,
+        LoadBalancingStrategy::LeastActiveConnections,
+        LoadBalancingStrategy::WeightedRoundRobin,
+    ] {
+        let lb = test_lb()
+            .configs(&replica_pool_configs(2))
+            .strategy(strategy)
+            .bans(&[0, 1])
+            .launch();
+
+        let result = lb.get(&Request::default()).await;
+
+        assert!(
+            matches!(result, Err(Error::AllReplicasDown)),
+            "{strategy:?}"
+        );
+
+        lb.shutdown();
     }
+}
 
-    assert_eq!(a_count, 30, "Pool A (weight 3) should get 3/4 of requests");
+#[tokio::test]
+async fn test_weighted_round_robin_splits_banned_turns_by_weight() {
+    let lb = test_lb()
+        .configs(&weighted_replica_pool_configs(&[1, 1, 2]))
+        .strategy(LoadBalancingStrategy::WeightedRoundRobin)
+        .bans(&[2])
+        .launch();
+
+    let shares = checkout_shares(&lb, 40).await;
+
+    assert_eq!(
+        shares,
+        vec![20, 20, 0],
+        "a banned target's weight must not all go to one healthy target"
+    );
 
     lb.shutdown();
 }
 
 #[tokio::test]
 async fn test_least_active_connections_prefers_pool_with_fewer_checked_out() {
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
-
-    let replicas = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::LeastActiveConnections,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-    replicas.launch();
+    let replicas = test_lb()
+        .configs(&replica_pool_configs(2))
+        .strategy(LoadBalancingStrategy::LeastActiveConnections)
+        .launch();
 
     let request = Request::default();
 
@@ -2006,16 +1905,7 @@ async fn test_least_active_connections_prefers_pool_with_fewer_checked_out() {
 // ==========================================
 
 fn setup_test_replicas_no_launch() -> LoadBalancer {
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
-
-    LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    )
+    test_lb().configs(&replica_pool_configs(2)).build()
 }
 
 #[test]
@@ -2208,13 +2098,7 @@ fn test_ban_check_bans_with_pool_unhealthy_reason() {
 fn test_ban_check_does_not_ban_single_target() {
     let pool_config = create_test_pool_config("127.0.0.1", 5432);
 
-    let replicas = LoadBalancer::new(
-        &None,
-        &[pool_config],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let replicas = test_lb().configs(&[pool_config]).build();
     // Don't launch - we're unit testing ban_check
 
     // Set target as unhealthy
@@ -2270,13 +2154,7 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
         },
     };
 
-    let replicas = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let replicas = test_lb().configs(&[pool_config1, pool_config2]).build();
 
     // Set target as unhealthy
     replicas.targets[0].health().toggle(false);
@@ -2578,13 +2456,7 @@ async fn test_params_skips_banned_targets() {
 
 #[tokio::test]
 async fn test_params_returns_all_replicas_down_when_empty() {
-    let replicas = LoadBalancer::new(
-        &None,
-        &[],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
+    let replicas = test_lb().configs(&[]).build();
 
     let request = Request::default();
     let result = replicas.params(&request).await;
@@ -2605,13 +2477,7 @@ async fn ban_new_targets_until_health_check() {
             ..Default::default()
         }),
     };
-    let new = LoadBalancer::new(
-        &None,
-        &[new_config],
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    );
+    let new = test_lb().configs(&[new_config]).build();
     old.move_conns_to(&new).unwrap();
 
     let banned_targets = new
@@ -2655,20 +2521,10 @@ async fn existing_targets_not_banned_when_healthcheck_required_on_discovery() {
     ];
     let discovered = pool_config("localhost", 2345);
 
-    let old = LoadBalancer::new(
-        &None,
-        &existing,
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    );
-    let new = LoadBalancer::new(
-        &None,
-        &[existing[0].clone(), existing[1].clone(), discovered],
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    );
+    let old = test_lb().configs(&existing).build();
+    let new = test_lb()
+        .configs(&[existing[0].clone(), existing[1].clone(), discovered])
+        .build();
     old.move_conns_to(&new).unwrap();
 
     let banned_target = new
@@ -2695,19 +2551,8 @@ async fn existing_targets_not_banned_when_healthcheck_required_on_discovery() {
 
 #[tokio::test]
 async fn test_reload_preserves_only_manual_bans() {
-    let configs = [
-        create_test_pool_config("127.0.0.1", 5432),
-        create_test_pool_config("localhost", 5432),
-    ];
-    let new_lb = || {
-        LoadBalancer::new(
-            &None,
-            &configs,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        )
-    };
+    let configs = replica_pool_configs(2);
+    let new_lb = || test_lb().configs(&configs).build();
     let old = new_lb();
     let new = new_lb();
     old.targets[0].ban.ban(Error::ManualBan, Duration::MAX);
@@ -2721,19 +2566,10 @@ async fn test_reload_preserves_only_manual_bans() {
 
 #[tokio::test]
 async fn test_get_returns_offline_when_all_targets_banned_and_offline() {
-    let replicas = LoadBalancer::new(
-        &None,
-        &[
-            create_test_pool_config("127.0.0.1", 5432),
-            create_test_pool_config("localhost", 5432),
-        ],
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    );
-    for target in &replicas.targets {
-        target.ban.ban(Error::ManualBan, Duration::MAX);
-    }
+    let replicas = test_lb()
+        .configs(&replica_pool_configs(2))
+        .bans(&[0, 1])
+        .build();
     replicas.shutdown();
 
     let result = replicas.get(&Request::default()).await;
@@ -2751,20 +2587,8 @@ async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
             ..Default::default()
         }),
     };
-    let new = LoadBalancer::new(
-        &None,
-        std::slice::from_ref(&new_config),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    );
-    let new_new = LoadBalancer::new(
-        &None,
-        &[new_config],
-        Default::default(),
-        Default::default(),
-        Default::default(),
-    );
+    let new = test_lb().configs(std::slice::from_ref(&new_config)).build();
+    let new_new = test_lb().configs(&[new_config]).build();
 
     old.move_conns_to(&new).unwrap();
     assert_eq!(
