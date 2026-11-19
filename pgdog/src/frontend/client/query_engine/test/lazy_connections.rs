@@ -137,7 +137,7 @@ async fn recovery_setup() -> (SpawnedClient, Guard) {
     use crate::{
         backend::{
             databases::{databases, reload_from_existing},
-            pool::Request,
+            pool::LbRequest,
         },
         config::{config, load_test_sharded, set},
     };
@@ -151,7 +151,7 @@ async fn recovery_setup() -> (SpawnedClient, Guard) {
     reload_from_existing().unwrap();
     let client = SpawnedClient::new(Parameters::default()).await;
     let cluster = databases().cluster(("pgdog", "pgdog")).unwrap();
-    let held = cluster.primary(1, &Request::default()).await.unwrap();
+    let held = cluster.primary(1, &LbRequest::default()).await.unwrap();
 
     (client, held)
 }

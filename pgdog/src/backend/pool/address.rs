@@ -49,6 +49,8 @@ pub(crate) struct Address {
     /// back to the `[general]` settings.
     #[serde(default)]
     pub(crate) tls: ServerTls,
+    /// Labels.
+    pub(crate) labels: Vec<String>,
 }
 
 impl Address {
@@ -92,6 +94,7 @@ impl Address {
             database_number,
             configured_role: database.role,
             tls: database.tls.clone(),
+            labels: database.labels.clone(),
         }
     }
 
@@ -224,6 +227,7 @@ impl Address {
             database_number: 0,
             configured_role: Role::Primary,
             tls: ServerTls::default(),
+            labels: vec![],
         }
     }
 }

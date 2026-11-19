@@ -15,7 +15,7 @@ use tracing::info;
 pub(crate) use cache::SchemaCache;
 pub(crate) use relation::Relation;
 
-use super::{Cluster, Error, Server, pool::Request};
+use super::{Cluster, Error, Server, pool::LbRequest};
 use crate::frontend::router::parser::Table;
 use crate::net::parameter::ParameterValue;
 use sync::ShardConfig;
@@ -185,7 +185,7 @@ impl Schema {
         ShardConfig::sync_all(cluster).await?;
 
         for shard in shards {
-            let mut server = shard.primary(&Request::default()).await?;
+            let mut server = shard.primary(&LbRequest::default()).await?;
             Self::install_server(&mut server).await?;
         }
 

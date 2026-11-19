@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::Error;
 use super::publisher::Table;
-use crate::backend::pool::Request;
+use crate::backend::pool::LbRequest;
 use crate::backend::{Cluster, ShardedTables};
 
 /// Fetch the info about tables on shard and distribute the set of tables
@@ -26,7 +26,7 @@ pub(crate) async fn tables_sync(
     let mut omnisharded = HashSet::new();
 
     for shard in source.shards() {
-        let mut primary = shard.primary(&Request::default()).await?;
+        let mut primary = shard.primary(&LbRequest::default()).await?;
         let tables = Table::load(publication, &mut primary).await?;
 
         for table in tables {

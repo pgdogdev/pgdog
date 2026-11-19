@@ -38,7 +38,7 @@ pub(crate) use error::Error;
 pub(super) use failover_signal::ClusterFailoverSignalWatcher;
 pub(crate) use guard::Guard;
 pub(crate) use healthcheck::Healtcheck;
-pub(crate) use lb::LoadBalancer;
+pub(crate) use lb::{LbRequest, LoadBalancer};
 pub(crate) use lsn_monitor::LsnStats;
 pub(crate) use monitor::Monitor;
 pub(crate) use password::Password;

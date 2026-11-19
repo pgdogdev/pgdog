@@ -20,16 +20,18 @@ use crate::{
     net::Parameters,
 };
 
-use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole, Request};
+use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole};
 use crate::util::safe_timeout;
 
 pub(crate) mod ban;
 pub(crate) mod monitor;
+pub(crate) mod request;
 pub(crate) mod target_health;
 
 use ban::Ban;
 pub(crate) use ban::UnbanReason;
 use monitor::*;
+pub(crate) use request::LbRequest;
 pub(crate) use target_health::*;
 
 #[cfg(test)]
@@ -296,12 +298,12 @@ impl LoadBalancer {
     }
 
     /// Get a live connection from the pool.
-    pub(crate) async fn get(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn get(&self, request: &LbRequest) -> Result<Guard, Error> {
         self.get_internal(request).await
     }
 
     /// Get parameters from first non-banned connection pool.
-    pub(crate) async fn params(&self, request: &Request) -> Result<&Arc<Parameters>, Error> {
+    pub(crate) async fn params(&self, request: &LbRequest) -> Result<&Arc<Parameters>, Error> {
         if let Some(target) = self.targets.iter().find(|target| !target.ban.banned()) {
             return target.pool.params(request).await;
         }
@@ -407,7 +409,7 @@ impl LoadBalancer {
     ///
     /// In automatic mode, the caller waits for an election. Static
     /// replica-only configurations fail immediately with [`Error::NoPrimary`].
-    pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
+    pub(super) async fn get_primary(&self, request: &LbRequest) -> Result<Guard, Error> {
         if let Some(pool) = self.primary() {
             return pool.get(request).await;
         }
@@ -420,7 +422,7 @@ impl LoadBalancer {
     }
 
     /// Check out a read connection using the configured load balancing strategy.
-    async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
+    async fn get_internal(&self, request: &LbRequest) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
         use smallvec::SmallVec;
 

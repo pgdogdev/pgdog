@@ -230,6 +230,10 @@ pub struct Database {
     /// Role-specific settings.
     #[serde(flatten, default)]
     pub role_config: RoleConfig,
+
+    /// Labels.
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 impl Database {

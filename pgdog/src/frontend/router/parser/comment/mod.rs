@@ -129,6 +129,7 @@ pub(crate) fn parse_edge_comment<'a>(
             shard: directive.shard_or_lookup,
             role: directive.role,
             lsn: directive.lsn,
+            label: None,
         },
         spans,
     })

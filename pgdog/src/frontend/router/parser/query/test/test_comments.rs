@@ -21,7 +21,7 @@ fn test_comment_pgdog_lsn() {
         let command = test.execute(vec![Query::new(sql).into()]);
         let route = command.route();
         assert_eq!(route.lsn, expected, "{sql}");
-        let request = Request::new(Default::default(), route, false, Instant::now());
+        let request = Request::new(Default::default(), route, Instant::now());
         assert_eq!(request.lsn, expected, "{sql}");
     }
 }
