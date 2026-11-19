@@ -1,12 +1,12 @@
 //! Route-dependent rewrite for cross-shard `GROUP BY`.
 
-use pg_raw_parse::{Node, make, nodes};
+use pg_raw_parse::{make, nodes};
 
 use super::{
     Error,
-    projection::{HiddenAliases, column_name, expands_star},
+    projection::{HiddenAliases, expands_star},
 };
-use crate::frontend::router::parser::Aggregate;
+use crate::frontend::router::parser::{Aggregate, aggregate::GroupByKey};
 
 const ALIAS_PREFIX: &str = "__pgdog_group_";
 
@@ -50,6 +50,7 @@ pub(super) fn rewrite_select<'a>(
     select: &mut make::Unique<'a, &'a nodes::SelectStmt>,
     mem: make::MemoryToken<'a>,
     aggregate: &Aggregate,
+    keys: &[GroupByKey],
 ) -> Result<Option<GroupByRewrite>, Error> {
     if aggregate.group_by().len() == select.group_clause().len() {
         return Ok(None);
@@ -66,25 +67,21 @@ pub(super) fn rewrite_select<'a>(
     let mut hidden = vec![];
     let mut group_by = vec![];
 
-    for node in select.group_clause().iter() {
-        if let Some(column) = Aggregate::group_by_column(select, node) {
-            group_by.push(column);
-            continue;
-        }
-        match node {
-            // A merged row can't tell which grouping set it came from.
-            Node::GroupingSet(_) => {
-                return Err(Error::UnsupportedGroupBy(
-                    "GROUPING SETS, ROLLUP and CUBE are unsupported",
-                ));
+    for (node, key) in select.group_clause().iter().zip(keys) {
+        match *key {
+            GroupByKey::Ordinal(column)
+            | GroupByKey::SelectedColumn(column)
+            | GroupByKey::Alias(column) => {
+                group_by.push(column);
+                continue;
             }
-            // Shards can't resolve a SELECT alias inside the hidden column.
-            Node::ColumnRef(column) if groups_by_output_alias(select, column) => {
-                return Err(Error::UnsupportedGroupBy(
-                    "GROUP BY on a SELECT alias is unsupported",
-                ));
+            GroupByKey::GroupingSet => {
+                return Err(Error::UnsupportedGroupBy(GroupByKey::GROUPING_SET));
             }
-            _ => {}
+            GroupByKey::UnresolvedAlias => {
+                return Err(Error::UnsupportedGroupBy(GroupByKey::UNRESOLVED_ALIAS));
+            }
+            GroupByKey::Unselected => {}
         }
         let alias = hidden_aliases.next_alias();
         group_by.push(select.target_list().len() + hidden.len());
@@ -101,13 +98,4 @@ pub(super) fn rewrite_select<'a>(
         aliases,
         aggregate.clone().with_group_by(group_by),
     )))
-}
-
-fn groups_by_output_alias(select: &nodes::SelectStmt, column: &nodes::ColumnRef) -> bool {
-    column.fields().len() == 1
-        && select.target_list().iter().any(|target| {
-            target
-                .name()
-                .is_some_and(|name| Some(name) == column_name(column))
-        })
 }

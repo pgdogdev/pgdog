@@ -7,11 +7,13 @@ use pg_raw_parse::{
 };
 
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{AggregateFunction, HavingRewritePlan};
+use crate::frontend::router::parser::{
+    AggregateFunction, HavingRewritePlan, aggregate::GroupByKey,
+};
 
 use super::{
     Error, offset,
-    projection::{HiddenAliases, column_name, is_star},
+    projection::{HiddenAliases, is_star},
 };
 
 const ALIAS_PREFIX: &str = "__pgdog_having_";
@@ -49,11 +51,14 @@ const TABLE_ALIAS: &str = "__pgdog_having";
 ///
 /// which returns the positions of the groups to keep. LIMIT and OFFSET are
 /// removed from the shard query, since they apply to the groups that pass.
+///
+/// Returns the plan and the position of every GROUP BY key in the rewritten
+/// SELECT list.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
     schema: &Schema,
-) -> Result<HavingRewritePlan, Error> {
+) -> Result<(HavingRewritePlan, Vec<usize>), Error> {
     debug_assert!(
         !matches!(select.having_clause(), Node::None),
         "HAVING rewrite requires a HAVING clause"
@@ -123,25 +128,30 @@ pub(super) fn rewrite_select<'a>(
         .iter()
         .map(|group| mem.make_unique(group))
         .collect::<Vec<_>>();
+    let selected = select.target_list().len();
+    let mut group_by = Vec::with_capacity(group_sources.len());
     for group_source in group_sources {
-        match group_source.as_ref() {
-            // Shards can't resolve a SELECT alias inside the hidden projection.
-            Node::ColumnRef(column) if groups_by_output_alias(select, column) => {
+        let column = match GroupByKey::new(select, group_source.as_ref(), schema) {
+            GroupByKey::Ordinal(column) | GroupByKey::Alias(column) => column,
+            GroupByKey::GroupingSet => {
+                return Err(Error::UnsupportedHaving(GroupByKey::GROUPING_SET));
+            }
+            GroupByKey::UnresolvedAlias => {
+                return Err(Error::UnsupportedHaving(GroupByKey::UNRESOLVED_ALIAS));
+            }
+            GroupByKey::Unselected if matches!(group_source.as_ref(), Node::A_Const(_)) => {
                 return Err(Error::UnsupportedHaving(
-                    "GROUP BY on a SELECT alias is unsupported",
+                    "GROUP BY constants other than ordinals are unsupported",
                 ));
             }
-            Node::ColumnRef(_) => {
+            // Columns are projected even when selected, next to the HAVING operands.
+            GroupByKey::SelectedColumn(_) | GroupByKey::Unselected => {
                 let alias = operands.aliases.next_alias();
                 operands.projected.push((alias, group_source));
+                selected + operands.projected.len() - 1
             }
-            Node::A_Const(_) => {}
-            _ => {
-                return Err(Error::UnsupportedHaving(
-                    "GROUP BY expressions other than columns and ordinals are unsupported",
-                ));
-            }
-        }
+        };
+        group_by.push(column);
     }
 
     let hidden_aliases = operands
@@ -174,24 +184,10 @@ pub(super) fn rewrite_select<'a>(
     // Shards return every group; PgDog applies LIMIT and OFFSET after the filter.
     offset::remove_select(select, mem);
 
-    Ok(HavingRewritePlan::new(
-        filter_sql,
-        operand_aliases,
-        hidden_aliases,
-        operands.params,
+    Ok((
+        HavingRewritePlan::new(filter_sql, operand_aliases, hidden_aliases, operands.params),
+        group_by,
     ))
-}
-
-fn groups_by_output_alias(
-    select: &nodes::SelectStmtMut<'_, '_>,
-    column: &nodes::ColumnRef,
-) -> bool {
-    column.fields().len() == 1
-        && select.target_list().iter().any(|target| {
-            target
-                .name()
-                .is_some_and(|name| Some(name) == column_name(column))
-        })
 }
 
 struct Operands<'a, 's> {
@@ -285,11 +281,7 @@ mod tests {
         let mut plan = None;
         let rewritten = make::try_owned(|mem| {
             let mut select = mem.make_unique(select);
-            plan = Some(rewrite_select(
-                &mut select.as_mut(),
-                mem,
-                &Schema::default(),
-            )?);
+            plan = Some(rewrite_select(&mut select.as_mut(), mem, &Schema::default())?.0);
             Ok::<_, Error>(select)
         })?;
         Ok((
