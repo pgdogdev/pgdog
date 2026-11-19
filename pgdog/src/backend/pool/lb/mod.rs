@@ -447,52 +447,61 @@ impl LoadBalancer {
             return Err(Error::AllReplicasDown);
         }
 
-        match self.lb_strategy {
-            Random => candidates.shuffle(&mut rand::rng()),
-            RoundRobin => {
-                let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                let mut reshuffled = SmallVec::with_capacity(candidates.len());
-                reshuffled.extend_from_slice(&candidates[first..]);
-                reshuffled.extend_from_slice(&candidates[..first]);
-                candidates = reshuffled;
-            }
-            LeastActiveConnections => {
-                candidates.sort_by_cached_key(|target| target.pool.lock().checked_out());
-            }
-            WeightedRoundRobin => {
-                let total_weight: i64 = candidates
-                    .iter()
-                    .map(|target| target.pool.config().lb_weight as i64)
-                    .sum();
+        // make sure we don't use the banned targets calculations,
+        // since it can skew the distribution when we have banned instances
+        let mut healthy: SmallVec<[&Target; 32]> = candidates
+            .iter()
+            .copied()
+            .filter(|target| !target.ban.banned())
+            .collect();
 
-                if total_weight > 0 {
-                    for target in &candidates {
-                        target
-                            .current_weight
-                            .fetch_add(target.pool.config().lb_weight as i64, Ordering::Relaxed);
-                    }
-
-                    let max_idx = candidates
+        if !healthy.is_empty() {
+            match self.lb_strategy {
+                Random => healthy.shuffle(&mut rand::rng()),
+                RoundRobin => {
+                    let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % healthy.len();
+                    healthy.rotate_left(first);
+                }
+                LeastActiveConnections => {
+                    healthy.sort_by_cached_key(|target| target.pool.lock().checked_out());
+                }
+                WeightedRoundRobin => {
+                    let total_weight: i64 = healthy
                         .iter()
-                        .enumerate()
-                        .max_by_key(|(_, t)| t.current_weight.load(Ordering::Relaxed))
-                        .map(|(idx, _)| idx)
-                        .unwrap_or_default();
+                        .map(|target| target.pool.config().lb_weight as i64)
+                        .sum();
 
-                    candidates[max_idx]
-                        .current_weight
-                        .fetch_sub(total_weight, Ordering::Relaxed);
+                    if total_weight > 0 {
+                        for target in &healthy {
+                            target.current_weight.fetch_add(
+                                target.pool.config().lb_weight as i64,
+                                Ordering::Relaxed,
+                            );
+                        }
 
-                    candidates.swap(0, max_idx);
+                        let max_idx = healthy
+                            .iter()
+                            .enumerate()
+                            .max_by_key(|(_, t)| t.current_weight.load(Ordering::Relaxed))
+                            .map(|(idx, _)| idx)
+                            .unwrap_or_default();
+
+                        healthy[max_idx]
+                            .current_weight
+                            .fetch_sub(total_weight, Ordering::Relaxed);
+
+                        healthy.swap(0, max_idx);
+                    }
                 }
             }
         }
 
-        // Only ban a candidate pool if there are more than one
-        // and we have alternates.
-        let bannable = candidates.len() > 1;
+        // Only ban a candidate pool if there are other healthy alternates.
+        let bannable = healthy.len() > 1;
 
-        for target in &candidates {
+        for target in &healthy {
+            // we still check banned state since the candidate
+            // could be banned in the middle of `get` awaiting
             if target.ban.banned() {
                 continue;
             }

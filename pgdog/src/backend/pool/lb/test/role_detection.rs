@@ -5,13 +5,7 @@ fn auto_pool(hosts: &[&str]) -> LoadBalancer {
         .iter()
         .map(|host| create_auto_test_pool_config(host, 5432))
         .collect();
-    LoadBalancer::new(
-        &None,
-        &configs,
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    )
+    test_lb().configs(&configs).build()
 }
 
 #[test]
