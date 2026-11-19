@@ -226,6 +226,29 @@ SELECT * FROM (
 SELECT * FROM (SELECT id, tags FROM subusers) s ORDER BY id;
 
 -- case
+-- what: SELECT COUNT(*) FROM (<sq>) s, <sq> only returns constants
+-- used by: Rails, which counts at most N rows for .limit(N).count (e.g., FollowRequest.where(..).limit(40).count) with
+--          SELECT COUNT(*) FROM (SELECT 1 AS one FROM .. LIMIT N) subquery_for_count
+--          - https://github.com/rails/rails/blob/v7.1.4/activerecord/lib/active_record/relation/calculations.rb#L453-L458
+--          - https://github.com/rails/rails/blob/v7.1.4/activerecord/lib/active_record/relation/calculations.rb#L626-L639
+-- used by: Mastodon, which counts the pending follow requests sent to accounts when the accounts log in with FollowRequest.where(target_account: ..).limit(40).count
+--          - https://github.com/mastodon/mastodon/blob/v4.3.0/app/serializers/rest/credential_account_serializer.rb#L17
+-- route select: 0,1
+-- route select: any
+-- sql: SELECT count(*) FROM (SELECT 1 FROM unnest($1::pg_catalog._int4) u(c1)) subquery_for_count(one)
+SELECT COUNT(*) FROM (SELECT 1 AS one FROM subusers WHERE status = 'VIP' LIMIT 40) subquery_for_count;
+
+-- case
+-- what: SELECT COUNT(*) FROM (<sq>) s, <sq> only returns constants & returns zero rows
+-- used by: Mastodon, which counts the pending follow requests sent to accounts when the accounts log in
+--          For accounts without pending follow requests (most accounts), the derived table (SELECT 1 AS one FROM follow_requests WHERE target_account_id = .. LIMIT 40) doesn't return any rows
+--          - https://github.com/mastodon/mastodon/blob/v4.3.0/app/serializers/rest/credential_account_serializer.rb#L17
+-- route select: 0,1
+-- route select: any
+-- sql: SELECT count(*) FROM (SELECT 1 FROM unnest($1::pg_catalog._int4) u(c1)) subquery_for_count(one) WHERE false
+SELECT COUNT(*) FROM (SELECT 1 AS one FROM subusers WHERE status = 'nobody' LIMIT 40) subquery_for_count;
+
+-- case
 -- what: Derived table with an inner-table that returns an empty response.
 --       Want to make sure that the OIDs returned are correct (if present)
 --       based on us relying on the first row normally setting them
