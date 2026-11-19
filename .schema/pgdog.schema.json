@@ -461,6 +461,14 @@
           "format": "uint64",
           "minimum": 0
         },
+        "labels": {
+          "description": "Labels.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "lb_weight": {
           "description": "Used for weighted load balancing.",
           "type": "integer",
