@@ -179,6 +179,33 @@ async fn offset_full_scan() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
+async fn offset_without_limit() -> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset(&sharded).await?;
+    seed(&sharded).await?;
+
+    // Each shard must return every row, the OFFSET is applied once after merging.
+    for query in [
+        format!("SELECT value FROM {TABLE} ORDER BY value OFFSET 3"),
+        format!("SELECT value FROM {TABLE} ORDER BY value LIMIT ALL OFFSET 3"),
+    ] {
+        let rows = sharded.fetch_all(query.as_str()).await?;
+        assert_eq!(values(&rows), vec![4, 5, 6, 7, 8, 9, 10], "{query}");
+    }
+
+    let rows = sqlx::query(&format!(
+        "SELECT value FROM {TABLE} ORDER BY value OFFSET $1"
+    ))
+    .bind(3_i64)
+    .fetch_all(&sharded)
+    .await?;
+    assert_eq!(values(&rows), vec![4, 5, 6, 7, 8, 9, 10]);
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn offset_large_offset() -> Result<(), Box<dyn std::error::Error>> {
     let sharded = connections_sqlx().await.get(1).cloned().unwrap();
     reset(&sharded).await?;
