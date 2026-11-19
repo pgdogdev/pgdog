@@ -8,7 +8,7 @@ use itertools::Itertools;
 use pg_raw_parse::{Node, nodes};
 
 use crate::backend::replication::ShardedTables;
-use crate::frontend::router::parser::{Aggregate, Column, Table};
+use crate::frontend::router::parser::{Column, Table};
 
 /// Answers whether an expression is the sharding key of the queried table.
 pub(crate) struct ShardingKey<'a> {
@@ -57,7 +57,11 @@ impl<'a> ShardingKey<'a> {
     /// list position, so that no group spans shards.
     pub(crate) fn in_group_by(&self, select: &nodes::SelectStmt) -> bool {
         select.group_clause().iter().any(|item| match item {
-            Node::A_Const(_) => Aggregate::group_by_column(select, item)
+            // Postgres counts SELECT list positions from 1.
+            Node::A_Const(ordinal) => ordinal
+                .val()
+                .and_then(|value| value.numeric_value::<i32>())
+                .and_then(|ordinal| usize::try_from(ordinal).ok()?.checked_sub(1))
                 .and_then(|position| select.target_list().iter().nth(position))
                 .is_some_and(|target| self.matches(target.val())),
             item => self.matches(item),
