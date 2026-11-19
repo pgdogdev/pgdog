@@ -241,24 +241,21 @@ async fn max_timestamptz() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn reset_table(pool: &PgPool, table: &str, schema: &str) -> Result<(), sqlx::Error> {
     for shard in [0, 1] {
-        pool.execute(
-            format!(
-                "/* pgdog_shard: {} */ DROP TABLE IF EXISTS {}",
-                shard, table
-            )
-            .as_str(),
-        )
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {} */ DROP TABLE IF EXISTS {}",
+            shard,
+            table
+        ))
         .await
         .ok();
     }
     for shard in [0, 1] {
-        pool.execute(
-            format!(
-                "/* pgdog_shard: {} */ CREATE TABLE {} {}",
-                shard, table, schema
-            )
-            .as_str(),
-        )
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {} */ CREATE TABLE {} {}",
+            shard,
+            table,
+            schema
+        ))
         .await?;
     }
     admin_sqlx().await.execute("RELOAD").await?;
@@ -266,16 +263,20 @@ async fn reset_table(pool: &PgPool, table: &str, schema: &str) -> Result<(), sql
 }
 
 async fn seed(pool: &PgPool, shard: usize, stmt: &str) -> Result<(), sqlx::Error> {
-    pool.execute(format!("/* pgdog_shard: {} */ {}", shard, stmt).as_str())
+    pool.execute(unsafe_sql!("/* pgdog_shard: {} */ {}", shard, stmt))
         .await?;
     Ok(())
 }
 
 async fn cleanup(pool: &PgPool, table: &str) {
     for shard in [0, 1] {
-        pool.execute(format!("/* pgdog_shard: {} */ DROP TABLE {}", shard, table).as_str())
-            .await
-            .ok();
+        pool.execute(unsafe_sql!(
+            "/* pgdog_shard: {} */ DROP TABLE {}",
+            shard,
+            table
+        ))
+        .await
+        .ok();
     }
 }
 
@@ -283,8 +284,8 @@ async fn combined_max(table: &str, column: &str) -> Result<f64, sqlx::Error> {
     let mut max_val: Option<f64> = None;
     for url in SHARD_URLS {
         let mut conn = PgConnection::connect(url).await?;
-        let query = format!("SELECT MAX({})::float8 FROM {}", column, table);
-        let val: Option<f64> = sqlx::query_scalar(&query).fetch_one(&mut conn).await?;
+        let query = unsafe_sql!("SELECT MAX({})::float8 FROM {}", column, table);
+        let val: Option<f64> = sqlx::query_scalar(query).fetch_one(&mut conn).await?;
         if let Some(v) = val {
             max_val = Some(max_val.map_or(v, |m| m.max(v)));
         }

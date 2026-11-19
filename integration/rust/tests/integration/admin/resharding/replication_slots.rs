@@ -94,7 +94,7 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
     assert!(row.get::<Option<i64>, _>("task_id").is_some());
 
     admin
-        .execute(format!("STOP_TASK {task_id}").as_str())
+        .execute(unsafe_sql!("STOP_TASK {task_id}"))
         .await
         .expect("replication stop must succeed");
     wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;

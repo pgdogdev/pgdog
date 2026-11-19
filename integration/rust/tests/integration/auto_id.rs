@@ -6,19 +6,16 @@ use sqlx::{Executor, Pool, Postgres};
 const AUTO_ID_TABLE: &str = "auto_id_test";
 
 async fn prepare_auto_id_table(pool: &Pool<Postgres>, admin: &Pool<Postgres>) {
-    pool.execute(format!("DROP TABLE IF EXISTS {AUTO_ID_TABLE}").as_str())
+    pool.execute(unsafe_sql!("DROP TABLE IF EXISTS {AUTO_ID_TABLE}"))
         .await
         .unwrap();
-    pool.execute(
-        format!(
-            "CREATE TABLE {AUTO_ID_TABLE} (
+    pool.execute(unsafe_sql!(
+        "CREATE TABLE {AUTO_ID_TABLE} (
                 id BIGINT PRIMARY KEY,
                 customer_id BIGINT NOT NULL,
                 name TEXT
             )"
-        )
-        .as_str(),
-    )
+    ))
     .await
     .unwrap();
     // Enable rewrites and reload config so schema is picked up
@@ -27,7 +24,7 @@ async fn prepare_auto_id_table(pool: &Pool<Postgres>, admin: &Pool<Postgres>) {
 }
 
 async fn cleanup_auto_id_table(pool: &Pool<Postgres>) {
-    pool.execute(format!("DROP TABLE IF EXISTS {AUTO_ID_TABLE}").as_str())
+    pool.execute(unsafe_sql!("DROP TABLE IF EXISTS {AUTO_ID_TABLE}"))
         .await
         .ok();
     admin_sqlx().await.execute("RELOAD").await.unwrap();
@@ -47,7 +44,7 @@ async fn test_auto_id_rewrite_mode_injects_id() {
         .unwrap();
 
     // Use unique values to avoid AST cache collision with other tests
-    let result = sqlx::query(&format!(
+    let result = sqlx::query(unsafe_sql!(
         "INSERT INTO {AUTO_ID_TABLE} (customer_id, name) VALUES (100, 'rewrite_test')"
     ))
     .execute(&pool)
@@ -59,7 +56,7 @@ async fn test_auto_id_rewrite_mode_injects_id() {
         result.err()
     );
 
-    let row: (i64, i64, String) = sqlx::query_as(&format!(
+    let row: (i64, i64, String) = sqlx::query_as(unsafe_sql!(
         "SELECT id, customer_id, name FROM {AUTO_ID_TABLE} WHERE customer_id = 100"
     ))
     .fetch_one(&pool)
@@ -82,7 +79,7 @@ async fn test_auto_id_error_mode_rejects_missing_pk() {
     prepare_auto_id_table(&pool, &admin).await;
 
     // Verify table exists and has expected structure
-    let check: (i64,) = sqlx::query_as(&format!(
+    let check: (i64,) = sqlx::query_as(unsafe_sql!(
         "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '{}'",
         AUTO_ID_TABLE
     ))
@@ -101,7 +98,7 @@ async fn test_auto_id_error_mode_rejects_missing_pk() {
         .unwrap();
 
     // Use unique values to avoid AST cache collision with other tests
-    let err = sqlx::query(&format!(
+    let err = sqlx::query(unsafe_sql!(
         "INSERT INTO {AUTO_ID_TABLE} (customer_id, name) VALUES (200, 'error_test')"
     ))
     .execute(&pool)
@@ -135,7 +132,7 @@ async fn test_auto_id_ignore_mode_allows_missing_pk() {
 
     // Use unique values to avoid AST cache collision with other tests
     // Insert without 'id' - should fail at DB level (NOT NULL from PRIMARY KEY)
-    let err = sqlx::query(&format!(
+    let err = sqlx::query(unsafe_sql!(
         "INSERT INTO {AUTO_ID_TABLE} (customer_id, name) VALUES (300, 'ignore_test')"
     ))
     .execute(&pool)
@@ -166,7 +163,7 @@ async fn test_auto_id_with_explicit_pk_no_injection() {
         .unwrap();
 
     // Use unique values to avoid AST cache collision with other tests
-    let result = sqlx::query(&format!(
+    let result = sqlx::query(unsafe_sql!(
         "INSERT INTO {AUTO_ID_TABLE} (id, customer_id, name) VALUES (42, 400, 'explicit_test')"
     ))
     .execute(&pool)
@@ -178,7 +175,7 @@ async fn test_auto_id_with_explicit_pk_no_injection() {
         result.err()
     );
 
-    let row: (i64, i64, String) = sqlx::query_as(&format!(
+    let row: (i64, i64, String) = sqlx::query_as(unsafe_sql!(
         "SELECT id, customer_id, name FROM {AUTO_ID_TABLE} WHERE id = 42"
     ))
     .fetch_one(&pool)
@@ -210,7 +207,7 @@ async fn test_auto_id_multi_row_insert() {
         .unwrap();
 
     // Use unique values to avoid AST cache collision with other tests
-    let result = sqlx::query(&format!(
+    let result = sqlx::query(unsafe_sql!(
         "INSERT INTO {AUTO_ID_TABLE} (customer_id, name) VALUES (500, 'multi_first'), (500, 'multi_second')"
     ))
     .execute(&pool)
@@ -222,7 +219,7 @@ async fn test_auto_id_multi_row_insert() {
         result.err()
     );
 
-    let rows: Vec<(i64, i64, String)> = sqlx::query_as(&format!(
+    let rows: Vec<(i64, i64, String)> = sqlx::query_as(unsafe_sql!(
         "SELECT id, customer_id, name FROM {AUTO_ID_TABLE} WHERE customer_id = 500 ORDER BY name"
     ))
     .fetch_all(&pool)
@@ -253,7 +250,7 @@ async fn test_auto_id_default_replaced_with_unique_id() {
         .unwrap();
 
     // Insert with DEFAULT as primary key value - should be replaced with unique_id
-    let result = sqlx::query(&format!(
+    let result = sqlx::query(unsafe_sql!(
         "INSERT INTO {AUTO_ID_TABLE} (id, customer_id, name) VALUES (DEFAULT, 600, 'default_test')"
     ))
     .execute(&pool)
@@ -265,7 +262,7 @@ async fn test_auto_id_default_replaced_with_unique_id() {
         result.err()
     );
 
-    let row: (i64, i64, String) = sqlx::query_as(&format!(
+    let row: (i64, i64, String) = sqlx::query_as(unsafe_sql!(
         "SELECT id, customer_id, name FROM {AUTO_ID_TABLE} WHERE customer_id = 600"
     ))
     .fetch_one(&pool)

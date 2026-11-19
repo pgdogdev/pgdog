@@ -227,7 +227,9 @@ async fn shard_consistency_data_row_validator_prepared_statement()
 
     // Now prepare a statement against the views.
     let result = sharded
-        .prepare("SELECT * FROM datarow_view WHERE id > $1")
+        .prepare(sqlx::SqlStr::from_static(
+            "SELECT * FROM datarow_view WHERE id > $1",
+        ))
         .await;
 
     // We want this test to specifically trigger DataRow validation, not RowDescription validation

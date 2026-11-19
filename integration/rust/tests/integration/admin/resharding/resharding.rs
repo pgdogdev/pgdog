@@ -21,8 +21,11 @@ async fn test_reshard() {
     seed_rows(&direct, 20).await;
     create_publication(&direct).await;
 
-    let task_id =
-        run_task_command(&admin, &format!("RESHARD pgdog pgdog_sharded {TEST_PUB}")).await;
+    let task_id = run_task_command(
+        &admin,
+        unsafe_sql!("RESHARD pgdog pgdog_sharded {TEST_PUB}"),
+    )
+    .await;
 
     wait_for_task(&admin, "reshard task", |t| {
         t.id == Some(task_id) && t.kind == "reshard"
@@ -41,7 +44,7 @@ async fn test_reshard() {
     })
     .await;
 
-    let _ = admin.execute(format!("STOP_TASK {task_id}").as_str()).await;
+    let _ = admin.execute(unsafe_sql!("STOP_TASK {task_id}")).await;
     timeout(Duration::from_secs(30), async {
         loop {
             if Tasks::fetch(&admin).await.find(task_id).is_some_and(|t| {

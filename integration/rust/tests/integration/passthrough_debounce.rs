@@ -37,7 +37,7 @@ async fn test_passthrough_debounce_retries_same_credentials_after_expiry() {
     // NOLOGIN makes the initial validation fail even when local PostgreSQL
     // uses trust authentication. No shared test user's credentials are changed.
     direct
-        .execute(format!("CREATE ROLE {user} NOLOGIN PASSWORD 'pgdog'").as_str())
+        .execute(unsafe_sql!("CREATE ROLE {user} NOLOGIN PASSWORD 'pgdog'"))
         .await
         .expect("create temporarily disabled role");
     let url = format!("postgres://{user}:pgdog@127.0.0.1:6432/pgdog");
@@ -63,7 +63,7 @@ async fn test_passthrough_debounce_retries_same_credentials_after_expiry() {
         }
 
         direct
-            .execute(format!("ALTER ROLE {user} LOGIN").as_str())
+            .execute(unsafe_sql!("ALTER ROLE {user} LOGIN"))
             .await?;
         // Neither reload nor unban: only expiry should allow fresh validation
         // of exactly the credentials whose previous check failed.
@@ -77,7 +77,7 @@ async fn test_passthrough_debounce_retries_same_credentials_after_expiry() {
 
     admin.execute("RELOAD").await.expect("restore config");
     direct
-        .execute(format!("DROP ROLE {user}").as_str())
+        .execute(unsafe_sql!("DROP ROLE {user}"))
         .await
         .expect("remove test role");
     assert_eq!(result.expect("same credentials must work after expiry"), 1);

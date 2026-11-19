@@ -257,10 +257,10 @@ async fn test_reload_pool_size_not_exceeded() {
         admin.simple_query("RELOAD").await.unwrap();
         sleep(Duration::from_millis(100)).await;
 
-        let query = format!(
+        let query = unsafe_sql!(
             "SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = '{app_name}'"
         );
-        let count: i64 = direct.fetch_one(query.as_str()).await.unwrap().get(0);
+        let count: i64 = direct.fetch_one(query).await.unwrap().get(0);
 
         eprintln!("reload {i}: {count} connections (pool_size={pool_size})");
         assert!(
