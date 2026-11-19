@@ -9,7 +9,7 @@ pub(crate) struct LbRequest {
     request: PoolRequest,
     /// Whether the client is configured read-only.
     pub(super) read_only: bool,
-    pub(super) labels: Vec<String>,
+    pub(super) label: Option<String>,
 }
 
 impl LbRequest {
@@ -17,13 +17,12 @@ impl LbRequest {
     pub(crate) fn new(
         id: FrontendPid,
         route: &Route,
-        labels: Vec<String>,
         read_only: bool,
         created_at: Instant,
     ) -> Self {
         Self {
             request: PoolRequest::new(id, route, created_at),
-            labels,
+            label: route.label.clone(),
             read_only,
         }
     }
@@ -33,7 +32,7 @@ impl LbRequest {
         Self {
             request: PoolRequest::unrouted(id),
             read_only: false,
-            labels: Vec::new(),
+            label: None,
         }
     }
 }
@@ -43,5 +42,20 @@ impl Deref for LbRequest {
 
     fn deref(&self) -> &Self::Target {
         &self.request
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_label_is_copied_to_request() {
+        for label in [None, Some("analytics")] {
+            let mut route = Route::default();
+            route.label = label.map(str::to_owned);
+            let request = LbRequest::new(FrontendPid::default(), &route, false, Instant::now());
+            assert_eq!(request.label.as_deref(), label);
+        }
     }
 }

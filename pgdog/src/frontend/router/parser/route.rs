@@ -148,6 +148,8 @@ pub(crate) struct Route {
     table_change: TableChange,
     /// Minimum replica LSN in its 64-bit representation.
     pub(crate) lsn: Option<u64>,
+    /// Backend label requested by a routing comment.
+    pub(crate) label: Option<String>,
 }
 
 impl Display for Route {

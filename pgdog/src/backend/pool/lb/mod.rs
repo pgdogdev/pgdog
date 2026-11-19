@@ -426,6 +426,8 @@ impl LoadBalancer {
         use LoadBalancingStrategy::*;
         use smallvec::SmallVec;
 
+        let ignore_ban = request.label.is_some();
+
         let mut candidates: SmallVec<[&Target; 32]> = self
             .targets
             .iter()
@@ -439,6 +441,10 @@ impl LoadBalancer {
             });
         }
 
+        if let Some(ref label) = request.label {
+            candidates.retain(|target| target.pool.addr().labels.contains(label));
+        }
+
         let primary_reads = primary_reads(self.rw_split, request.read_only, &candidates);
 
         if !primary_reads {
@@ -449,12 +455,11 @@ impl LoadBalancer {
             return Err(Error::AllReplicasDown);
         }
 
-        // make sure we don't use the banned targets calculations,
-        // since it can skew the distribution when we have banned instances
+        // Exclude banned targets from balancing unless a label explicitly selects them.
         let mut healthy: SmallVec<[&Target; 32]> = candidates
             .iter()
             .copied()
-            .filter(|target| !target.ban.banned())
+            .filter(|target| !target.ban.banned() || ignore_ban)
             .collect();
 
         if !healthy.is_empty() {
@@ -504,7 +509,7 @@ impl LoadBalancer {
         for target in &healthy {
             // we still check banned state since the candidate
             // could be banned in the middle of `get` awaiting
-            if target.ban.banned() {
+            if target.ban.banned() && !ignore_ban {
                 continue;
             }
             match target.pool.get(request).await {

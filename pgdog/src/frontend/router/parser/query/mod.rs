@@ -109,6 +109,11 @@ impl QueryParser {
             | Command::StartTransaction { route, .. }
             | Command::CommitTransaction { route, .. }
             | Command::RollbackTransaction { route, .. } => {
+                route.label = context
+                    .router_context
+                    .comment
+                    .and_then(|comment| comment.label.clone());
+
                 if route.is_cross_shard() && context.shards == 1 {
                     context
                         .shards_calculator
