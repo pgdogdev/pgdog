@@ -8,7 +8,7 @@ use std::mem;
 use std::sync::Arc;
 
 use crate::{
-    frontend::router::{Ast, RoutingComment},
+    frontend::router::{Ast, RoutingComment, parser::comment::CommentSpans},
     net::{
         Error, Flush, Parse, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
@@ -35,6 +35,10 @@ pub(crate) struct ClientRequest {
     pub(in crate::frontend) cached: bool,
     /// Any routing comment that was present on the client's query
     pub(in crate::frontend) routing_comment: Option<Arc<RoutingComment>>,
+    /// Where the edge comments sit in the query text, recorded when the query
+    /// parser ran. Positions refer to the text as parsed, before any rewrite.
+    #[allow(dead_code)] // used by ee
+    pub(crate) comment_spans: CommentSpans,
     /// Last Parse we received.
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
@@ -65,6 +69,7 @@ impl ClientRequest {
             ast: None,
             cached: false,
             routing_comment: None,
+            comment_spans: CommentSpans::default(),
             last_parse: None,
             anonymous_client_params: None,
         }
@@ -246,6 +251,8 @@ impl ClientRequest {
             ast: self.ast.clone(),
             cached: self.cached,
             routing_comment: self.routing_comment.clone(),
+            // Positions belong to the original text, not these messages.
+            comment_spans: CommentSpans::default(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
         }
@@ -432,6 +439,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             ast: None,
             cached: false,
             routing_comment: None,
+            comment_spans: CommentSpans::default(),
             last_parse: None,
             anonymous_client_params: None,
         }

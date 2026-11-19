@@ -46,6 +46,7 @@ impl QueryEngine {
             client_request.ast = Some(ast.ast);
             client_request.cached = ast.cached;
             client_request.routing_comment = Some(ast.comment);
+            client_request.comment_spans = ast.comment_spans;
         }
         Ok(())
     }

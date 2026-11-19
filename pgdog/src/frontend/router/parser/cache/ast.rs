@@ -22,7 +22,6 @@ pub(crate) struct ClientQuery {
     pub(crate) cached: bool,
     pub(in crate::frontend) comment: Arc<RoutingComment>,
     /// Where the edge comments sit in this query's text.
-    #[allow(dead_code)] // used by ee
     pub(crate) comment_spans: CommentSpans,
     pub(crate) ast: Arc<Ast>,
 }
