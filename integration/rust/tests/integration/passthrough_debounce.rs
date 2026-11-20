@@ -18,7 +18,7 @@ async fn test_passthrough_debounce_retries_same_credentials_after_expiry() {
         .execute("SET passthrough_auth TO 'enabled_plain'")
         .await
         .expect("enable passthrough auth");
-    // Failed validation waits for checkout to time out.
+    // Bound validation in case the server doesn't answer.
     admin
         .execute("SET checkout_timeout TO 250")
         .await

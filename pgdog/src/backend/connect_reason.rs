@@ -9,6 +9,7 @@ pub(crate) enum ConnectReason {
     Probe,
     Healthcheck,
     ValidateToken,
+    PassthroughAuth,
     #[default]
     Other,
 }
