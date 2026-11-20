@@ -24,14 +24,14 @@ async fn admin_error(admin: &Pool<Postgres>, sql: &str) -> String {
 
 async fn resharding_records() -> i64 {
     let shard = connection_sqlx_direct_db("shard_0").await;
-    let exists: bool = sqlx::query_scalar("SELECT to_regclass('pgdog.resharding') IS NOT NULL")
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('__pgdog.resharding') IS NOT NULL")
         .fetch_one(&shard)
         .await
         .unwrap();
     if !exists {
         return 0;
     }
-    sqlx::query_scalar("SELECT count(*) FROM pgdog.resharding")
+    sqlx::query_scalar("SELECT count(*) FROM __pgdog.resharding")
         .fetch_one(&shard)
         .await
         .unwrap()

@@ -40,7 +40,7 @@ JOIN (
 LEFT JOIN pg_inherits i     ON i.inhrelid = c.oid           -- only present if c is a child partition
 LEFT JOIN pg_class    p     ON p.oid = i.inhparent          -- immediate parent partitioned table
 LEFT JOIN pg_namespace pn   ON pn.oid = p.relnamespace
-WHERE NOT (n.nspname = 'pgdog' AND c.relname = 'resharding')
+WHERE n.nspname <> '__pgdog'
 ORDER BY n.nspname, c.relname;";
 
 /// Table included in a publication.
@@ -411,17 +411,21 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_publication_tables_exclude_resharding_state_table() {
+    async fn test_publication_tables_exclude_state_schema() {
         let mut server = test_server().await;
 
         server.execute("BEGIN").await.unwrap();
         for query in [
-            "SELECT pg_advisory_xact_lock(hashtext('pgdog.resharding'))",
+            "SELECT pg_advisory_xact_lock(hashtext('__pgdog.resharding'))",
+            "CREATE SCHEMA IF NOT EXISTS __pgdog",
             "CREATE SCHEMA IF NOT EXISTS pgdog",
-            "CREATE TABLE IF NOT EXISTS pgdog.resharding (id UUID PRIMARY KEY)",
-            "CREATE TABLE users_logical_pub_state (id BIGINT PRIMARY KEY)",
+            "CREATE TABLE IF NOT EXISTS __pgdog.resharding (id UUID PRIMARY KEY)",
+            "CREATE TABLE __pgdog.pub_state_internal (id BIGINT PRIMARY KEY)",
+            "CREATE TABLE pgdog.pub_state_user (id BIGINT PRIMARY KEY)",
+            "CREATE TABLE public.users_logical_pub_state (id BIGINT PRIMARY KEY)",
             "CREATE PUBLICATION users_logical_pub_state
-            FOR TABLE users_logical_pub_state, pgdog.resharding",
+            FOR TABLE public.users_logical_pub_state, pgdog.pub_state_user,
+                __pgdog.resharding, __pgdog.pub_state_internal",
         ] {
             server.execute(query).await.unwrap();
         }
@@ -429,8 +433,14 @@ mod test {
         let tables = PublicationTable::load("users_logical_pub_state", &mut server)
             .await
             .unwrap();
-        let names: Vec<_> = tables.iter().map(|table| table.name.as_str()).collect();
-        assert_eq!(names, ["users_logical_pub_state"]);
+        let names: Vec<_> = tables
+            .iter()
+            .map(|table| format!("{}.{}", table.schema, table.name))
+            .collect();
+        assert_eq!(
+            names,
+            ["pgdog.pub_state_user", "public.users_logical_pub_state"]
+        );
         server.execute("ROLLBACK").await.unwrap();
     }
 

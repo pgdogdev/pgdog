@@ -6,9 +6,9 @@ source "${SCRIPT_DIR}/shared.sh"
 
 resharding_records() {
     local exists
-    exists=$(pg_sql 15434 "SELECT to_regclass('pgdog.resharding') IS NOT NULL") || return 1
+    exists=$(pg_sql 15434 "SELECT to_regclass('__pgdog.resharding') IS NOT NULL") || return 1
     if [ "${exists}" = t ]; then
-        pg_sql 15434 'SELECT count(*) FROM pgdog.resharding'
+        pg_sql 15434 'SELECT count(*) FROM __pgdog.resharding'
     else
         echo 0
     fi
@@ -30,7 +30,7 @@ initialize_resharding
 RESHARD_TASK_ID=$(psql admin -tAc 'RESHARD source destination pgdog WITH (cleanup_on_cancel false)')
 # The record is written inside the task.
 wait_for_value 1 resharding_records
-SLOT=$(pg_sql 15434 'SELECT slot_name FROM pgdog.resharding')
+SLOT=$(pg_sql 15434 'SELECT slot_name FROM __pgdog.resharding')
 prepare_resharding_verification
 wait_for_replication_catchup
 verify_resharding_data
