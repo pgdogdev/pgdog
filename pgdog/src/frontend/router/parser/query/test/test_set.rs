@@ -14,6 +14,13 @@ use super::Error;
 use super::setup::*;
 
 #[test]
+fn test_set_pgdog_role_label() {
+    let mut test = QueryParserTest::new().with_param("pgdog.role", "analytics");
+    let command = test.execute(vec![Query::new("SELECT 1").into()]);
+    assert_eq!(command.route().label.as_deref(), Some("analytics"));
+}
+
+#[test]
 fn test_set_local_default_preserves_local() {
     let mut test = QueryParserTest::new();
     for sql in [

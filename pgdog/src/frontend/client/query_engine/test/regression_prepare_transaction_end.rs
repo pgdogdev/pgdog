@@ -1,6 +1,6 @@
 use super::prelude::*;
 use crate::{
-    backend::pool::Request,
+    backend::pool::LbRequest,
     expect_message,
     net::{CommandComplete, DataRow, NoData, ParameterDescription, ParseComplete, ReadyForQuery},
 };
@@ -68,7 +68,7 @@ async fn prepare_transaction_end(sql: &str) {
     client.read_until('Z').await.unwrap();
 
     // Verify the effect on PostgreSQL directly, independently of client state.
-    let mut server = cluster.primary(0, &Request::default()).await.unwrap();
+    let mut server = cluster.primary(0, &LbRequest::default()).await.unwrap();
     let rows: Vec<i64> = server
         .fetch_all(format!("SELECT id FROM sharded WHERE id = {id}"))
         .await

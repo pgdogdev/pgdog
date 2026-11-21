@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     backend::{
         databases::User,
-        pool::{Connection, Request},
+        pool::{Connection, LbRequest},
     },
     frontend::router::{
         Route,
@@ -378,7 +378,7 @@ impl Manager {
 
         connection
             .connect(
-                &Request::default(),
+                &LbRequest::default(),
                 &Route::write(ShardWithPriority::new_override_cross_shard(Shard::All)),
             )
             .await?;

@@ -20,7 +20,7 @@ use tracing::{info, trace, warn};
 
 use super::SchemaSyncError;
 use crate::{
-    backend::{self, Cluster, pool::Request, replication::publisher::PublicationTable},
+    backend::{self, Cluster, pool::LbRequest, replication::publisher::PublicationTable},
     config::config,
     frontend::router::parser::{Column, Sequence, Table},
 };
@@ -236,7 +236,7 @@ impl PgDump {
         );
 
         for (num, shard) in self.source.shards().iter().enumerate() {
-            let mut server = shard.primary_or_replica(&Request::default()).await?;
+            let mut server = shard.primary_or_replica(&LbRequest::default()).await?;
             let tables = PublicationTable::load(&self.publication, &mut server).await?;
             if comparison.is_empty() {
                 comparison.extend(tables);

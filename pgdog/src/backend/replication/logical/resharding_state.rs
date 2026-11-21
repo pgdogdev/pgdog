@@ -11,7 +11,7 @@ use super::publisher::{Permanent, ReplicationSlot, Table};
 use super::subscriber::replication_origin::ReplicationOrigin;
 use super::tables_sync::tables_sync;
 use super::*;
-use crate::backend::pool::Request;
+use crate::backend::pool::LbRequest;
 use crate::tasks;
 use crate::util::safe_timeout;
 use crate::{backend::Cluster, util::random_string};
@@ -243,7 +243,7 @@ impl ReshardingState {
             let slot_name = slot_name.clone();
 
             async move {
-                let addr = shard.primary(&Request::default()).await?.addr().clone();
+                let addr = shard.primary(&LbRequest::default()).await?.addr().clone();
 
                 let slot =
                     ReplicationSlot::new_permanent(&publication, &addr, Some(slot_name), number);
@@ -268,7 +268,7 @@ impl ReshardingState {
 
         let mut addresses = vec![];
         for shard in self.destination.shards() {
-            addresses.push(shard.primary(&Request::default()).await?.addr().clone());
+            addresses.push(shard.primary(&LbRequest::default()).await?.addr().clone());
         }
 
         for (number, slot_name) in slots {
@@ -432,7 +432,7 @@ mod test {
 
         for (number, shard) in source.shards().iter().enumerate() {
             let addr = shard
-                .primary(&Request::default())
+                .primary(&LbRequest::default())
                 .await
                 .unwrap()
                 .addr()

@@ -461,6 +461,19 @@
           "format": "uint64",
           "minimum": 0
         },
+        "label_required": {
+          "description": "Only queries containing labels will be routed to this replica.",
+          "type": "boolean",
+          "default": false
+        },
+        "labels": {
+          "description": "Labels.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "lb_weight": {
           "description": "Used for weighted load balancing.",
           "type": "integer",

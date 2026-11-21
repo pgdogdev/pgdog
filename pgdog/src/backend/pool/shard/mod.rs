@@ -20,7 +20,7 @@ use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::Parameters;
 use crate::net::messages::FrontendPid;
 
-use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
+use super::{Error, Guard, LbRequest, LoadBalancer, Pool, PoolConfig};
 
 pub(crate) mod failover_signal;
 pub(crate) mod monitor;
@@ -79,18 +79,18 @@ impl Shard {
     }
 
     /// Get connection to the primary database.
-    pub(crate) async fn primary(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary(&self, request: &LbRequest) -> Result<Guard, Error> {
         self.lb.get_primary(request).await
     }
 
     /// Get connection to one of the replica databases, using the configured
     /// load balancing algorithm.
-    pub(crate) async fn replica(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn replica(&self, request: &LbRequest) -> Result<Guard, Error> {
         self.lb.get(request).await
     }
 
     /// Get connection to primary if configured, otherwise replica.
-    pub(crate) async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary_or_replica(&self, request: &LbRequest) -> Result<Guard, Error> {
         match self.primary(request).await {
             Ok(primary) => Ok(primary),
             _ => self.replica(request).await,
@@ -145,7 +145,7 @@ impl Shard {
     /// Fetch schema from the shard. This does not use the
     /// cache and returns the freshest schema available.
     pub(crate) async fn fetch_schema(&self) -> Result<Schema, crate::backend::Error> {
-        let mut server = self.primary_or_replica(&Request::default()).await?;
+        let mut server = self.primary_or_replica(&LbRequest::default()).await?;
         let schema = Schema::load(&mut server).await?;
 
         info!(
@@ -284,7 +284,7 @@ impl Shard {
     }
 
     /// Get parameters from first available connection pool.
-    pub(crate) async fn params(&self, request: &Request) -> Result<&Arc<Parameters>, Error> {
+    pub(crate) async fn params(&self, request: &LbRequest) -> Result<&Arc<Parameters>, Error> {
         self.lb.params(request).await
     }
 
@@ -432,7 +432,7 @@ mod test {
         for _ in 0..25 {
             let replica_id = shard.lb.targets[0].pool.id();
 
-            let conn = shard.replica(&Request::default()).await.unwrap();
+            let conn = shard.replica(&LbRequest::default()).await.unwrap();
             assert_eq!(conn.pool.id(), replica_id);
         }
 
@@ -468,7 +468,7 @@ mod test {
         let mut ids = BTreeSet::new();
 
         for _ in 0..25 {
-            let conn = shard.replica(&Request::default()).await.unwrap();
+            let conn = shard.replica(&LbRequest::default()).await.unwrap();
             ids.insert(conn.pool.id());
         }
 

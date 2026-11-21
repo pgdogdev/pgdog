@@ -21,8 +21,27 @@ fn test_comment_pgdog_lsn() {
         let command = test.execute(vec![Query::new(sql).into()]);
         let route = command.route();
         assert_eq!(route.lsn, expected, "{sql}");
-        let request = Request::new(Default::default(), route, false, Instant::now());
+        let request = Request::new(Default::default(), route, Instant::now());
         assert_eq!(request.lsn, expected, "{sql}");
+    }
+}
+
+#[test]
+fn test_comment_pgdog_label() {
+    let mut test = QueryParserTest::new();
+
+    for (sql, expected) in [
+        ("/* pgdog_role: analytics */ SELECT 1", Some("analytics")),
+        ("SELECT 1 /* pgdog_role: reporting */", Some("reporting")),
+        ("/* pgdog_role: primary */ SELECT 1", None),
+        ("SELECT 1", None),
+        (
+            "/* pgdog_role: analytics */ SHOW search_path",
+            Some("analytics"),
+        ),
+    ] {
+        let command = test.execute(vec![Query::new(sql).into()]);
+        assert_eq!(command.route().label.as_deref(), expected, "{sql}");
     }
 }
 

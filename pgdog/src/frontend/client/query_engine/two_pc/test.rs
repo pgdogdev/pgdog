@@ -1,7 +1,7 @@
 use crate::{
     backend::{
         databases::databases,
-        pool::{Connection, Request},
+        pool::{Connection, LbRequest},
     },
     config,
     frontend::router::{
@@ -24,7 +24,7 @@ async fn test_cleanup_transaction_phase_one() {
 
     let mut conn = Connection::new(cluster.user(), cluster.name(), false).unwrap();
     conn.connect(
-        &Request::default(),
+        &LbRequest::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
     )
     .await
@@ -60,7 +60,7 @@ async fn test_cleanup_transaction_phase_one() {
     assert!(transactions.is_empty());
 
     conn.connect(
-        &Request::default(),
+        &LbRequest::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
     )
     .await
@@ -96,7 +96,7 @@ async fn test_cleanup_transaction_phase_two() {
 
     let mut conn = Connection::new(cluster.user(), cluster.name(), false).unwrap();
     conn.connect(
-        &Request::default(),
+        &LbRequest::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
     )
     .await
@@ -137,7 +137,7 @@ async fn test_cleanup_transaction_phase_two() {
     assert!(transactions.is_empty());
 
     conn.connect(
-        &Request::default(),
+        &LbRequest::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
     )
     .await

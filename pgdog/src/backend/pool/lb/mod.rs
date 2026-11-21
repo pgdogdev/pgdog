@@ -20,16 +20,18 @@ use crate::{
     net::Parameters,
 };
 
-use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole, Request};
+use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole};
 use crate::util::safe_timeout;
 
 pub(crate) mod ban;
 pub(crate) mod monitor;
+pub(crate) mod request;
 pub(crate) mod target_health;
 
 use ban::Ban;
 pub(crate) use ban::UnbanReason;
 use monitor::*;
+pub(crate) use request::LbRequest;
 pub(crate) use target_health::*;
 
 #[cfg(test)]
@@ -51,6 +53,12 @@ impl Candidate for &Target {
     }
 }
 
+fn has_unbanned_replica(candidates: &[impl Candidate]) -> bool {
+    candidates
+        .iter()
+        .any(|target| target.role() == Role::Replica && !target.banned())
+}
+
 /// Decide if the primary stays in `candidates` for a read.
 ///
 /// `candidates` must already exclude resharding-only targets and replicas
@@ -60,11 +68,7 @@ impl Candidate for &Target {
 fn primary_reads(rw_split: ReadWriteSplit, read_only: bool, candidates: &[impl Candidate]) -> bool {
     use ReadWriteSplit::*;
 
-    let has_unbanned_replica = || {
-        candidates
-            .iter()
-            .any(|target| target.role() == Role::Replica && !target.banned())
-    };
+    let has_unbanned_replica = || has_unbanned_replica(candidates);
 
     match rw_split {
         // If `read_only` is true, only allow if there's no replicas.
@@ -296,12 +300,12 @@ impl LoadBalancer {
     }
 
     /// Get a live connection from the pool.
-    pub(crate) async fn get(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn get(&self, request: &LbRequest) -> Result<Guard, Error> {
         self.get_internal(request).await
     }
 
     /// Get parameters from first non-banned connection pool.
-    pub(crate) async fn params(&self, request: &Request) -> Result<&Arc<Parameters>, Error> {
+    pub(crate) async fn params(&self, request: &LbRequest) -> Result<&Arc<Parameters>, Error> {
         if let Some(target) = self.targets.iter().find(|target| !target.ban.banned()) {
             return target.pool.params(request).await;
         }
@@ -407,7 +411,7 @@ impl LoadBalancer {
     ///
     /// In automatic mode, the caller waits for an election. Static
     /// replica-only configurations fail immediately with [`Error::NoPrimary`].
-    pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
+    pub(super) async fn get_primary(&self, request: &LbRequest) -> Result<Guard, Error> {
         if let Some(pool) = self.primary() {
             return pool.get(request).await;
         }
@@ -420,7 +424,7 @@ impl LoadBalancer {
     }
 
     /// Check out a read connection using the configured load balancing strategy.
-    async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
+    async fn get_internal(&self, request: &LbRequest) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
         use smallvec::SmallVec;
 
@@ -437,6 +441,12 @@ impl LoadBalancer {
             });
         }
 
+        if let Some(ref label) = request.label {
+            candidates.retain(|target| target.pool.addr().labels.contains(label));
+        } else {
+            candidates.retain(|target| !target.pool.addr().label_required);
+        }
+
         let primary_reads = primary_reads(self.rw_split, request.read_only, &candidates);
 
         if !primary_reads {
@@ -447,12 +457,14 @@ impl LoadBalancer {
             return Err(Error::AllReplicasDown);
         }
 
-        // make sure we don't use the banned targets calculations,
-        // since it can skew the distribution when we have banned instances
+        // Let labeled requests use banned targets when no unbanned replica remains.
+        let ignore_ban = request.label.is_some() && !has_unbanned_replica(&candidates);
+
+        // Exclude banned targets from balancing unless they are needed as a fallback.
         let mut healthy: SmallVec<[&Target; 32]> = candidates
             .iter()
             .copied()
-            .filter(|target| !target.ban.banned())
+            .filter(|target| !target.ban.banned() || ignore_ban)
             .collect();
 
         if !healthy.is_empty() {
@@ -502,7 +514,7 @@ impl LoadBalancer {
         for target in &healthy {
             // we still check banned state since the candidate
             // could be banned in the middle of `get` awaiting
-            if target.ban.banned() {
+            if target.ban.banned() && !ignore_ban {
                 continue;
             }
             match target.pool.get(request).await {
