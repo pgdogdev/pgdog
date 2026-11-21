@@ -5,11 +5,12 @@
 //! AST only after routing and cached independently from per-execution Bind values.
 
 use super::Error;
-use super::aggregate::{AggregatesRewrite, HelperKind};
+use super::aggregate::{AggregatesRewrite, HelperKind, disjoint_distinct};
 use super::group_by::{self, GroupByRewrite};
 use super::having;
 use super::offset::{self, OffsetPlan};
 use super::order_by;
+use crate::backend::ShardedTables;
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{
     Aggregate, AggregateFunction, Function, HavingRewritePlan, OrderBy, aggregate::GroupByKey,
@@ -64,6 +65,9 @@ pub(crate) struct ProjectionRewritePlan {
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
     pub(crate) having: Option<Box<HavingRewriteResult>>,
     pub(crate) group_by: Option<Box<GroupByRewrite>>,
+    /// SELECT list positions of `DISTINCT` aggregates over the sharding key.
+    /// Shards never share a key, so these merge like the plain aggregate.
+    pub(crate) disjoint_distinct: Vec<usize>,
 }
 
 /// The filter and aggregate metadata produced by rewriting a HAVING query.
@@ -97,6 +101,7 @@ impl ProjectionRewritePlan {
             && self.order_by_helpers.is_empty()
             && self.having.is_none()
             && self.group_by.is_none()
+            && self.disjoint_distinct.is_empty()
     }
 
     /// The aggregate of the rewritten query, if it differs from the client's.
@@ -141,6 +146,7 @@ pub(crate) struct PostRouteRewrite {
 pub(crate) fn finalize_after_route(
     request: &mut ClientRequest,
     schema: &Schema,
+    tables: &ShardedTables,
     offset_plan: Option<&OffsetPlan>,
 ) -> Result<(), Error> {
     if !request.route().is_cross_shard() {
@@ -153,7 +159,7 @@ pub(crate) fn finalize_after_route(
     let rewrite_offset = offset_plan.is_some_and(|plan| !plan.prepare_execute);
     let Some(rewrite) = ast
         .post_route_rewrite
-        .get_or_try_init(|| build(&ast.ast, schema, rewrite_offset))?
+        .get_or_try_init(|| build(&ast.ast, schema, tables, rewrite_offset))?
     else {
         return Ok(());
     };
@@ -279,6 +285,7 @@ pub(crate) fn pages_merged_groups(select: &nodes::SelectStmt, aggregate: &Aggreg
 fn build(
     ast: &StmtList,
     schema: &Schema,
+    tables: &ShardedTables,
     rewrite_offset: bool,
 ) -> Result<Option<PostRouteRewrite>, Error> {
     let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
@@ -330,7 +337,10 @@ fn build(
         return Err(Error::OrderByExpressionUnsupported);
     }
 
-    let mut plan = ProjectionRewritePlan::default();
+    let mut plan = ProjectionRewritePlan {
+        disjoint_distinct: disjoint_distinct(select, tables),
+        ..Default::default()
+    };
     let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
         if has_having {
@@ -457,13 +467,51 @@ mod tests {
 
     use super::*;
     use crate::backend::schema::relation::Relation;
+    use crate::frontend::router::sharding::ShardedTable;
+
+    #[test]
+    fn count_distinct_on_sharding_key_is_planned() {
+        let tables = ShardedTables::from(
+            [ShardedTable {
+                name: Some("items".into()),
+                column: "id".into(),
+                ..Default::default()
+            }]
+            .as_slice(),
+        );
+
+        // (query, sharded tables, SELECT list positions that merge as a plain count)
+        for (sql, tables, expected) in [
+            ("SELECT count(DISTINCT id) FROM items", &tables, vec![0]),
+            (
+                "SELECT value, count(DISTINCT id) FROM items GROUP BY value HAVING count(*) > 1",
+                &tables,
+                vec![1],
+            ),
+            ("SELECT count(DISTINCT value) FROM items", &tables, vec![]),
+            (
+                "SELECT count(DISTINCT id) FROM items",
+                &ShardedTables::default(),
+                vec![],
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let rewrite = build(&ast, &Schema::default(), tables, false).unwrap();
+            let marked = rewrite
+                .as_ref()
+                .and_then(|rewrite| rewrite.plan.as_deref())
+                .map(|plan| plan.disjoint_distinct.as_slice())
+                .unwrap_or_default();
+            assert_eq!(marked, expected, "{sql}");
+        }
+    }
 
     #[test]
     fn rejects_count_sort_key() {
         let ast = pg_raw_parse::parse("SELECT value FROM items GROUP BY value ORDER BY count(*)")
             .unwrap();
 
-        let rewrite_result = build(&ast, &Schema::default(), false);
+        let rewrite_result = build(&ast, &Schema::default(), &ShardedTables::default(), false);
 
         assert!(matches!(
             rewrite_result,
@@ -504,7 +552,7 @@ mod tests {
             ),
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
-            let rewrite = build(&ast, &Schema::default(), false)
+            let rewrite = build(&ast, &Schema::default(), &ShardedTables::default(), false)
                 .unwrap()
                 .expect("GROUP BY requires a rewrite");
             assert_eq!(&*rewrite.sql, shard_sql, "{sql}");
@@ -520,7 +568,9 @@ mod tests {
     fn hidden_group_by_keys_are_dropped() {
         let ast =
             pg_raw_parse::parse("SELECT category FROM items GROUP BY category, region").unwrap();
-        let rewrite = build(&ast, &Schema::default(), false).unwrap().unwrap();
+        let rewrite = build(&ast, &Schema::default(), &ShardedTables::default(), false)
+            .unwrap()
+            .unwrap();
         let row_description = RowDescription::new(&[
             crate::net::Field::text("category"),
             crate::net::Field::text("__pgdog_group_0"),
@@ -539,7 +589,9 @@ mod tests {
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             assert!(
-                build(&ast, &Schema::default(), false).unwrap().is_none(),
+                build(&ast, &Schema::default(), &ShardedTables::default(), false)
+                    .unwrap()
+                    .is_none(),
                 "{sql}"
             );
         }
@@ -554,16 +606,22 @@ mod tests {
             "SELECT category, count(*) FROM items GROUP BY GROUPING SETS ((category), ())",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
-            let error = build(&ast, &Schema::default(), false).unwrap_err();
+            let error =
+                build(&ast, &Schema::default(), &ShardedTables::default(), false).unwrap_err();
             assert!(matches!(error, Error::UnsupportedGroupBy(_)), "{sql}");
         }
     }
 
     fn shard_sql(sql: &str, rewrite_offset: bool) -> Option<String> {
         let ast = pg_raw_parse::parse(sql).unwrap();
-        build(&ast, &Schema::default(), rewrite_offset)
-            .unwrap()
-            .map(|rewrite| rewrite.sql.to_string())
+        build(
+            &ast,
+            &Schema::default(),
+            &ShardedTables::default(),
+            rewrite_offset,
+        )
+        .unwrap()
+        .map(|rewrite| rewrite.sql.to_string())
     }
 
     #[test]
@@ -657,7 +715,8 @@ mod tests {
             "SELECT category, COUNT(*) FROM items GROUP BY category LIMIT $1::numeric",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
-            let error = build(&ast, &Schema::default(), false).unwrap_err();
+            let error =
+                build(&ast, &Schema::default(), &ShardedTables::default(), false).unwrap_err();
             assert!(matches!(error, Error::UnsupportedGroupBy(_)), "{sql}");
         }
     }
@@ -713,7 +772,7 @@ mod tests {
              FROM purchases GROUP BY __pgdog_having_0 HAVING COUNT(*) > 2",
         )
         .unwrap();
-        let rewrite = build(&ast, &Schema::default(), false)
+        let rewrite = build(&ast, &Schema::default(), &ShardedTables::default(), false)
             .unwrap()
             .expect("HAVING requires a rewrite");
 
@@ -758,7 +817,7 @@ mod tests {
             ),
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
-            let rewrite = build(&ast, &Schema::default(), false)
+            let rewrite = build(&ast, &Schema::default(), &ShardedTables::default(), false)
                 .unwrap()
                 .expect("HAVING requires a rewrite");
             let plan = rewrite.plan.expect("projection plan");
@@ -819,7 +878,7 @@ mod tests {
             let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
                 panic!("expected SELECT")
             };
-            let rewrite = build(&ast, &schema, false).unwrap();
+            let rewrite = build(&ast, &schema, &ShardedTables::default(), false).unwrap();
             assert_eq!(
                 rewrite.as_ref().map(|rewrite| rewrite.sql.as_ref()),
                 shard_sql,
@@ -860,7 +919,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            build(&ast, &Schema::default(), false),
+            build(&ast, &Schema::default(), &ShardedTables::default(), false),
             Err(Error::UnsupportedGroupBy(_))
         ));
     }
@@ -896,7 +955,7 @@ mod tests {
             ),
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
-            let error = build(&ast, schema, false).unwrap_err();
+            let error = build(&ast, schema, &ShardedTables::default(), false).unwrap_err();
             assert!(
                 matches!(
                     error,
@@ -926,7 +985,7 @@ mod tests {
             ),
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
-            let rewrite = build(&ast, &schema, false)
+            let rewrite = build(&ast, &schema, &ShardedTables::default(), false)
                 .unwrap()
                 .expect("HAVING requires a rewrite");
             assert_eq!(rewrite.sql.as_ref(), shard_sql, "{sql}");
@@ -958,7 +1017,8 @@ mod tests {
              HAVING COUNT(*) > 2 LIMIT (SELECT 1)",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
-            let error = build(&ast, &Schema::default(), false).unwrap_err();
+            let error =
+                build(&ast, &Schema::default(), &ShardedTables::default(), false).unwrap_err();
             assert!(matches!(error, Error::UnsupportedHaving(_)), "{sql}");
         }
     }

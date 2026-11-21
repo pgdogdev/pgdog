@@ -1,6 +1,6 @@
 use crate::{
     expect_message,
-    net::{CommandComplete, Parameters, Query, ReadyForQuery},
+    net::{CommandComplete, DataRow, Parameters, Query, ReadyForQuery, RowDescription},
 };
 
 use super::prelude::*;
@@ -254,4 +254,53 @@ async fn test_sharded_delete_returning_from_all_shards() {
     let cc_msg = messages.iter().find(|m| m.code() == 'C').unwrap();
     let cc = CommandComplete::try_from(cc_msg.clone()).unwrap();
     assert_eq!(cc.command(), "DELETE 2");
+}
+
+#[tokio::test]
+async fn test_sharded_count_distinct_on_sharding_key_sums_shards() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    let id_shard0 = client.random_id_for_shard(0);
+    let id_shard1 = client.random_id_for_shard(1);
+    let ids = format!("{}, {}", id_shard0, id_shard1);
+
+    // Cleanup first
+    client
+        .send_simple(Query::new(format!(
+            "DELETE FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client
+        .send_simple(Query::new(format!(
+            "INSERT INTO sharded (id, value) VALUES ({}, 'cd1'), ({}, 'cd2')",
+            id_shard0, id_shard1
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    // Each shard counts its own key; no key is on both, so the counts add up.
+    client
+        .send_simple(Query::new(format!(
+            "SELECT count(DISTINCT id), count(DISTINCT id)::int FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    expect_message!(client.read().await, RowDescription);
+    let row = expect_message!(client.read().await, DataRow);
+    assert_eq!(row.get_int(0, true), Some(2));
+    assert_eq!(row.get_int(1, true), Some(2));
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SELECT 1"
+    );
+    expect_message!(client.read().await, ReadyForQuery);
+
+    // Cleanup
+    client
+        .send_simple(Query::new(format!(
+            "DELETE FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
 }

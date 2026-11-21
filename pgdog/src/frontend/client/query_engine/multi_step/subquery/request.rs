@@ -44,6 +44,7 @@ impl<'a> SubqueryMulti<'a> {
                     projection::finalize_after_route(
                         &mut client_request,
                         &cluster.schema(),
+                        cluster.sharded_tables(),
                         rewrite_result.offset_plan(),
                     )?;
 

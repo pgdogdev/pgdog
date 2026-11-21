@@ -1,3 +1,4 @@
+use crate::backend::ShardedTables;
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::Limit;
 use crate::frontend::router::parser::rewrite::statement::{
@@ -157,6 +158,7 @@ async fn test_offset_with_unique_id_simple() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         rewrite_result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -232,6 +234,7 @@ async fn test_offset_with_unique_id_extended() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         rewrite_result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -284,6 +287,7 @@ async fn split_anonymous_pagination_keeps_original_plan() {
         projection::finalize_after_route(
             client_request,
             &Schema::default(),
+            &ShardedTables::default(),
             result.as_ref().and_then(RewriteResult::offset_plan),
         )
         .unwrap();
@@ -318,6 +322,7 @@ async fn split_anonymous_pagination_keeps_original_plan() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
