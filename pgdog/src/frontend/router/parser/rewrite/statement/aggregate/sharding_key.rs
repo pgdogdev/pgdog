@@ -8,13 +8,14 @@ use itertools::Itertools;
 use pg_raw_parse::{Node, nodes};
 
 use crate::backend::replication::ShardedTables;
+use crate::frontend::router::parser::rewrite::statement::projection::Positions;
 use crate::frontend::router::parser::{AggregateFunction, Column, Function, Table};
 
 /// SELECT list positions of `count(DISTINCT key)`, where `key` is the sharding key.
 ///
 /// No two shards count the same key, so their counts add up to the distinct
 /// count across all of them, with or without `GROUP BY`.
-pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTables) -> Vec<usize> {
+pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTables) -> Positions {
     // Resolved on the first DISTINCT aggregate; most queries have none.
     let mut key = None;
 
@@ -26,6 +27,10 @@ pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTabl
             let Some(call) = Function::extract_func_call(target.val()) else {
                 return false;
             };
+            // Checked first: it's the cheapest test and most aggregates fail it.
+            if !call.agg_distinct {
+                return false;
+            }
             let is_count = call
                 .funcname()
                 .iter()
@@ -33,7 +38,7 @@ pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTabl
                 .next_back()
                 .and_then(AggregateFunction::from_builtin_name)
                 == Some(AggregateFunction::Count);
-            if !call.agg_distinct || !is_count {
+            if !is_count {
                 return false;
             }
             let Ok(argument) = call.args().iter().exactly_one() else {
@@ -194,7 +199,11 @@ mod tests {
                 vec![],
             ),
         ] {
-            assert_eq!(disjoint_distinct(&select(sql), &tables), expected, "{sql}");
+            assert_eq!(
+                disjoint_distinct(&select(sql), &tables),
+                Positions::from_iter(expected),
+                "{sql}"
+            );
         }
     }
 

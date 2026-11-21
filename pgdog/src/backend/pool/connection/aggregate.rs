@@ -6,7 +6,10 @@ use std::mem;
 use crate::{
     frontend::router::parser::{
         Aggregate, AggregateFunction, AggregateTarget,
-        rewrite::statement::{aggregate::HelperKind, projection::ProjectionRewritePlan},
+        rewrite::statement::{
+            aggregate::HelperKind,
+            projection::{Positions, ProjectionRewritePlan},
+        },
     },
     net::{
         Decoder,
@@ -71,7 +74,7 @@ impl<'a> Accumulator<'a> {
     pub(crate) fn from_aggregate(
         aggregate: &'a Aggregate,
         helpers: &HashMap<usize, HelperColumns>,
-        disjoint_distinct: &[usize],
+        disjoint_distinct: Positions,
     ) -> Result<Vec<Self>, Error> {
         aggregate
             .targets()
@@ -81,11 +84,7 @@ impl<'a> Accumulator<'a> {
 
                 let accumulator = Accumulator {
                     target,
-                    state: State::new(
-                        target,
-                        helper,
-                        disjoint_distinct.contains(&target.column()),
-                    )?,
+                    state: State::new(target, helper, disjoint_distinct.contains(target.column()))?,
                 };
 
                 Ok(accumulator)
@@ -278,7 +277,7 @@ pub(super) struct Aggregates<'a> {
     decoder: &'a Decoder,
     aggregate: &'a Aggregate,
     helper_columns: HashMap<usize, HelperColumns>,
-    disjoint_distinct: &'a [usize],
+    disjoint_distinct: Positions,
 }
 
 impl<'a> Aggregates<'a> {
@@ -286,7 +285,7 @@ impl<'a> Aggregates<'a> {
         rows: &'a VecDeque<DataRow>,
         decoder: &'a Decoder,
         aggregate: &'a Aggregate,
-        plan: Option<&'a ProjectionRewritePlan>,
+        plan: Option<&ProjectionRewritePlan>,
     ) -> Option<Self> {
         let mut helper_columns: HashMap<usize, HelperColumns> = HashMap::new();
 
@@ -349,9 +348,7 @@ impl<'a> Aggregates<'a> {
                 mappings: HashMap::new(),
                 aggregate,
                 helper_columns,
-                disjoint_distinct: plan
-                    .map(|plan| plan.disjoint_distinct.as_slice())
-                    .unwrap_or_default(),
+                disjoint_distinct: plan.map(|plan| plan.disjoint_distinct).unwrap_or_default(),
             })
         } else {
             None
@@ -631,7 +628,7 @@ mod test {
         ));
 
         let plan = ProjectionRewritePlan {
-            disjoint_distinct: vec![1],
+            disjoint_distinct: Positions::from_iter([1]),
             ..Default::default()
         };
         let merged = Aggregates::new(&rows, &decoder, &aggregate, Some(&plan))

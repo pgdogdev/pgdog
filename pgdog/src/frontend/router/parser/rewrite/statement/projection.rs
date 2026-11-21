@@ -67,7 +67,38 @@ pub(crate) struct ProjectionRewritePlan {
     pub(crate) group_by: Option<Box<GroupByRewrite>>,
     /// SELECT list positions of `DISTINCT` aggregates over the sharding key.
     /// Shards never share a key, so these merge like the plain aggregate.
-    pub(crate) disjoint_distinct: Vec<usize>,
+    pub(crate) disjoint_distinct: Positions,
+}
+
+/// A set of SELECT list positions, kept in one word so that a plan
+/// carrying none costs no allocation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Positions(u64);
+
+impl Positions {
+    /// Positions past the last bit are never in the set.
+    fn bit(position: usize) -> Option<u64> {
+        1u64.checked_shl(u32::try_from(position).ok()?)
+    }
+
+    pub(crate) fn contains(self, position: usize) -> bool {
+        Self::bit(position).is_some_and(|bit| self.0 & bit != 0)
+    }
+
+    pub(crate) fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl FromIterator<usize> for Positions {
+    fn from_iter<I: IntoIterator<Item = usize>>(positions: I) -> Self {
+        Self(
+            positions
+                .into_iter()
+                .filter_map(Self::bit)
+                .fold(0, |set, bit| set | bit),
+        )
+    }
 }
 
 /// The filter and aggregate metadata produced by rewriting a HAVING query.
@@ -470,6 +501,19 @@ mod tests {
     use crate::frontend::router::sharding::ShardedTable;
 
     #[test]
+    fn positions_past_the_last_bit_are_not_in_the_set() {
+        let positions = Positions::from_iter([0, 63, 64, usize::MAX]);
+
+        assert!(positions.contains(0));
+        assert!(positions.contains(63));
+        assert!(!positions.contains(1));
+        assert!(!positions.contains(64));
+        assert!(!positions.contains(usize::MAX));
+        assert!(!positions.is_empty());
+        assert!(Positions::from_iter([64]).is_empty());
+    }
+
+    #[test]
     fn count_distinct_on_sharding_key_is_planned() {
         let tables = ShardedTables::from(
             [ShardedTable {
@@ -500,9 +544,9 @@ mod tests {
             let marked = rewrite
                 .as_ref()
                 .and_then(|rewrite| rewrite.plan.as_deref())
-                .map(|plan| plan.disjoint_distinct.as_slice())
+                .map(|plan| plan.disjoint_distinct)
                 .unwrap_or_default();
-            assert_eq!(marked, expected, "{sql}");
+            assert_eq!(marked, Positions::from_iter(expected), "{sql}");
         }
     }
 
