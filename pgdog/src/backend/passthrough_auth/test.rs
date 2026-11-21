@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use pgdog_config::{
     Config, ConfigAndUsers, Database, General, LoadSchema, PassthroughAuth, Role, User, Users,
@@ -122,6 +123,28 @@ async fn new_user_requires_database_validation() {
     assert_eq!(result, AuthResult::NoPasswordMatch);
     assert!(Arc::ptr_eq(&before, &config()));
     assert!(config().users.find(&passthrough_user("")).is_none());
+}
+
+#[tokio::test]
+async fn wrong_password_is_rejected_before_checkout_timeout() {
+    setup(PassthroughAuth::EnabledPlain, vec![]);
+    let mut config_and_users = (*config()).clone();
+    config_and_users.config.general.checkout_timeout = 10_000;
+    set(config_and_users).expect("set checkout timeout");
+
+    let started = Instant::now();
+    let result = check_or_add(passthrough_user("wrong"))
+        .await
+        .expect("authenticate");
+
+    assert_eq!(result, AuthResult::NoPasswordMatch);
+    // PostgreSQL rejects the password immediately, so the client should not
+    // wait for checkout_timeout.
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test]
