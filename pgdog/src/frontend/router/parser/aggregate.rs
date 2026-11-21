@@ -363,21 +363,19 @@ impl Aggregate {
             .iter()
             .enumerate()
             .filter_map(|(idx, node)| {
-                let func = Function::try_from(node.val()).ok()?;
-                let function = AggregateFunction::from_name(func.name, schema)?;
-
-                // FIXME: This doesn't correctly handle distinct behind type
-                // casts any other nodes that Function::try_from handles
-                let distinct = if let Node::FuncCall(func) = node.val() {
-                    func.agg_distinct
-                } else {
-                    false
-                };
+                // The call may sit behind a cast, e.g. `count(DISTINCT x)::int`.
+                let call = Function::extract_func_call(node.val())?;
+                let name = call
+                    .funcname()
+                    .iter()
+                    .filter_map(Node::as_str)
+                    .next_back()?;
+                let function = AggregateFunction::from_name(name, schema)?;
 
                 Some(AggregateTarget {
                     column: idx,
                     function,
-                    distinct,
+                    distinct: call.agg_distinct,
                 })
             })
             .collect();
@@ -463,6 +461,20 @@ mod test {
         assert!(matches!(avg.function(), AggregateFunction::Avg));
         assert!(count.is_distinct());
         assert!(!avg.is_distinct());
+    }
+
+    #[test]
+    fn test_parse_distinct_behind_cast() {
+        let aggr = parse(
+            "SELECT COUNT(DISTINCT price)::int, CAST(SUM(DISTINCT price) AS numeric)::text, \
+             COUNT(price)::int FROM menu",
+        );
+        let distinct = aggr
+            .targets()
+            .iter()
+            .map(AggregateTarget::is_distinct)
+            .collect::<Vec<_>>();
+        assert_eq!(distinct, vec![true, true, false]);
     }
 
     #[test]

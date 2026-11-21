@@ -19,6 +19,11 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             "unsupported aggregation count: count(DISTINCT ...) is not yet supported",
         ),
         (
+            // The cast must not hide DISTINCT and let per-shard counts be summed.
+            "SELECT count(DISTINCT value)::int FROM sharded",
+            "unsupported aggregation count: count(DISTINCT ...) is not yet supported",
+        ),
+        (
             "SELECT count(*) FROM sharded HAVING count(*) > 0 LIMIT (SELECT 1)",
             "cross-shard HAVING is unsupported: \
              LIMIT and OFFSET must be integer arithmetic over literals and parameters",
