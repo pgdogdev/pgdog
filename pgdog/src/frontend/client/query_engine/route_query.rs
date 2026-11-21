@@ -162,6 +162,7 @@ impl QueryEngine {
                 match projection::finalize_after_route(
                     client_request,
                     &cluster.schema(),
+                    cluster.sharded_tables(),
                     rewrite_result.and_then(RewriteResult::offset_plan),
                 ) {
                     Ok(()) => {}

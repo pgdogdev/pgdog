@@ -1,11 +1,10 @@
 mod engine;
-// Used by the DISTINCT aggregate rewrite.
-#[cfg_attr(not(test), expect(dead_code))]
 mod sharding_key;
 
 pub(crate) use super::projection::AggregateHelper;
 
 pub(crate) use engine::AggregatesRewrite;
+pub(crate) use sharding_key::disjoint_distinct;
 
 /// Type of aggregate function added to the result set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
