@@ -269,6 +269,24 @@ impl<'a> SubqueryMulti<'a> {
             ));
         }
 
+        // If the subquery only returns constants, we don't have any columns to send, however unnest() needs at least one argument
+        // E.g., to count at most 40 rows (.limit(40).count), Rails sends SELECT COUNT(*) FROM (SELECT 1 AS one FROM users WHERE .. LIMIT 40) subquery_for_count, where the subquery returns the constant 1 for each row that it matches (up to 40)
+        //
+        // To solve this, we send an array with a NULL per row that the subquery returned to ensure that unnest(..) returns as many rows as the subquery
+        // E.g., if the subquery returns 3 rows, we send {NULL,NULL,NULL}, and SELECT 1 FROM unnest($1::pg_catalog._int4) u(c1), which
+        // returns the same exact response: 1 for each of the 3 rows
+        if param_refs.is_empty() {
+            param_refs.push(push_unnest_argument(
+                mem,
+                old_bind,
+                INT4_OID,
+                "_int4",
+                std::iter::repeat_n(None, data_rows.len()),
+            ));
+
+            unnest_column_names.push(mem.make_string(Some("c1")).uncast());
+        }
+
         let list_of_param_refs = mem.make_list(param_refs.as_slice());
         let unnest_func_call = mem.make_func_call(
             mem.make_list(&[mem.make_string(Some("unnest")).uncast()]),

@@ -4,6 +4,45 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### v0.1.66
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.66` |
+
+#### Performance
+
+- Cross-shard CTEs and subqueries use `unnest` now for passing data between shards @jkaczman
+- More consistent microbenchmarks by using fixed random number generation @jkaczman
+- Faster parsing of `CommandComplete` messages @jkaczman
+- Session parameters are checked faster per request @jkaczman
+- More allocator and CPU instructions optimizations @jkaczman
+- Skip running regex on queries that don't start with comments and which are not needed for session control when query parse is off @jkaczman
+- Use binary encoding for passing data in cross-shard queries @jkaczman
+- Remove unused dependencies from build @meskill
+
+#### Bug fixes
+
+- Resharding cutover would ignore errors if connected to the control plane @meskill
+- Multiple cross-shard subqueries located in the `WHERE` clause would mix results @jkaczman
+- Passthrough auth had a race condition which could return wrong password error to a small percentage of clients on pooler startup @levkk
+- Schema sharding would incorrectly parse `search_path` session variable if it contained only one schema, e.g., `customer_b`. @tahsintunan
+- LSN monitor used very expensive `pg_control_checkpoint` on Aurora and ignored its return value anyway @levkk
+- Cross-shard key update would return an extra `ReadyForQuery` message if the transaction failed @scottjacobsen
+- Alias columns in CTEs should not be used for shard routing @jkaczman
+- Correctly handle subqueries that return only constants @jkaczman
+- Load balancer would unfairly distribute load in round robin mode if a host was banned @meskill
+
+#### Features
+
+- Add support for `bool_and`, `bool_or`, `every`, `bit_and`, and `bit_or` cross-shard aggregate functions @murex971
+- Correctly handle `SET ROLE` and `SET SESSION AUTHORIZATION` in transaction mode @murex971
+- Make more schema objects creation idempotent by using `CREATE IF NOT EXISTS` during schema sync @meskill
+- Support all Postgres built-in data types in cross-shard subqueries @jkaczman
+- Support `ARRAY` data type in subqueries @jkaczman
+- Support integer arithmetic in cross-shard `LIMIT` and `OFFSET` clauses @murex971
+- Handle column aliases in cross-shard `SELECT` statements combined with aggregates and `HAVING` clause @murex971
+
 ### v0.1.65
 
 | Application | Docker image                     |

@@ -1,5 +1,7 @@
-use pg_raw_parse::{Node, nodes};
+use pg_raw_parse::{Node, nodes, walk};
 use std::fmt;
+
+use pgdog_stats::Relation as StatsRelation;
 
 use super::Function;
 use crate::backend::schema::Schema;
@@ -105,6 +107,215 @@ fn index_of_column(stmt: &nodes::SelectStmt, qualified_column_name: &[&str]) -> 
     })
 }
 
+/// Columns every table has without listing them in its definition.
+const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "xmin", "cmin", "xmax", "cmax", "ctid"];
+
+/// What a bare `GROUP BY` name that matches a `SELECT` alias refers to.
+///
+/// Postgres looks for a column of the `FROM` tables first and falls back to
+/// the `SELECT` alias, so the schema decides which one it is, unless the
+/// `SELECT` list itself reads the column:
+///
+/// ```sql
+/// SELECT lower(name) AS name, count(*) FROM users GROUP BY name -- users.name
+/// SELECT lower(name) AS n, count(*) FROM users GROUP BY n -- lower(name)
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum GroupByAlias {
+    /// A table in `FROM` has a column with this name.
+    InputColumn,
+    /// No table has one. The name is the `SELECT` list item at this position.
+    Output(usize),
+    /// `FROM` has something other than tables found in the schema.
+    Unknown,
+}
+
+impl GroupByAlias {
+    /// Returns `None` if the column isn't a bare name matching a `SELECT` alias.
+    fn resolve(
+        stmt: &nodes::SelectStmt,
+        column: &nodes::ColumnRef,
+        schema: &Schema,
+    ) -> Option<Self> {
+        let name = bare_name(column)?;
+        let index = stmt
+            .target_list()
+            .iter()
+            .position(|target| target.name() == Some(name))?;
+
+        // `lower(name) AS name` only runs if a table has the column, so the
+        // schema isn't needed to know it's there.
+        if stmt
+            .target_list()
+            .iter()
+            .any(|target| references_column(target.val(), name))
+        {
+            return Some(Self::InputColumn);
+        }
+
+        if SYSTEM_COLUMNS.contains(&name) {
+            return Some(Self::Unknown);
+        }
+
+        let mut is_input_column = false;
+        for from in stmt.from_clause().iter() {
+            match from_has_column(from, name, schema, stmt) {
+                Some(has_column) => is_input_column |= has_column,
+                None => return Some(Self::Unknown),
+            }
+        }
+
+        Some(if is_input_column {
+            Self::InputColumn
+        } else {
+            Self::Output(index)
+        })
+    }
+}
+
+/// The name of an unqualified column reference: `name`, not `users.name`.
+fn bare_name(column: &nodes::ColumnRef) -> Option<&str> {
+    let mut fields = column.fields().into_iter();
+    let name = fields.next().and_then(Node::as_str)?;
+    fields.next().is_none().then_some(name)
+}
+
+/// Whether a SELECT list expression reads a column by this bare name.
+/// Subqueries have columns of their own, so expressions with one don't count.
+fn references_column(expression: Node<'_>, name: &str) -> bool {
+    let mut referenced = false;
+    let mut has_subquery = false;
+    walk::walk(expression, |node| match node {
+        Node::SubLink(_) => has_subquery = true,
+        Node::ColumnRef(column) => referenced |= bare_name(column) == Some(name),
+        _ => (),
+    });
+    referenced && !has_subquery
+}
+
+/// Whether a `FROM` item has a column with this name. `None` if it isn't made
+/// of tables found in the schema, e.g., a subquery, a function or a CTE.
+fn from_has_column(
+    from: Node<'_>,
+    name: &str,
+    schema: &Schema,
+    stmt: &nodes::SelectStmt,
+) -> Option<bool> {
+    // `AS t(a, b)` renames the columns.
+    let renames_columns =
+        |alias: Option<&nodes::Alias>| alias.is_some_and(|alias| !alias.colnames().is_empty());
+
+    match from {
+        Node::RangeVar(table) => {
+            let relname = table.relname()?;
+            if renames_columns(table.alias()) {
+                return None;
+            }
+            let has_column = |relation: &StatsRelation| relation.columns.contains_key(name);
+            match table.schemaname() {
+                Some(schemaname) => schema.get(schemaname, relname).map(has_column),
+                None if is_cte(stmt, relname) => None,
+                // The search path isn't known here. A column in any table
+                // with this name counts, which only ever picks the hidden
+                // column the shards check themselves.
+                None => schema
+                    .relations
+                    .values()
+                    .filter_map(|relations| relations.get(relname))
+                    .map(has_column)
+                    .reduce(|a, b| a || b),
+            }
+        }
+        Node::JoinExpr(join) => {
+            if renames_columns(join.alias()) {
+                return None;
+            }
+            let left = from_has_column(join.larg(), name, schema, stmt)?;
+            let right = from_has_column(join.rarg(), name, schema, stmt)?;
+            Some(left || right)
+        }
+        _ => None,
+    }
+}
+
+fn is_cte(stmt: &nodes::SelectStmt, name: &str) -> bool {
+    stmt.with_clause()
+        .is_some_and(|with| with.ctes().iter().any(|cte| cte.ctename() == Some(name)))
+}
+
+/// How a cross-shard merge finds the value of a `GROUP BY` item.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum GroupByKey {
+    /// `GROUP BY 1`: the `SELECT` list item at this position.
+    Ordinal(usize),
+    /// A column that's also in the `SELECT` list, at this position.
+    SelectedColumn(usize),
+    /// A `SELECT` alias, for the item at this position.
+    Alias(usize),
+    /// Not in the `SELECT` list. Shards have to return it as a hidden column.
+    Unselected,
+    /// A name PgDog can't tell is a `SELECT` alias or a table column. Shards
+    /// can't resolve a `SELECT` alias inside a hidden column.
+    UnresolvedAlias,
+    /// `GROUPING SETS`, `ROLLUP` or `CUBE`: a merged row can't tell which
+    /// grouping set it came from.
+    GroupingSet,
+}
+
+impl GroupByKey {
+    pub(super) const UNRESOLVED_ALIAS: &str = "GROUP BY on a SELECT alias is only supported when FROM has just tables \
+         PgDog has loaded the schema for";
+    pub(super) const GROUPING_SET: &str = "GROUPING SETS, ROLLUP and CUBE are unsupported";
+
+    /// Classify every `GROUP BY` item, in order.
+    pub(super) fn parse<'a>(
+        stmt: &'a nodes::SelectStmt,
+        schema: &'a Schema,
+    ) -> impl Iterator<Item = Self> + 'a {
+        stmt.group_clause()
+            .iter()
+            .map(move |node| Self::new(stmt, node, schema))
+    }
+
+    pub(super) fn new(stmt: &nodes::SelectStmt, node: Node<'_>, schema: &Schema) -> Self {
+        match node {
+            // We use 0-indexed arrays, Postgres uses 1-indexed.
+            Node::A_Const(c) => c
+                .val()
+                .and_then(|v| v.numeric_value::<i32>())
+                .and_then(|x| usize::try_from(x).ok()?.checked_sub(1))
+                .map_or(Self::Unselected, Self::Ordinal),
+            Node::ColumnRef(c) => {
+                let selected = index_of_column(
+                    stmt,
+                    &c.fields()
+                        .iter()
+                        .filter_map(Node::as_str)
+                        .collect::<Vec<_>>(),
+                );
+                match selected {
+                    Some(index) => Self::SelectedColumn(index),
+                    None => match GroupByAlias::resolve(stmt, c, schema) {
+                        Some(GroupByAlias::Output(index)) => Self::Alias(index),
+                        Some(GroupByAlias::Unknown) => Self::UnresolvedAlias,
+                        Some(GroupByAlias::InputColumn) | None => Self::Unselected,
+                    },
+                }
+            }
+            Node::GroupingSet(_) => Self::GroupingSet,
+            _ => Self::Unselected,
+        }
+    }
+
+    /// Position of the key in the `SELECT` list, if it's there.
+    fn position(self) -> Option<usize> {
+        match self {
+            Self::Ordinal(index) | Self::SelectedColumn(index) | Self::Alias(index) => Some(index),
+            Self::Unselected | Self::UnresolvedAlias | Self::GroupingSet => None,
+        }
+    }
+}
+
 fn columns_match(group_by_names: &[&str], select_names: &[&str]) -> bool {
     if group_by_names == select_names {
         return true;
@@ -135,12 +346,17 @@ impl AggregateFunction {
 impl Aggregate {
     /// Figure out what aggregates are present and which ones PgDog supports.
     pub(crate) fn parse(stmt: &nodes::SelectStmt, schema: &Schema) -> Self {
+        Self::with_keys(stmt, schema, GroupByKey::parse(stmt, schema))
+    }
+
+    /// Same as [`Self::parse`], for `GROUP BY` keys that are already classified.
+    pub(super) fn with_keys(
+        stmt: &nodes::SelectStmt,
+        schema: &Schema,
+        keys: impl IntoIterator<Item = GroupByKey>,
+    ) -> Self {
         // Cross-shard queries add the skipped keys as hidden columns.
-        let group_by = stmt
-            .group_clause()
-            .iter()
-            .filter_map(|node| Self::group_by_column(stmt, node))
-            .collect();
+        let group_by = keys.into_iter().filter_map(GroupByKey::position).collect();
 
         let targets = stmt
             .target_list()
@@ -164,26 +380,6 @@ impl Aggregate {
             })
             .collect();
         Self { group_by, targets }
-    }
-
-    /// Position of a GROUP BY item in the SELECT list, if it's an ordinal
-    /// or a selected column.
-    pub(crate) fn group_by_column(stmt: &nodes::SelectStmt, node: Node<'_>) -> Option<usize> {
-        match node {
-            // We use 0-indexed arrays, Postgres uses 1-indexed.
-            Node::A_Const(c) => c
-                .val()
-                .and_then(|v| v.numeric_value::<i32>())
-                .and_then(|x| usize::try_from(x).ok()?.checked_sub(1)),
-            Node::ColumnRef(c) => index_of_column(
-                stmt,
-                &c.fields()
-                    .iter()
-                    .filter_map(Node::as_str)
-                    .collect::<Vec<_>>(),
-            ),
-            _ => None,
-        }
     }
 
     pub(crate) fn with_group_by(mut self, group_by: Vec<usize>) -> Self {

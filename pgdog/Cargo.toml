@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.65"
+version = "0.1.66"
 edition = "2024"
 description = "Modern PostgreSQL proxy, pooler, load balancer and database sharder."
 authors = ["PgDog <hi@pgdog.dev>"]
@@ -75,11 +75,9 @@ aws-sdk-rds = { version = "1", default-features = false }
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }
-pgdog-macros = { path = "../pgdog-macros" }
 pgdog-postgres-types.workspace = true
 azure_identity = "1.0.0"
 azure_core = "1.0.0"
-crc32c = "0.6.8"
 bit-vec = "0.8"
 smallvec = "1"
 reqwest.workspace = true
@@ -108,3 +106,4 @@ brunch = "0.5"
 wiremock = "0.6"
 tokio = { workspace = true, features = ["test-util"] }
 divan = "0.1.21"
+pgdog-macros = { path = "../pgdog-macros" }

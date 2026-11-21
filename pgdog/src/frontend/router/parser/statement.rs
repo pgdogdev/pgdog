@@ -58,11 +58,23 @@ use pgdog_postgres_types::{Array, Datum};
 
 use super::rewrite::statement::insert::array_param_of_select_from_unnest;
 
+/// The kind of thing that a name in FROM refers to, i.e., a table, a derived table or a CTE
+/// E.g., in WITH c AS (..) SELECT .. FROM users u, (SELECT ..) s, c, the name u refers to the table users (Table), the name s refers to a derived table (Derived), and the name c refers to a CTE (Cte)
+#[derive(Debug, Clone, Copy)]
+enum Relation<'a> {
+    Table(Table<'a>),
+    Derived,
+    Cte,
+}
+
 /// Context for searching a SELECT statement, tracking table aliases.
 #[derive(Debug, Default, Clone)]
 struct SearchContext<'a> {
-    /// Maps alias -> full Table (including schema)
-    aliases: HashMap<&'a str, Table<'a>>,
+    /// Stores `Relations` encountered
+    /// E.g., for FROM users u JOIN orders ON .., we have u -> Table(users)
+    /// Key is alias (u) or the name of CTEs without an alias (c in WITH c AS (..) SELECT .. FROM c)
+    /// We don't store tables without an alias (orders) because `resolve_column` returns the columns belonging to those tables as-is
+    relations: HashMap<&'a str, Relation<'a>>,
     /// The primary table from the FROM clause (if simple)
     table: Option<Table<'a>>,
     /// Base tables in this FROM clause, without descending into subqueries.
@@ -73,7 +85,7 @@ struct SearchContext<'a> {
 
 impl<'a> SearchContext<'a> {
     /// Build context from a FROM clause, extracting table aliases.
-    fn from_from_clause(nodes: &'a list::NodeList) -> Self {
+    fn from_from_clause(nodes: &'a list::NodeList, cte_names: &HashSet<&'a str>) -> Self {
         let table = nodes
             .into_iter()
             .exactly_one()
@@ -85,7 +97,7 @@ impl<'a> SearchContext<'a> {
             ..Default::default()
         };
         for node in nodes {
-            ctx.extract_table_from_node(node);
+            ctx.extract_table_from_node(node, cte_names);
             ctx.extract_joined_columns(node);
         }
         ctx
@@ -160,33 +172,35 @@ impl<'a> SearchContext<'a> {
         });
     }
 
-    fn extract_table_from_node(&mut self, node: Node<'a>) {
+    fn extract_table_from_node(&mut self, node: Node<'a>, cte_names: &HashSet<&'a str>) {
         match node {
             Node::RangeVar(rv) => {
                 let table = Table::from(rv);
-                self.tables.push(table);
-                if let Some(alias) = rv.alias() {
-                    self.aliases
-                        .insert(alias.aliasname().expect("alias name always present"), table);
+                // Why check `cte_names`? Because CTEs can have the same name as a table
+                // E.g., if we consider the CTE WITH users AS (..) SELECT .. FROM users)
+                // - for FROM users, Postgres then uses the CTE users (instead of the table users)
+                // Names with a schema (e.g., public.users) can't be CTEs (so those are always tables)
+                if table.schema.is_none() && cte_names.contains(table.name) {
+                    self.relations
+                        .insert(table.alias.unwrap_or(table.name), Relation::Cte);
+                } else {
+                    self.tables.push(table);
+                    // We only store tables with an alias, which keeps `relations` empty (no allocation and no hashing) for most statements, e.g., SELECT .. FROM users WHERE id = $1
+                    if let Some(alias) = table.alias {
+                        self.relations.insert(alias, Relation::Table(table));
+                    }
                 }
             }
 
             Node::JoinExpr(join) => {
-                self.extract_table_from_node(join.larg());
-                self.extract_table_from_node(join.rarg());
+                self.extract_table_from_node(join.larg(), cte_names);
+                self.extract_table_from_node(join.rarg(), cte_names);
             }
 
             Node::RangeSubselect(subselect) if let Some(alias) = subselect.alias() => {
-                // For subselects, we don't have a real table name
-                // but we record the alias anyway for future use
-                let aliasname = alias.aliasname().expect("alias name always present");
-                self.aliases.insert(
-                    aliasname,
-                    Table {
-                        name: aliasname,
-                        schema: None,
-                        alias: None,
-                    },
+                self.relations.insert(
+                    alias.aliasname().expect("alias name always present"),
+                    Relation::Derived,
                 );
             }
 
@@ -194,23 +208,22 @@ impl<'a> SearchContext<'a> {
         }
     }
 
-    /// Resolve a table reference (which may be an alias) to the actual Table.
-    fn resolve_table(&self, name: &str) -> Option<Table<'a>> {
-        self.aliases.get(name).copied()
-    }
-
-    /// Qualify a column with the actual table its table alias refers to.
-    fn resolve_column(&self, column: Column<'a>) -> Column<'a> {
-        match column
-            .table()
-            .and_then(|table| self.resolve_table(table.name))
-        {
-            Some(resolved) => Column {
+    /// Replaces the alias in `column` with the name (and schema) of the table that the alias stands for, e.g., u.id in FROM users u becomes users.id
+    /// We need the table name to check whether the column is a sharding key since the sharding config lists table names (users) not aliases (u)
+    /// Returns `column` as-is if the column doesn't have a table (e.g., id in .. FROM users JOIN orders ON .. WHERE id = 1, where id can be from either table) or if the table that the column belongs to isn't in FROM
+    /// Returns None for columns belonging to derived tables and CTEs (e.g., s.id in FROM (SELECT ..) s), since those don't have any sharding keys
+    fn resolve_column(&self, column: Column<'a>) -> Option<Column<'a>> {
+        let Some(name) = column.table else {
+            return Some(column);
+        };
+        match self.relations.get(name) {
+            Some(Relation::Table(table)) => Some(Column {
                 name: column.name,
-                table: Some(resolved.name),
-                schema: resolved.schema,
-            },
-            None => column,
+                table: Some(table.name),
+                schema: table.schema,
+            }),
+            Some(Relation::Derived | Relation::Cte) => None,
+            None => Some(column),
         }
     }
 }
@@ -620,8 +633,10 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             let table = Table::from(range_var);
             ctx.table = Some(table);
             if let Some(alias) = range_var.alias() {
-                ctx.aliases
-                    .insert(alias.aliasname().expect("Alias name always present"), table);
+                ctx.relations.insert(
+                    alias.aliasname().expect("Alias name always present"),
+                    Relation::Table(table),
+                );
             }
         }
         ctx
@@ -833,8 +848,10 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     }
 
     fn search_stmt(&mut self, stmt: Node<'a>) -> ControlFlow<Result<Shard, Error>> {
-        let mut ctx = match stmt {
-            Node::SelectStmt(s) => SearchContext::from_from_clause(s.from_clause()),
+        let ctx = match stmt {
+            Node::SelectStmt(s) => {
+                SearchContext::from_from_clause(s.from_clause(), &self.walk().cte_names)
+            }
             Node::UpdateStmt(s) => self.context_from_relation(s.relation()),
             Node::DeleteStmt(s) => self.context_from_relation(s.relation()),
             Node::InsertStmt(s) => {
@@ -846,11 +863,6 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // FIXME(sage): Do we want to error here?
             _ => return ControlFlow::Continue(()),
         };
-
-        // A CTE can shadow a configured table without preserving its columns.
-        let cte_names = &self.walk().cte_names;
-        ctx.tables
-            .retain(|table| table.schema.is_some() || !cte_names.contains(table.name));
 
         if let Node::SelectStmt(select) = stmt
             && !ctx.joined_columns.is_empty()
@@ -913,16 +925,22 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     // For ANY expressions with sharding columns, we can't reliably
                     // parse array literals or parameters, so route to all shards.
                     (SearchResult::Column(column), _, true)
-                        if self.get_sharded_table(ctx.resolve_column(column)).is_some() =>
+                        if ctx
+                            .resolve_column(column)
+                            .and_then(|column| self.get_sharded_table(column))
+                            .is_some() =>
                     {
                         ControlFlow::Break(Ok(Shard::All))
                     }
                     (SearchResult::Column(column), Some(values), false)
                     | (values, Some(SearchResult::Column(column)), false) => {
+                        let Some(column) = ctx.resolve_column(column) else {
+                            return Recurse::no();
+                        };
                         let shards = values
                             .iter()
                             .filter_map(|value| {
-                                self.compute_shard_with_ctx(column, value.clone(), ctx)
+                                self.compute_shard_of_resolved_column(column, value.clone())
                                     .transpose()
                             })
                             .collect::<Result<Vec<_>, _>>()
@@ -956,8 +974,9 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                 // The array doesn't have to be the same type as the key, e.g., id could be a bigint while $1 is a numeric array such as {1.5}.
                 // Postgres is fine with comparing a bigint to a numeric, however, if we tried to compute the shard of 1.5 for a bigint key, PgDog would return an error to the client.
                 // Therefore, we skip this IN, and the statement is routed by whatever else is in the WHERE (which is also what we do for id IN (1.5)).
-                let sharding_key_data_type = self
-                    .get_sharded_table(ctx.resolve_column(sharding_key_column))
+                let sharding_key_data_type = ctx
+                    .resolve_column(sharding_key_column)
+                    .and_then(|column| self.get_sharded_table(column))
                     .map(|sharded_table| sharded_table.data_type);
 
                 if sharding_key_data_type.is_some_and(|sharding_key_data_type| {
@@ -969,13 +988,15 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     return Recurse::no();
                 }
 
+                let Some(sharding_key_column) = ctx.resolve_column(sharding_key_column) else {
+                    return Recurse::no();
+                };
                 let shards_of_array_elements = array_elements_as_text
                     .iter()
                     .filter_map(|array_element_as_text| {
-                        self.compute_shard_with_ctx(
+                        self.compute_shard_of_resolved_column(
                             sharding_key_column,
                             Value::String(array_element_as_text),
-                            ctx,
                         )
                         .transpose()
                     })
@@ -1060,7 +1081,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     };
                     if !ctx
                         .resolve_column(column)
-                        .table
+                        .and_then(|column| column.table)
                         .is_some_and(|table| self.schema.tables.omnishards().contains_key(table))
                     {
                         continue;
@@ -1079,9 +1100,12 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                         if *from != column {
                             continue;
                         }
+                        let Some(to) = ctx.resolve_column(*to) else {
+                            continue;
+                        };
                         let shards = values
                             .iter()
-                            .map(|value| self.compute_shard_with_ctx(*to, value.clone(), ctx))
+                            .map(|value| self.compute_shard_of_resolved_column(to, value.clone()))
                             .collect::<Result<Vec<_>, _>>()
                             .break_err()?;
                         // Resolve every value above so all pending lookups
@@ -1113,11 +1137,14 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             Node::ColumnRef(c) => {
                 let mut column = Column::try_from(c).break_err()?;
 
-                // If column has no table, qualify with context table
+                // If the column doesn't have a table, we use the alias (or name) of `SearchContext::table`
+                // E.g., for id in FROM users u WHERE id = 1, we use u.id (not users.id), since `SearchContext::relations` stores the table under the alias u
+                // `resolve_column` then replaces u with users
                 if column.table().is_none()
                     && let Some(ref table) = ctx.table
                 {
-                    column.qualify(*table);
+                    column.table = Some(table.alias.unwrap_or(table.name));
+                    column.schema = table.schema;
                 }
                 // In joins, a named sharding config can identify the owner
                 // of an otherwise unqualified key. Only consider tables in
@@ -1227,15 +1254,15 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         Some(array_elements_as_text)
     }
 
-    /// Compute shard with alias resolution from context.
-    fn compute_shard_with_ctx(
+    /// Returns the shard that has the rows where `resolved_column` = `value`, e.g., the shard corresponding to 5 for users.id = 5, or None if `resolved_column` isn't a sharding key
+    /// `resolved_column` needs the table name (users.id), not the alias (u.id) (since the sharding config lists table names)
+    /// Callers resolve the column (`resolve_column`) once before the loop over the values (e.g., 1, 2 and 3 in users.id IN (1, 2, 3)).
+    /// Resolving looks up the alias of the column (u in u.id) in the hash map `SearchContext::relations`. Doing that per value (e.g., 1,000 times for a subquery that returns 1,000 rows) adds about 5% to the CPU instructions of those subqueries
+    fn compute_shard_of_resolved_column(
         &mut self,
-        column: Column<'a>,
+        resolved_column: Column<'a>,
         value: Value<'_>,
-        ctx: &SearchContext<'a>,
     ) -> Result<Option<Shard>, Error> {
-        let resolved_column = ctx.resolve_column(column);
-
         let shard = self.compute_shard(resolved_column, value.clone())?;
         if let Some(ref shard) = shard {
             self.record_sharding_key(shard, resolved_column, &value);
@@ -3242,5 +3269,37 @@ mod test {
             !result,
             "DELETE from omnisharded table should not be sharded"
         );
+    }
+
+    // This tests that the router doesn't pick a shard by the columns belonging to a derived table that has the name of the sharded table `sharded`
+    // E.g., in SELECT * FROM (SELECT 1 AS id) sharded WHERE sharded.id = 1, sharded.id is a column belonging to the derived table (not the sharding key)
+    #[test]
+    fn test_derived_table_named_like_a_sharded_table() {
+        let table = "SELECT * FROM sharded WHERE sharded.id = 1";
+        let derived_table = "SELECT * FROM (SELECT 1 AS id) sharded WHERE sharded.id = 1";
+
+        assert!(run_test(table, None).unwrap().is_some());
+        assert_eq!(run_test(derived_table, None).unwrap(), None);
+    }
+
+    // Same test as `test_derived_table_named_like_a_sharded_table, but now for CTE that has name of the sharded table `sharded` since FROM sharded then refers to the CTE
+    #[test]
+    fn test_cte_named_like_a_sharded_table() {
+        let table = "SELECT * FROM sharded WHERE id = 1";
+        let cte = "WITH sharded AS (SELECT 1 AS id) SELECT * FROM sharded WHERE id = 1";
+
+        assert!(run_test(table, None).unwrap().is_some());
+        assert_eq!(run_test(cte, None).unwrap(), None);
+    }
+
+    // If we have a sharding config that sets a column without a table (column = "tenant_id" without name in [[sharded_tables]]), all tables with a tenant_id column are sharded by tenant_id
+    // This tests that the router doesn't pick a shard by tenant_id columns belonging to derived tables (e.g., s.tenant_id in FROM (SELECT 1 AS tenant_id) s)
+    #[test]
+    fn test_column_only_config_derived_table() {
+        let table = "SELECT * FROM t WHERE tenant_id = 1";
+        let derived_table = "SELECT * FROM (SELECT 1 AS tenant_id) s WHERE s.tenant_id = 1";
+
+        assert!(run_test_column_only(table, None).unwrap().is_some());
+        assert_eq!(run_test_column_only(derived_table, None).unwrap(), None);
     }
 }
