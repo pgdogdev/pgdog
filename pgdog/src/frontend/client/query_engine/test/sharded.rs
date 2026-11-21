@@ -3,6 +3,8 @@ use crate::{
     net::{CommandComplete, DataRow, Parameters, Query, ReadyForQuery, RowDescription},
 };
 
+use rust_decimal::Decimal;
+
 use super::prelude::*;
 
 #[tokio::test]
@@ -257,7 +259,7 @@ async fn test_sharded_delete_returning_from_all_shards() {
 }
 
 #[tokio::test]
-async fn test_sharded_count_distinct_on_sharding_key_sums_shards() {
+async fn test_sharded_distinct_on_sharding_key_merges_shards() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
     let id_shard0 = client.random_id_for_shard(0);
@@ -290,6 +292,30 @@ async fn test_sharded_count_distinct_on_sharding_key_sums_shards() {
     let row = expect_message!(client.read().await, DataRow);
     assert_eq!(row.get_int(0, true), Some(2));
     assert_eq!(row.get_int(1, true), Some(2));
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SELECT 1"
+    );
+    expect_message!(client.read().await, ReadyForQuery);
+
+    // The sums add up, and each shard's average is weighted by its key count.
+    client
+        .send_simple(Query::new(format!(
+            "SELECT sum(DISTINCT id), avg(DISTINCT id) FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    let description = expect_message!(client.read().await, RowDescription);
+    assert_eq!(description.fields.len(), 2, "the count helper is dropped");
+    let row = expect_message!(client.read().await, DataRow);
+    let value = |column| {
+        row.get_text(column)
+            .and_then(|text| text.parse::<Decimal>().ok())
+    };
+    let sum = Decimal::from(id_shard0) + Decimal::from(id_shard1);
+    assert_eq!(value(0), Some(sum));
+    // Postgres rounds the average of values this large to a whole number.
+    let avg = value(1).expect("numeric average");
+    assert!((avg - sum / Decimal::TWO).abs() <= Decimal::ONE, "{avg}");
     assert_eq!(
         expect_message!(client.read().await, CommandComplete).command(),
         "SELECT 1"

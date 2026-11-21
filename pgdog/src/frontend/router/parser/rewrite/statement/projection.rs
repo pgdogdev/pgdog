@@ -514,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn count_distinct_on_sharding_key_is_planned() {
+    fn distinct_aggregates_on_sharding_key_are_planned() {
         let tables = ShardedTables::from(
             [ShardedTable {
                 name: Some("items".into()),
@@ -524,7 +524,7 @@ mod tests {
             .as_slice(),
         );
 
-        // (query, sharded tables, SELECT list positions that merge as a plain count)
+        // (query, sharded tables, SELECT list positions that merge as the plain aggregate)
         for (sql, tables, expected) in [
             ("SELECT count(DISTINCT id) FROM items", &tables, vec![0]),
             (
@@ -532,7 +532,13 @@ mod tests {
                 &tables,
                 vec![1],
             ),
+            (
+                "SELECT sum(DISTINCT id), avg(DISTINCT id) FROM items",
+                &tables,
+                vec![0, 1],
+            ),
             ("SELECT count(DISTINCT value) FROM items", &tables, vec![]),
+            ("SELECT stddev(DISTINCT id) FROM items", &tables, vec![]),
             (
                 "SELECT count(DISTINCT id) FROM items",
                 &ShardedTables::default(),
@@ -548,6 +554,29 @@ mod tests {
                 .unwrap_or_default();
             assert_eq!(marked, Positions::from_iter(expected), "{sql}");
         }
+    }
+
+    #[test]
+    fn avg_distinct_on_sharding_key_is_weighted_by_distinct_count() {
+        let tables = ShardedTables::from(
+            [ShardedTable {
+                name: Some("items".into()),
+                column: "id".into(),
+                ..Default::default()
+            }]
+            .as_slice(),
+        );
+        let ast = pg_raw_parse::parse("SELECT avg(DISTINCT id) FROM items").unwrap();
+
+        let rewrite = build(&ast, &Schema::default(), &tables, false)
+            .unwrap()
+            .unwrap();
+
+        // Each shard's average is weighted by how many distinct keys it has.
+        assert_eq!(
+            rewrite.sql.as_ref(),
+            "SELECT avg(DISTINCT id), count(DISTINCT id) AS __pgdog_count_col0 FROM items"
+        );
     }
 
     #[test]

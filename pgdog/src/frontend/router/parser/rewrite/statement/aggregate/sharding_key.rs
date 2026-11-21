@@ -11,10 +11,15 @@ use crate::backend::replication::ShardedTables;
 use crate::frontend::router::parser::rewrite::statement::projection::Positions;
 use crate::frontend::router::parser::{AggregateFunction, Column, Function, Table};
 
-/// SELECT list positions of `count(DISTINCT key)`, where `key` is the sharding key.
+/// SELECT list positions of `count`, `sum` and `avg` over `DISTINCT key`,
+/// where `key` is the sharding key.
 ///
-/// No two shards count the same key, so their counts add up to the distinct
-/// count across all of them, with or without `GROUP BY`.
+/// No two shards hold the same key, so each shard aggregates keys no other
+/// shard has and the results merge like the plain aggregate's, with or
+/// without `GROUP BY`.
+///
+/// Variance and standard deviation are left out: their helper sums
+/// `DISTINCT key * key`, and two keys can share a square.
 pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTables) -> Positions {
     // Resolved on the first DISTINCT aggregate; most queries have none.
     let mut key = None;
@@ -31,14 +36,16 @@ pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTabl
             if !call.agg_distinct {
                 return false;
             }
-            let is_count = call
+            let function = call
                 .funcname()
                 .iter()
                 .filter_map(Node::as_str)
                 .next_back()
-                .and_then(AggregateFunction::from_builtin_name)
-                == Some(AggregateFunction::Count);
-            if !is_count {
+                .and_then(AggregateFunction::from_builtin_name);
+            if !matches!(
+                function,
+                Some(AggregateFunction::Count | AggregateFunction::Sum | AggregateFunction::Avg)
+            ) {
                 return false;
             }
             let Ok(argument) = call.args().iter().exactly_one() else {
@@ -168,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_count_distinct_on_key() {
+    fn finds_distinct_aggregates_on_key() {
         let tables = orders_by_user();
 
         for (sql, expected) in [
@@ -192,8 +199,16 @@ mod tests {
                 "SELECT count(DISTINCT (user_id, status)) FROM orders",
                 vec![],
             ),
-            // Summing the keys of each shard is a later change.
-            ("SELECT sum(DISTINCT user_id) FROM orders", vec![]),
+            (
+                "SELECT sum(DISTINCT user_id), avg(DISTINCT user_id)::float8 FROM orders",
+                vec![0, 1],
+            ),
+            ("SELECT sum(DISTINCT product_id) FROM orders", vec![]),
+            // Two keys can share a square, which the sum of squares would count once.
+            (
+                "SELECT variance(DISTINCT user_id), stddev(DISTINCT user_id) FROM orders",
+                vec![],
+            ),
             (
                 "SELECT count(DISTINCT user_id) FROM orders JOIN users ON users.id = orders.user_id",
                 vec![],
