@@ -649,6 +649,62 @@ mod test {
     }
 
     #[test]
+    fn aggregate_sum_avg_distinct_on_sharding_key_merge_like_plain() {
+        use crate::frontend::router::parser::rewrite::statement::aggregate::AggregateHelper;
+
+        let aggregate = parse("SELECT SUM(DISTINCT id), AVG(DISTINCT id) FROM users");
+        let decoder = Decoder::from(RowDescription::new(&[
+            Field::numeric("sum"),
+            Field::numeric("avg"),
+            Field::bigint("__pgdog_count_col1"),
+        ]));
+
+        // (sum, avg, count) of the ids on each shard: {1, 2, 3} and {10, 20}.
+        let rows = [("6", "2", "3"), ("30", "15", "2")]
+            .into_iter()
+            .map(|(sum, avg, count)| {
+                let mut row = DataRow::new();
+                row.add(sum).add(avg).add(count);
+                row
+            })
+            .collect::<VecDeque<_>>();
+
+        let mut plan = ProjectionRewritePlan {
+            aggregate_helpers: vec![AggregateHelper {
+                target_column: 1,
+                distinct: true,
+                kind: HelperKind::Count,
+                alias: "__pgdog_count_col1".into(),
+            }],
+            ..Default::default()
+        };
+
+        // Shards may share values of any other column, so they can't be merged.
+        let unplanned = Aggregates::new(&rows, &decoder, &aggregate, Some(&plan))
+            .unwrap()
+            .aggregate();
+        assert!(matches!(
+            unplanned,
+            Err(Error::UnsupportedAggregation { .. })
+        ));
+
+        plan.disjoint_distinct = Positions::from_iter([0, 1]);
+        let mut merged = Aggregates::new(&rows, &decoder, &aggregate, Some(&plan))
+            .unwrap()
+            .aggregate()
+            .unwrap();
+
+        assert_eq!(merged.len(), 1);
+        let row = merged.pop_front().unwrap();
+        let value = |column| {
+            row.get::<Numeric>(column, Format::Text)
+                .and_then(|numeric| numeric.as_decimal().copied())
+        };
+        assert_eq!(value(0), Some(Decimal::from(36)));
+        assert_eq!(value(1), Some(Decimal::new(72, 1)));
+    }
+
+    #[test]
     fn aggregate_count_preserves_binary_result_types() {
         use pgdog_postgres_types::{Float, Numeric};
 
