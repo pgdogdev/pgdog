@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use pgdog_config::Config;
 use pgdog_config::User;
 use pgdog_config::users::PasswordKind;
 use tokio::sync::OnceCell;
@@ -14,7 +13,8 @@ use crate::backend::Cluster;
 use crate::backend::pool::Request;
 use crate::backend::schema::SchemaCache;
 
-use crate::config::config;
+use crate::config::cached::CachedConfig;
+use crate::config::{cached_config, config};
 use crate::util::safe_timeout;
 
 use super::super::Error;
@@ -118,7 +118,7 @@ pub(super) async fn check_db(user: &User, callback: impl FnOnce() -> Result<(), 
 
     entry
         .get_or_try_init(async || {
-            let valid = check_password(&user, &config().config).await?;
+            let valid = check_password(&user, &cached_config()).await?;
             if valid {
                 callback()?;
             }
@@ -129,7 +129,7 @@ pub(super) async fn check_db(user: &User, callback: impl FnOnce() -> Result<(), 
         .unwrap_or_default()
 }
 
-async fn check_password(user: &User, config: &Config) -> Result<bool, Error> {
+async fn check_password(user: &User, config: &CachedConfig) -> Result<bool, Error> {
     // We're okay using an empty schema cache here because we won't be fetching the schema
     // on cluster startup.
     let cluster = if let Some((_, cluster)) = new_pool(user, config, SchemaCache::default()) {
@@ -145,7 +145,7 @@ async fn check_password(user: &User, config: &Config) -> Result<bool, Error> {
     // A connection checkout is sufficient, the pool can only
     // return a connection if it can connect to the database.
     match safe_timeout(
-        Duration::from_millis(config.general.checkout_timeout),
+        Duration::from_millis(config.deref().config.general.checkout_timeout),
         cluster
             .shards()
             .iter()

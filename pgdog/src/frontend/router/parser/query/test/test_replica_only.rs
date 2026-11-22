@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+use crate::config::cached::CachedConfig;
 use pgdog_config::{ConfigAndUsers, Database, QueryParserLevel, Role, User};
 use pgdog_stats::LsnStats;
 
@@ -74,7 +75,7 @@ fn test_replica_only_transactions_after_role_detection() {
                 ..Default::default()
             });
         }
-        let cluster = databases::from_config(&config)
+        let cluster = databases::from_config(&CachedConfig::new(config))
             .cluster(("pgdog", "pgdog"))
             .expect("cluster exists");
         let shard = &cluster.shards()[0];

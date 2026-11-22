@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -47,6 +48,15 @@ pub struct Users {
 }
 
 impl Users {
+    /// Organize users by name and database for quicker retrieval.
+    pub fn users(&self) -> HashMap<(String, String), User> {
+        let mut users = HashMap::new();
+        for user in &self.users {
+            users.insert((user.name.clone(), user.database.clone()), user.clone());
+        }
+        users
+    }
+
     /// Run configuration checks.
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
@@ -443,6 +453,9 @@ pub struct User {
 
     /// Read-write split algorithm to use for this user.
     pub read_write_split: Option<ReadWriteSplit>,
+
+    /// Virtual user.
+    pub virtual_of: Option<String>,
 }
 
 impl User {

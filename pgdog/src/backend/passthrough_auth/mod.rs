@@ -7,7 +7,7 @@ use crate::{
         Error,
         databases::{databases, lock, reload_from_config},
     },
-    config::config,
+    config::{cached_config, config},
 };
 
 use check_db::check_db;
@@ -124,8 +124,8 @@ fn add(user: &User) -> Result<(), Error> {
 
     let mut config = (*config()).clone();
     config.users.add_or_replace(user);
-    let config = set(config)?;
-    reload_from_config(&config)?;
+    set(config)?;
+    reload_from_config(&cached_config())?;
 
     Ok(())
 }
