@@ -144,12 +144,20 @@ impl Listener {
             comms.tracker().len(),
         );
 
-        for cluster in databases().all().values() {
-            for shard in cluster.shards() {
-                for pool in shard.pool_iter() {
-                    pool.dump_idle();
-                }
-            }
+        let idle = databases()
+            .all()
+            .values()
+            .map(|cluster| {
+                cluster
+                    .shards()
+                    .iter()
+                    .map(|shard| shard.pool_iter().map(|pool| pool.dump_idle()))
+                    .sum::<usize>()
+            })
+            .sum::<usize>();
+
+        if idle > 0 {
+            info!("closing {} idle server connections", idle);
         }
 
         if safe_timeout(shutdown_timeout, comms.tracker().wait())

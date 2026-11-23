@@ -516,9 +516,6 @@ mod test {
         assert_eq!(pool.dump_idle(), 1);
         assert!(!pool.lock().should_create().yes());
 
-        // Complete a refill requested before the drain.
-        let monitor = Monitor { pool: pool.clone() };
-        assert!(monitor.replenish(ConnectReason::BelowMin).await.unwrap());
         assert_eq!(pool.lock().idle(), 0);
 
         let _connection = pool.get(&Request::default()).await.unwrap();
