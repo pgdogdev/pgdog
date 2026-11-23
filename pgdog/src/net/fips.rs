@@ -77,6 +77,23 @@ impl Enforcement {
         Ok(())
     }
 
+    /// Reject a user whose own `auth_type` (users.toml), which overrides
+    /// `[general]`, is non-approved.
+    pub(crate) fn check_user_auth(
+        self,
+        auth_type: Option<AuthType>,
+        user: &str,
+        database: &str,
+    ) -> Result<(), Error> {
+        if self.enforced() && auth_type.is_some_and(|auth_type| auth_type.md5()) {
+            return Err(Error::Fips(format!(
+                "user \"{user}\" (database \"{database}\") sets auth_type = \"md5\"; MD5 authentication is not FIPS-approved"
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Reject cross-account RDS IAM (`server_iam_assume_role`): the AWS SDK
     /// signs the STS AssumeRole request with RustCrypto, not AWS-LC.
     pub(crate) fn check_iam_assume_role(
@@ -132,6 +149,7 @@ pub(crate) fn check(config_and_users: &ConfigAndUsers) -> Result<Enforcement, Er
     module_status()?;
     enforcement.check_auth(config.general.auth_type)?;
     for user in &config_and_users.users.users {
+        enforcement.check_user_auth(user.auth_type, &user.name, &user.database)?;
         // The assume-role is ignored for other server auth types.
         if user.server_auth == ServerAuth::RdsIam {
             enforcement.check_iam_assume_role(
@@ -328,6 +346,58 @@ mod tests {
 
         let err = check(&config).unwrap_err();
         assert!(err.to_string().contains("MD5"));
+    }
+
+    #[test]
+    fn test_check_user_auth() {
+        let err = Enforcement::Enforced
+            .check_user_auth(Some(AuthType::Md5), "app", "prod")
+            .unwrap_err();
+        assert!(matches!(err, Error::Fips(_)));
+        assert!(
+            err.to_string().contains("\"app\" (database \"prod\")"),
+            "{err}"
+        );
+
+        assert!(
+            Enforcement::NotEnforced
+                .check_user_auth(Some(AuthType::Md5), "app", "prod")
+                .is_ok()
+        );
+        for auth_type in [
+            None,
+            Some(AuthType::Scram),
+            Some(AuthType::Plain),
+            Some(AuthType::Trust),
+        ] {
+            assert!(
+                Enforcement::Enforced
+                    .check_user_auth(auth_type, "app", "prod")
+                    .is_ok()
+            );
+        }
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn test_check_required_rejects_user_md5() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config.config.general.auth_type = AuthType::Scram;
+        config.users.users.push(crate::config::User {
+            name: "app".into(),
+            database: "prod".into(),
+            auth_type: Some(AuthType::Md5),
+            ..Default::default()
+        });
+
+        let err = check(&config).unwrap_err();
+        assert!(err.to_string().contains("\"app\""), "{err}");
+        assert!(err.to_string().contains("MD5"), "{err}");
+
+        // A user can still pick an approved auth type over [general]'s.
+        config.users.users[0].auth_type = Some(AuthType::Scram);
+        assert_eq!(check(&config).unwrap(), Enforcement::Enforced);
     }
 
     fn assume_role_user(server_auth: ServerAuth) -> crate::config::User {
