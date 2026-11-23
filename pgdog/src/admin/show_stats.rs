@@ -56,6 +56,11 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_rows_inserted", prefix)),
                         Field::numeric(&format!("{}_rows_updated", prefix)),
                         Field::numeric(&format!("{}_rows_deleted", prefix)),
+                        Field::numeric(&format!("{}_rows_copied", prefix)),
+                        Field::numeric(&format!("{}_tables_created", prefix)),
+                        Field::numeric(&format!("{}_tables_dropped", prefix)),
+                        Field::numeric(&format!("{}_ddl_commands", prefix)),
+                        Field::numeric(&format!("{}_dml_commands", prefix)),
                     ]
                 })
                 .collect::<Vec<Field>>(),
@@ -110,7 +115,12 @@ impl Command for ShowStats {
                             .add(stat.auth_attempts)
                             .add(stat.rows_inserted)
                             .add(stat.rows_updated)
-                            .add(stat.rows_deleted);
+                            .add(stat.rows_deleted)
+                            .add(stat.rows_copied)
+                            .add(stat.tables_created)
+                            .add(stat.tables_dropped)
+                            .add(stat.ddl_commands)
+                            .add(stat.dml_commands);
                     }
 
                     messages.push(dr.message());

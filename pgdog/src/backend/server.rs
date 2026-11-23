@@ -8,7 +8,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     spawn,
-    time::Instant,
+    time::{Instant, timeout},
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -17,6 +17,7 @@ use super::{
     pool::Address,
     prepared_statements::{HandleResult, Prepare},
 };
+use crate::parameters::{KnownParameter, ParameterStore, Parameters};
 use crate::{
     auth::{
         md5,
@@ -24,7 +25,7 @@ use crate::{
     },
     backend::pool::stats::MemoryStats,
     config::AuthType,
-    frontend::ClientRequest,
+    frontend::{ClientRequest, SetParam},
     net::{
         Close, Liveness, MessageBuffer, Parameter, ProtocolMessage, Sync,
         messages::{
@@ -37,12 +38,11 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{PoolerMode, TlsVerifyMode, config},
+    config::{ConfigAndUsers, ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
     net::{
         CommandComplete, Stream,
         fips::Enforcement,
         messages::{DataRow, NoticeResponse},
-        parameter::Parameters,
         tls::UpstreamTlsSettings,
     },
 };
@@ -136,9 +136,9 @@ pub(crate) struct Server {
     stream: Option<Stream>,
     key: BackendKeyData,
     id: BackendPid,
-    params: Parameters,
+    params: Arc<Parameters>,
     changed_params: Parameters,
-    client_params: Parameters,
+    client_params: ParameterStore,
     stats: Stats,
     prepared_statements: PreparedStatements,
     dirty: bool,
@@ -149,6 +149,7 @@ pub(crate) struct Server {
     re_synced: bool,
     replication_mode: bool,
     statement_executed: bool,
+    last_query_exec_time: Option<Instant>,
     sending_request: bool,
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
@@ -204,9 +205,6 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
-                    if options.session_replication_role {
-                        server.set_session_replication_role().await?;
-                    }
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {
@@ -235,6 +233,24 @@ impl Server {
         ))))
     }
 
+    async fn open(addr: &Address, config: &ConfigAndUsers) -> Result<Stream, Error> {
+        #[cfg(test)]
+        if addr.host == super::fake_server::HOST {
+            return Ok(super::fake_server::connect());
+        }
+
+        let stream = TcpStream::connect(addr.addr().await?).await?;
+
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
+            warn!(
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                config.config.tcp, err, addr,
+            );
+        }
+
+        Ok(Stream::plain(stream, config.config.memory.net_buffer))
+    }
+
     /// Create new PostgreSQL server connection with the given auth secret (e.g. password).
     async fn connect_with_auth_secret(
         addr: &Address,
@@ -245,17 +261,8 @@ impl Server {
         oids: Arc<Oids>,
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let stream = TcpStream::connect(addr.addr().await?).await?;
         let config = config();
-
-        if let Err(err) = tweak(&stream, &config.config.tcp) {
-            warn!(
-                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
-                config.config.tcp, err, addr,
-            );
-        }
-
-        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
+        let mut stream = Self::open(addr, &config).await?;
 
         let tls = UpstreamTlsSettings::resolve(&config.config.general, &addr.tls);
 
@@ -363,7 +370,8 @@ impl Server {
                             stream.send_flush(&initial).await?;
                         }
                         Authentication::SaslContinue(data) => {
-                            let scram = scram.as_mut().ok_or(ScramError::OutOfOrder)?;
+                            #[allow(clippy::unnecessary_lazy_evaluations)]
+                            let scram = scram.as_mut().ok_or_else(|| ScramError::OutOfOrder)?;
                             scram.server_first(&data)?;
                             let response = Password::PasswordMessage {
                                 response: scram.last()?,
@@ -371,10 +379,9 @@ impl Server {
                             stream.send_flush(&response).await?;
                         }
                         Authentication::SaslFinal(data) => {
-                            scram
-                                .as_mut()
-                                .ok_or(ScramError::OutOfOrder)?
-                                .server_last(&data)?;
+                            #[allow(clippy::unnecessary_lazy_evaluations)]
+                            let scram = scram.as_mut().ok_or_else(|| ScramError::OutOfOrder)?;
+                            scram.server_last(&data)?;
                         }
                         Authentication::Md5(salt) => {
                             auth_type = AuthType::Md5;
@@ -433,7 +440,7 @@ impl Server {
             Some(key) => key,
             None => BackendKeyData::random_legacy()?,
         };
-        let params: Parameters = params.into();
+        let params = Arc::new(Parameters::from(params));
 
         info!(
             "new server connection: auth={}, source={}, reason={} [{}] {}",
@@ -454,7 +461,7 @@ impl Server {
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
-            client_params: Parameters::default(),
+            client_params: ParameterStore::default(),
             prepared_statements: PreparedStatements::new(oids),
             dirty: false,
             streaming: false,
@@ -462,6 +469,7 @@ impl Server {
             sync_prepared: false,
             in_transaction: false,
             statement_executed: false,
+            last_query_exec_time: None,
             re_synced: false,
             sending_request: false,
             pooler_mode: PoolerMode::Transaction,
@@ -478,12 +486,36 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
-    pub(crate) async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
-        let mut stream = TcpStream::connect(addr.addr().await?).await?;
-        stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
-        stream.flush().await?;
+    ///
+    /// # Arguments
+    ///
+    /// - `addr`: Address of the server.
+    /// - `key`: Backend secret.
+    /// - `cancel_timeout`: Timeout the IO / wait for server to close the connection ack'ing the request.
+    ///
+    pub(in crate::backend) async fn cancel(
+        addr: &Address,
+        key: BackendKeyData,
+        cancel_timeout: Duration,
+    ) -> Result<(), Error> {
+        let fut = async {
+            let mut stream = TcpStream::connect(addr.addr().await?).await?;
+            stream
+                .write_all(&Startup::Cancel { id: key }.to_bytes())
+                .await?;
+            stream.flush().await?;
 
-        Ok(())
+            let mut buf = [0u8; 1];
+            match stream.read(&mut buf).await? {
+                0 => Ok(()), // We expect backend to close connection without saying anything.
+                _ => Err(Error::QueryCancelMismatch),
+            }
+        };
+
+        match timeout(cancel_timeout, fut).await {
+            Err(_) => Err(Error::QueryCancelTimeout),
+            Ok(result) => result,
+        }
     }
 
     /// Send messages to the server and flush the buffer.
@@ -536,10 +568,6 @@ impl Server {
                 self.send_stream(protocol_message).await?;
                 self.send_stream(message).await?;
             }
-            HandleResult::PrependProtocolMessageRewrite { prepend, rewrite } => {
-                self.send_stream(prepend).await?;
-                self.send_stream(rewrite).await?;
-            }
             HandleResult::PrependRewrite { prepend, rewrite } => {
                 self.send_prepare(prepend).await?;
                 self.send_stream(rewrite).await?;
@@ -555,11 +583,7 @@ impl Server {
             self.send_stream(close).await?;
         }
 
-        self.send_stream(prepare.parse()).await?;
-        if let Some(describe) = prepare.describe() {
-            self.send_stream(describe).await?;
-        }
-        Ok(())
+        self.send_stream(prepare.parse()).await
     }
 
     /// Send a message to Postgres and force us to ignore its respose in [`Self::read`].
@@ -653,30 +677,8 @@ impl Server {
 
         match message.code() {
             'Z' => {
-                let now = Instant::now();
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
-
-                self.stats.query(now, rfq.status == 'T');
-                self.stats.memory_used(self.memory_stats());
-
-                match rfq.status {
-                    'I' => {
-                        self.in_transaction = false;
-                        self.stats.transaction(now);
-                    }
-                    'T' => {
-                        self.in_transaction = true;
-                        self.stats.state(State::IdleInTransaction);
-                    }
-                    'E' => self.stats.transaction_error(now),
-                    status => {
-                        self.stats.state(State::Error);
-                        return Err(Error::UnexpectedTransactionStatus(status));
-                    }
-                }
-                self.stream_buffer.shrink_to_fit();
-                self.streaming = false;
-                self.statement_executed = false;
+                self.handle_ready_for_query(&rfq)?;
             }
             'E' => {
                 let error = ErrorResponse::from_bytes(message.to_bytes())?;
@@ -706,18 +708,7 @@ impl Server {
             }
             'C' => {
                 let cmd = CommandComplete::from_bytes(message.to_bytes())?;
-                match cmd.command() {
-                    "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
-                    "DEALLOCATE ALL" => self.prepared_statements.clear(),
-                    "DISCARD ALL" => {
-                        self.prepared_statements.clear();
-                        self.client_params.clear();
-                    }
-                    "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
-                    _ => (),
-                }
-                self.stats.rows_affected(&cmd);
-                self.statement_executed = true;
+                self.handle_command_complete(&cmd);
             }
             's' => self.statement_executed = true,
             'G' => self.stats.copy_mode(),
@@ -734,82 +725,120 @@ impl Server {
         Ok(message)
     }
 
+    fn handle_ready_for_query(&mut self, rfq: &ReadyForQuery) -> Result<(), Error> {
+        let now = Instant::now();
+        self.last_query_exec_time = Some(now);
+
+        self.stats.query(now, rfq.status == 'T');
+        self.stats.memory_used(self.memory_stats());
+
+        match rfq.status {
+            'I' => {
+                self.in_transaction = false;
+                self.stats.transaction(now);
+            }
+            'T' => {
+                self.in_transaction = true;
+                self.stats.state(State::IdleInTransaction);
+            }
+            'E' => self.stats.transaction_error(now),
+            status => {
+                self.stats.state(State::Error);
+                return Err(Error::UnexpectedTransactionStatus(status));
+            }
+        }
+        self.stream_buffer.shrink_to_fit();
+        self.streaming = false;
+        self.statement_executed = false;
+
+        Ok(())
+    }
+
+    fn handle_command_complete(&mut self, cmd: &CommandComplete) {
+        match cmd.command() {
+            "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
+            "DEALLOCATE ALL" => self.prepared_statements.clear(),
+            "DISCARD ALL" => {
+                self.prepared_statements.clear();
+                self.client_params.server_reset();
+            }
+            // Someone reset params, we're gonna need to re-sync. RESET doesn't touch
+            // the role or session authorization, so keep tracking those.
+            "RESET" => self.client_params.server_reset_keep_identity(),
+            _ => (),
+        }
+        self.stats.rows_affected(cmd);
+        self.statement_executed = true;
+    }
+
     /// Synchronize parameters between client and server.
     pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
         start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
-        // Sync application_name parameter
-        // and update it in the stats.
-        let server_name = self.client_params.get_default("application_name", "PgDog");
-        let client_name = params.get_default("application_name", "PgDog");
+        let mut executed = 0;
+
+        // Sync application_name parameter and update it in the stats.
+        let server_name = self
+            .client_params
+            .get_known_default(KnownParameter::ApplicationName, "PgDog");
+        let client_name = params.get_known_default(KnownParameter::ApplicationName, "PgDog");
 
         self.stats.link_client(client_name, server_name, id);
 
-        // Clear any params previously tracked by SET.
-        self.changed_params.clear();
-        let mut clear_params = false;
+        let sync = self.client_params.sync(params);
 
-        // Compare client and server params.
-        let mut executed = if !params.identical(&self.client_params) {
-            // Construct client parameter SET queries.
-            let tracked = params.tracked_and_different(&self.client_params);
-            // Construct RESET queries to reset any current params
-            // to their default values.
-            let mut queries = self.client_params.reset_queries(params);
+        if !sync.is_empty() {
+            // If sync fails, the client will drop this server, and the
+            // Guard cleanup routine will reset parameters back to their original state.
+            self.mark_dirty(true);
 
-            // Combine both to create a new, fresh session state
-            // on this connection.
-            queries.extend(tracked.set_queries(false));
+            debug!("syncing {} params", sync.len());
+            self.execute_batch(sync.deref()).await?;
 
-            // Set state on the connection only if
-            // there are any params to change.
-            if !queries.is_empty() {
-                debug!("syncing {} params", queries.len());
+            executed += sync.len();
+        }
 
-                self.execute_batch(&queries).await?;
-                clear_params = true;
-            }
-
-            // Update params on this connection.
-            self.client_params = params.tracked();
-
-            queries.len()
-        } else {
-            0
-        };
-
-        // Sync any parameters set inside the transaction. These will
-        // need to be revered on rollback or commited on commit.
+        // Sync any parameters set inside the transaction. These will be
+        // automatically reverted on rollback or committed on commit.
         if let Some(start_transaction) = start_transaction {
             self.execute(start_transaction).await?;
-            let transaction_sets = params.set_queries(true);
+            let queries = sync.transaction_sync();
 
-            if !transaction_sets.is_empty() {
-                debug!("syncing {} in-transaction params", transaction_sets.len());
-
-                self.execute_batch(&transaction_sets).await?;
-                clear_params = true;
-
-                self.client_params.copy_in_transaction(params);
+            if !queries.is_empty() {
+                debug!("syncing {} in-transaction params", queries.len());
+                self.execute_batch(&queries).await?;
+                executed += queries.len();
             }
-
-            executed += transaction_sets.len();
         }
 
-        if clear_params {
-            // We can receive ParameterStatus messages here,
-            // but we should ignore them since we are managing the session state.
-            self.changed_params.clear();
-        }
+        // Sync completed successfully.
+        self.client_params.sync_complete(sync);
+
+        // Executing `SET` will trigger the server to send `ParameterStatus` for some of them,
+        // which will not be relevant for clients syncing params.
+        self.changed_params.clear();
+
+        // The server synced successfully, so we disarm the Guard cleanup routine.
+        self.mark_dirty(false);
 
         Ok(executed)
     }
 
+    /// Record a SET this server confirmed, so the next client
+    /// is synced against what the server actually has.
+    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+        if in_transaction {
+            self.client_params.begin();
+        }
+        self.client_params
+            .apply(&param.name, param.value.clone(), param.local);
+    }
+
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.
-    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_complete(&mut self, rollback: bool) {
         if rollback {
             self.client_params.rollback();
         } else {
@@ -881,6 +910,15 @@ impl Server {
         self.in_transaction
     }
 
+    /// A statement completed since the last ReadyForQuery.
+    pub(crate) fn statement_executed(&self) -> bool {
+        self.statement_executed
+    }
+
+    pub(crate) fn take_last_query_exec_time(&mut self) -> Option<Instant> {
+        self.last_query_exec_time.take()
+    }
+
     /// The server connection permanently failed.
     pub(crate) fn error(&self) -> bool {
         self.stats().get_state() == State::Error
@@ -919,18 +957,8 @@ impl Server {
     }
 
     /// Server parameters.
-    pub(crate) fn params(&self) -> &Parameters {
+    pub(crate) fn params(&self) -> &Arc<Parameters> {
         &self.params
-    }
-
-    /// Manually set the session_replication_role setting via SET
-    /// since apparently we can't do this via startup parameters.
-    async fn set_session_replication_role(&mut self) -> Result<(), Error> {
-        self.execute_checked("SET session_replication_role TO replica")
-            .await?;
-        self.params.insert("session_replication_role", "replica");
-
-        Ok(())
     }
 
     /// Execute a batch of queries and return all results.
@@ -1045,7 +1073,7 @@ impl Server {
         }
 
         // Reset any params left over.
-        self.transaction_params_hook(true);
+        self.transaction_complete(true);
 
         if !self.done() {
             Err(Error::RollbackFailed)
@@ -1072,13 +1100,80 @@ impl Server {
         Ok(())
     }
 
-    /// Drain any remaining messages on the server connection,
-    /// attempting to return the connection into a synchronized state.
-    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+    /// Abort a successful extended-protocol execution before synchronizing.
+    ///
+    /// A Sync by itself would commit PostgreSQL's implicit transaction.
+    /// Pending replies must be drained before calling this method.
+    pub(super) async fn rollback_and_synchronize(&mut self) -> Result<(), Error> {
+        let request = ServerRequest::parameterized("ROLLBACK", &[]);
+        self.send(&request.messages.into()).await?;
+
+        while !self.in_sync() {
+            self.read().await?;
+        }
+
+        if !self.done() {
+            return Err(Error::RollbackFailed);
+        }
+
+        self.stats.rollback();
+        self.transaction_complete(true);
+        self.re_synced = true;
+
+        Ok(())
+    }
+
+    /// Drain replies already owed by the server without changing transaction state.
+    pub(super) async fn drain_pending(&mut self) -> Result<(), Error> {
         while self.has_more_messages() {
             self.read().await?;
         }
 
+        Ok(())
+    }
+
+    /// Return an unfinished extended-protocol exchange to a reusable state.
+    ///
+    /// Returns false when the configured recovery policy cannot safely recover
+    /// the connection.
+    pub(super) async fn recover_protocol(
+        &mut self,
+        recovery: ConnectionRecovery,
+    ) -> Result<bool, Error> {
+        if self.has_more_messages() {
+            if !recovery.can_recover() || self.is_sending_request() {
+                return Ok(false);
+            }
+
+            debug!(
+                "[cleanup] draining data from \"{}\" server [{}]",
+                self.stats().get_state(),
+                self.addr()
+            );
+            self.drain_pending().await?;
+        }
+
+        if self.out_of_sync() || !self.statement_executed() {
+            self.synchronize().await?;
+        } else if recovery.can_rollback() {
+            debug!(
+                "[cleanup] rolling back extended transaction, in \"{}\" state [{}]",
+                self.stats().get_state(),
+                self.addr(),
+            );
+            self.rollback_and_synchronize().await?;
+        } else {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Drain any remaining messages on the server connection,
+    /// attempting to return the connection into a synchronized state.
+    #[cfg(test)]
+    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+        self.drain_pending().await?;
         self.synchronize().await
     }
 
@@ -1157,24 +1252,27 @@ impl Server {
     }
 
     /// Reset error state caused by schema change.
-    pub(crate) fn reset_schema_changed(&mut self) {
+    pub(super) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
         self.prepared_statements.clear();
     }
 
-    pub(crate) fn reset_params(&mut self) {
-        self.client_params.clear();
+    /// Reset server params to their original startup state.
+    pub(super) fn reset_params(&mut self) {
+        self.client_params.server_reset();
     }
 
-    pub(crate) fn reset_re_synced(&mut self) {
+    /// Reset the connection re_synced state to default.
+    pub(super) fn reset_re_synced(&mut self) {
         self.re_synced = false;
     }
 
-    pub(crate) fn re_synced(&self) -> bool {
+    /// Get server connection re_synced state.
+    pub(super) fn re_synced(&self) -> bool {
         self.re_synced
     }
 
-    pub(crate) fn disconnect_reason(&mut self, reason: DisconnectReason) {
+    pub(super) fn disconnect_reason(&mut self, reason: DisconnectReason) {
         if self.disconnect_reason.is_none() {
             self.disconnect_reason = Some(reason);
         }
@@ -1391,9 +1489,9 @@ pub(crate) mod test {
                 stream: None,
                 key,
                 id,
-                params: Parameters::default(),
+                params: Arc::default(),
                 changed_params: Parameters::default(),
-                client_params: Parameters::default(),
+                client_params: ParameterStore::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
                 prepared_statements: super::PreparedStatements::default(),
                 addr,
@@ -1408,6 +1506,7 @@ pub(crate) mod test {
                 stream_buffer: MessageBuffer::new(4096, None),
                 disconnect_reason: None,
                 statement_executed: false,
+                last_query_exec_time: None,
                 sending_request: false,
                 password_attempts: 1,
                 max_age: None,
@@ -1882,7 +1981,7 @@ pub(crate) mod test {
 
             assert!(server.done());
             assert_eq!(
-                server.stats().total().idle_in_transaction_time,
+                server.stats().last_checkout().idle_in_transaction_time,
                 Duration::ZERO
             );
         }
@@ -2504,9 +2603,9 @@ pub(crate) mod test {
             "on"
         };
 
-        let mut params = Parameters::default();
-        params.insert("application_name", "test_sync_params");
-        params.insert("is_superuser", opposite);
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test_sync_params");
+        params.set("is_superuser", opposite);
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
             .await
@@ -2613,8 +2712,8 @@ pub(crate) mod test {
 
     #[tokio::test]
     async fn test_params_sync() -> Result<(), Box<dyn std::error::Error>> {
-        let mut params = Parameters::default();
-        params.insert("application_name", "test");
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test");
 
         let mut server = test_server().await;
 
@@ -2630,7 +2729,7 @@ pub(crate) mod test {
 
         for i in 0..25 {
             let value = format!("apples_{}", i);
-            params.insert("application_name", value);
+            params.set("application_name", value);
 
             let changed = server
                 .link_client(FrontendPid::new(), &params, None)
@@ -3171,17 +3270,13 @@ pub(crate) mod test {
 
         server.execute("SELECT 1").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
-            Duration::ZERO,
-        );
-        assert_eq!(
             server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
         server.execute("BEGIN").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             Duration::ZERO,
         );
 
@@ -3190,7 +3285,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 2").await.unwrap();
 
-        let idle_time = server.stats().total().idle_in_transaction_time;
+        let idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             idle_time >= Duration::from_millis(50),
             "Expected idle time >= 50ms, got {:?}",
@@ -3206,7 +3301,7 @@ pub(crate) mod test {
 
         server.execute("COMMIT").await.unwrap();
 
-        let final_idle_time = server.stats().total().idle_in_transaction_time;
+        let final_idle_time = server.stats().last_checkout().idle_in_transaction_time;
         assert!(
             final_idle_time >= Duration::from_millis(150),
             "Expected final idle time >= 150ms, got {:?}",
@@ -3220,7 +3315,7 @@ pub(crate) mod test {
 
         server.execute("SELECT 3").await.unwrap();
         assert_eq!(
-            server.stats().total().idle_in_transaction_time,
+            server.stats().last_checkout().idle_in_transaction_time,
             final_idle_time,
         );
     }
@@ -3238,7 +3333,6 @@ pub(crate) mod test {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(server.read().await.is_err());
-        assert_eq!(server.stats().total().idle_xact_timeouts, 1);
         assert_eq!(server.stats().last_checkout().idle_xact_timeouts, 1);
     }
 
@@ -3313,8 +3407,8 @@ pub(crate) mod test {
     #[tokio::test]
     async fn test_reset_clears_client_params() {
         let mut server = test_server().await;
-        let mut params = Parameters::default();
-        params.insert("application_name", "test_reset");
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test_reset");
 
         // Sync params to server
         let changed = server

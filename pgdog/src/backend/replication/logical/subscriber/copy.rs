@@ -1,10 +1,19 @@
 //! Shard COPY stream from one source
 //! between N shards.
 
+use std::time::Duration;
+
 use futures::future::join_all;
 use pg_raw_parse::Node;
-use tracing::debug;
+use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
+use crate::backend::replication::data_sync::CopyProgress;
+use crate::config::config;
 use crate::frontend::client::query_engine::TwoPcPhase;
 use crate::frontend::client::query_engine::two_pc::{
     Manager, TwoPcTransaction, statement::phase_control,
@@ -26,14 +35,96 @@ use super::connect_primary;
 // Not really needed, but we're currently
 // sharding 3 CopyData messages at a time.
 // This reduces memory allocations.
+// TODO: This should be tested and optimized.
 static BUFFER_SIZE: usize = 3;
+
+pub(crate) struct BackgroundSubscriber {
+    recv_progress: watch::Receiver<CopyProgress>,
+    handle: JoinHandle<Result<CopySubscriber, Error>>,
+}
+
+impl BackgroundSubscriber {
+    /// Moves a `CopySubscriber` into a background task that shards and flushes
+    /// every row sent on the `Sender<CopyData>` channel returned.
+    ///
+    /// This avoids co-mingling the occasional flushes the subscriber has to do,
+    /// so that it doesn't slow down the reads...
+    ///
+    /// TODO: I wrote this early on before the current design. I'm not sure this is
+    /// necesary anymore since we theoretically can't easily get multiple writers
+    /// due to table-level locks Postgres imposes. HOWEVER, there are hacks
+    /// to get around that, e.g., writing, in parallel, to separate 'temporary'
+    /// tables on the destination, and then aggregating them together on the dest
+    /// (making use of fast disk speeds vs network). This could potentially be
+    /// future work, which is why I left it as-is. I found this to not affect
+    /// serial execution speed vs. the main branch in a benchmark.
+    ///
+    /// The task ends once every sender is dropped; then, `get_back_subscriber`
+    /// returns the `CopySubscriber` back to the main thread.
+    pub(crate) fn start_bg_task(mut sub: CopySubscriber) -> (Self, Sender<CopyData>) {
+        // Using a watch as we only need to know the recent progress update
+        // (if, for some reason, we haven't fetched the most-recent one yet,
+        // makes sense to replace it)
+        let (send_progress, recv_progress) = watch::channel(CopyProgress::default());
+
+        // There's a chance this could hit the bound, in which case, the
+        // publishers would be throttled by the source sends. Something which
+        // could be alleviated by a potential parallelization for publishers.
+        let (send_data, mut recv_data) = mpsc::channel::<CopyData>(BUFFER_SIZE);
+
+        let handle = tokio::spawn(async move {
+            let mut copied: CopyProgress = CopyProgress::default();
+
+            loop {
+                let mut buffer = Vec::new();
+                if recv_data.recv_many(&mut buffer, BUFFER_SIZE).await == 0 {
+                    break;
+                }
+
+                let (rows, bytes) = sub.flush(buffer).await?;
+
+                copied.rows += rows as u64;
+                copied.bytes += bytes as u64;
+
+                let _ = send_progress.send(copied);
+            }
+
+            Ok(sub)
+        });
+
+        (
+            Self {
+                recv_progress,
+                handle,
+            },
+            send_data,
+        )
+    }
+
+    /// Waits until there's a `CopyProgress` available (and returns it)
+    pub(crate) async fn fetch_copy_progress(&mut self) -> Option<CopyProgress> {
+        self.recv_progress.changed().await.ok()?;
+        Some(self.progress())
+    }
+
+    /// Latest `CopyProgress` available (sync)
+    /// Used on completion in the main thread
+    pub(crate) fn progress(&mut self) -> CopyProgress {
+        *self.recv_progress.borrow_and_update()
+    }
+
+    /// Return the `CopySubscriber` back to the main thread, now that we're
+    /// done sending to it (cancellation or finished)
+    pub(crate) async fn get_back_subscriber(&mut self) -> Result<CopySubscriber, Error> {
+        (&mut self.handle).await?
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct CopySubscriber {
     copy: CopyParser,
     /// Destination cluster.
     cluster: Cluster,
-    buffer: Vec<CopyData>,
     connections: Vec<ParallelConnection>,
     stmt: CopyStatement,
 }
@@ -50,7 +141,7 @@ impl CopySubscriber {
         cluster: &Cluster,
     ) -> Result<Self, Error> {
         let ast = pg_raw_parse::parse(&copy_stmt.copy_in()).map_err(ParseError::from)?;
-        let stmt = ast.stmts().next().ok_or(ParseError::EmptyQuery)?;
+        let stmt = ast.stmts().next().ok_or_else(|| ParseError::EmptyQuery)?;
         let mut copy = if let Node::CopyStmt(stmt) = stmt {
             CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
         } else {
@@ -63,12 +154,10 @@ impl CopySubscriber {
         Ok(Self {
             copy,
             cluster: cluster.clone(),
-            buffer: vec![],
             connections: vec![],
             stmt: copy_stmt.clone(),
         })
     }
-
     /// Connect to all shards. One connection per primary.
     pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         let mut servers = vec![];
@@ -160,8 +249,7 @@ impl CopySubscriber {
         for server in &mut self.connections {
             // Open an explicit transaction so the COPY is not autocommit: the commit is
             // deferred to copy_done(), so a CopyDone failure on any shard rolls back every
-            // shard (none commit). The commit pass itself is per-shard, not atomic across shards.
-            // TODO: implement complete 2pc to copy data to minimize chances of partial commits even more
+            // shard (none commit).
             Self::send_and_confirm(server, Query::new("BEGIN").into()).await?;
 
             debug!("{} [{}]", stmt.query(), server.addr());
@@ -183,17 +271,15 @@ impl CopySubscriber {
         Ok(())
     }
 
-    /// Finish COPY on all shards.
-    pub(crate) async fn copy_done(&mut self) -> Result<(), Error> {
-        self.flush().await?;
-
+    /// Finish COPY on all shards. `cancel` stops the wait for the 2PC manager.
+    pub(crate) async fn copy_done(&mut self, cancel: &CancellationToken) -> Result<(), Error> {
         // Stage pass: send CopyDone to every shard and read CommandComplete + ReadyForQuery.
         // Because each shard is inside an explicit transaction, CopyDone only finalises the
         // COPY (writes pages, builds indexes, checks constraints) — it does NOT commit.
         // The ReadyForQuery status byte is 'T' (in-transaction).
         // A failure here leaves every shard in an open transaction that rolls back when its
         // connection closes → no partial commit.
-        for server in &mut self.connections {
+        for (shard, server) in self.connections.iter_mut().enumerate() {
             // A binary COPY width mismatch (e.g. an int column copied into a bigint) surfaces as
             // protocol_violation "insufficient data left in message"; reclassify it so the
             // operator gets actionable guidance instead of a generic protocol error.
@@ -207,25 +293,29 @@ impl CopySubscriber {
                         Error::BinaryFormatMismatch(pg)
                     }
                     other => other,
+                })
+                .inspect_err(|error| {
+                    error!(
+                        "CopyDone failed on destination shard {shard}: {error}; \
+                         no shard is committed, all roll back on connection close"
+                    )
                 })?;
         }
 
         // Commit pass: every shard has staged its rows and is sitting in an open transaction.
-        // Commit them. The data is already written, so COMMIT is cheap and very likely to
-        // succeed. Sequential and NOT atomic across shards: if a COMMIT fails after one or more
-        // earlier shards have already committed, those shards stay committed — the only residual
-        // partial-commit window (full cross-shard atomicity via 2PC is intentionally out of
-        // scope). Shards not yet committed roll back on connection close. The
-        // validate_destination_has_rows() guard in the table copy retry loop prevents a
-        // doomed retry if this window is ever hit.
+        // With 2PC, the commit is atomic across shards: see commit_two_pc().
+        // Without 2PC, the shards commit one after another. If a COMMIT fails, the shards
+        // committed before it stay committed and the rest roll back on connection close.
+        // The validate_destination_has_rows() guard in the table copy retry loop then
+        // stops the retry.
         if self.cluster.two_pc_enabled() {
-            self.commit_two_pc().await?;
+            self.commit_two_pc(cancel).await?;
         } else {
             for (shard, server) in self.connections.iter_mut().enumerate() {
                 if let Err(error) =
                     Self::send_and_confirm(server, Query::new("COMMIT").into()).await
                 {
-                    tracing::error!(
+                    error!(
                         "COMMIT failed on destination shard {shard} during copy_done: {error}; \
                          shards committed before it stay committed, the rest roll back on \
                          connection close"
@@ -238,30 +328,65 @@ impl CopySubscriber {
         Ok(())
     }
 
-    async fn commit_two_pc(&mut self) -> Result<(), Error> {
+    async fn commit_two_pc(&mut self, cancel: &CancellationToken) -> Result<(), Error> {
         let manager = Manager::get();
         let txn = TwoPcTransaction::new();
         let identifier = self.cluster.identifier();
+        let mut phase = TwoPcPhase::Phase1;
 
-        async {
+        let result = async {
             let _guard_phase_1 = manager
                 .transaction_state(txn, &identifier, TwoPcPhase::Phase1)
                 .await?;
             self.two_pc_on_shards(txn, TwoPcPhase::Phase1).await?;
 
+            phase = TwoPcPhase::Phase2;
             let _guard_phase_2 = manager
                 .transaction_state(txn, &identifier, TwoPcPhase::Phase2)
                 .await?;
             self.two_pc_on_shards(txn, TwoPcPhase::Phase2).await?;
 
             manager.done(txn).await?;
-            Ok(())
+            Ok::<(), Error>(())
         }
-        .await
-        .map_err(|source| Error::TwoPcCleanupPending {
-            transaction: txn,
-            source: Box::new(source),
-        })
+        .await;
+
+        let Err(source) = result else {
+            return Ok(());
+        };
+
+        let wait = Duration::from_millis(config().config.resharding.two_pc_cleanup_timeout);
+        match cancel
+            .run_until_cancelled(timeout(wait, manager.wait_until_cleaned_up(txn)))
+            .await
+        {
+            None => {
+                warn!(
+                    "[2pc] copy aborted while the 2pc manager finishes transaction {txn} after {phase} failure: {source}"
+                );
+                return Err(Error::DataSyncAborted);
+            }
+            Some(Err(_)) => {
+                return Err(Error::TwoPcCleanupPending {
+                    transaction: txn,
+                    phase,
+                    source: Box::new(source),
+                });
+            }
+            Some(Ok(())) => {}
+        }
+
+        if phase == TwoPcPhase::Phase1 {
+            info!("[2pc] transaction {txn} rolled back after {phase} failure: {source}");
+            return Err(source);
+        }
+
+        warn!(
+            "[2pc] transaction {txn} committed by the 2pc manager after {phase} failure: {source}"
+        );
+        // The connections that failed are broken and cannot be reattached.
+        self.connections.clear();
+        Ok(())
     }
 
     async fn two_pc_on_shards(
@@ -283,26 +408,24 @@ impl CopySubscriber {
             futures.push(Self::send_and_confirm(server, Query::new(query).into()));
         }
 
-        for result in join_all(futures).await {
-            result?;
+        let mut first_error = None;
+        for (shard, result) in join_all(futures).await.into_iter().enumerate() {
+            if let Err(error) = result {
+                error!(
+                    "[2pc] {phase} failed on destination shard {shard} for transaction {txn}: {error}"
+                );
+                first_error.get_or_insert(error);
+            }
         }
 
-        Ok(())
-    }
-
-    /// Send data to subscriber, buffered.
-    pub(crate) async fn copy_data(&mut self, data: CopyData) -> Result<(usize, usize), Error> {
-        self.buffer.push(data);
-        if self.buffer.len() == BUFFER_SIZE {
-            return self.flush().await;
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
-
-        Ok((0, 0))
     }
 
-    async fn flush(&mut self) -> Result<(usize, usize), Error> {
-        let result = self.copy.shard(&self.buffer).await?;
-        self.buffer.clear();
+    pub(crate) async fn flush(&mut self, buffer: Vec<CopyData>) -> Result<(usize, usize), Error> {
+        let result = self.copy.shard(buffer.as_slice()).await?;
 
         let rows = result.len();
         let bytes = result.iter().map(|row| row.len()).sum::<usize>();
@@ -371,6 +494,7 @@ mod test {
             &table,
             &["id".into(), "value".into()],
             pgdog_config::CopyFormat::Binary,
+            Default::default(),
         );
         let cluster = Cluster::new_test(&config());
         cluster.launch();
@@ -390,24 +514,27 @@ mod test {
         subscriber.start_copy().await.unwrap();
 
         let header = CopyData::new(&Header::default().to_bytes());
-        subscriber.copy_data(header).await.unwrap();
+        subscriber.flush(vec![header]).await.unwrap();
 
         for i in 0..25_i64 {
             let id = Data::Column(Bytes::copy_from_slice(&i.to_be_bytes()));
             let email = Data::Column(Bytes::copy_from_slice("test@test.com".as_bytes()));
             let tuple = Tuple::new(&[id, email]);
             subscriber
-                .copy_data(CopyData::new(&tuple.to_bytes()))
+                .flush(vec![CopyData::new(&tuple.to_bytes())])
                 .await
                 .unwrap();
         }
 
         subscriber
-            .copy_data(CopyData::new(&Tuple::new_end().to_bytes()))
+            .flush(vec![CopyData::new(&Tuple::new_end().to_bytes())])
             .await
             .unwrap();
 
-        subscriber.copy_done().await.unwrap();
+        subscriber
+            .copy_done(&CancellationToken::new())
+            .await
+            .unwrap();
         let mut server = cluster.primary(0, &Request::default()).await.unwrap();
         let count = server
             .fetch_all::<i64>("SELECT COUNT(*)::BIGINT FROM pgdog.sharded")

@@ -27,10 +27,7 @@ fn test_begin_extended() {
         Sync.into(),
     ]);
 
-    match command {
-        Command::StartTransaction { extended, .. } => assert!(extended),
-        _ => panic!("expected StartTransaction, got {command:?}"),
-    }
+    assert!(matches!(command, Command::StartTransaction { .. }));
 }
 
 #[test]

@@ -225,9 +225,9 @@ async fn shard_consistency_data_row_validator_prepared_statement()
 
     admin_sqlx().await.execute("RELOAD").await?;
 
-    // Now prepare a statement against the views
+    // Now prepare a statement against the views.
     let result = sharded
-        .prepare("SELECT * FROM datarow_view WHERE id > $1 ORDER BY id")
+        .prepare("SELECT * FROM datarow_view WHERE id > $1")
         .await;
 
     // We want this test to specifically trigger DataRow validation, not RowDescription validation
@@ -235,7 +235,7 @@ async fn shard_consistency_data_row_validator_prepared_statement()
     let _stmt = result.expect("Prepare should succeed - we want to test DataRow validation, not RowDescription validation");
 
     // Now execute the prepared statement to trigger DataRow validation
-    let execute_result = sqlx::query("SELECT * FROM datarow_view WHERE id > $1 ORDER BY id")
+    let execute_result = sqlx::query("SELECT * FROM datarow_view WHERE id > $1")
         .bind(0i64)
         .fetch_all(&sharded)
         .await;

@@ -1,6 +1,7 @@
 use derive_more::FromStr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_with::{DurationMilliSeconds, serde_as};
 use std::env;
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -72,6 +73,7 @@ pub enum QuerySizeLimitAction {
 /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/>
+#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct General {
@@ -470,6 +472,10 @@ pub struct General {
     #[serde(default = "General::default_passthrough_auth")]
     pub passthrough_auth: PassthroughAuth,
 
+    /// Passthrough auth debounce delay.
+    #[serde(default = "General::passthrough_auth_debounce_delay")]
+    pub passthrough_auth_debounce_delay: u64,
+
     /// Maximum amount of time to allow for PgDog to create a connection to Postgres.
     ///
     /// _Default:_ `5000`
@@ -499,6 +505,16 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_timeout>
     #[serde(default = "General::default_query_timeout")]
     pub query_timeout: u64,
+
+    /// Maximum time in milliseconds to connect, send a query cancellation request,
+    /// and wait for Postgres to close the cancellation connection.
+    ///
+    /// _Default:_ `5000`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cancellation_timeout>
+    #[serde_as(as = "DurationMilliSeconds")]
+    #[serde(default = "General::default_query_cancellation_timeout")]
+    pub query_cancellation_timeout: Duration,
 
     /// Maximum amount of time a client is allowed to wait for a connection from the pool.
     ///
@@ -806,6 +822,17 @@ pub struct General {
     #[serde(default = "General::resharding_parallel_copies")]
     pub resharding_parallel_copies: usize,
 
+    /// How many source copies we'll launch for a singular table copy.
+    /// Recommended when dealing with TOAST-heavy tables, which usually
+    /// cost multiple disk reads and bound the stream by read latency,
+    /// especially with a cold cache.
+    ///
+    /// When used effectively, this will massively speed up table copies
+    /// by a factor of what this is set to (e.g., 30x, depending on disk IOPS),
+    /// fully utilizing the disk IOPS.
+    #[serde(default = "General::resharding_parallel_within_table_copies")]
+    pub resharding_parallel_within_table_copies: usize,
+
     /// Maximum number of retries for a failed table copy during resharding (per-table).
     /// Retries use exponential backoff starting at `resharding_copy_retry_min_delay`.
     /// _Default:_ `5`
@@ -903,14 +930,6 @@ pub struct General {
     #[serde(default = "General::cutover_timeout_action")]
     pub cutover_timeout_action: CutoverTimeoutAction,
 
-    /// Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.
-    ///
-    /// _Default:_ `false`
-    ///
-    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config>
-    #[serde(default)]
-    pub cutover_save_config: bool,
-
     /// Size of the client token passthrough cache.
     #[serde(default = "General::auth_token_cache_size")]
     pub auth_token_cache_size: u64,
@@ -971,10 +990,12 @@ impl Default for General {
             prepared_statements_ttl_jitter: Self::default_prepared_statements_ttl_jitter(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),
+            passthrough_auth_debounce_delay: Self::passthrough_auth_debounce_delay(),
             connect_timeout: Self::default_connect_timeout(),
             connect_attempt_delay: Self::default_connect_attempt_delay(),
             connect_attempts: Self::connect_attempts(),
             query_timeout: Self::default_query_timeout(),
+            query_cancellation_timeout: Self::default_query_cancellation_timeout(),
             checkout_timeout: Self::checkout_timeout(),
             client_login_timeout: Self::client_login_timeout(),
             dry_run: Self::dry_run(),
@@ -1016,6 +1037,8 @@ impl Default for General {
             sharding_lookup_cache_size: Self::sharding_lookup_cache_size(),
             sharding_lookup_timeout: Self::sharding_lookup_timeout(),
             resharding_parallel_copies: Self::resharding_parallel_copies(),
+            resharding_parallel_within_table_copies: Self::resharding_parallel_within_table_copies(
+            ),
             resharding_copy_retry_max_attempts: Self::resharding_copy_retry_max_attempts(),
             resharding_copy_retry_min_delay: Self::resharding_copy_retry_min_delay(),
             resharding_replication_retry_max_attempts:
@@ -1029,7 +1052,6 @@ impl Default for General {
             cutover_last_transaction_delay: Self::cutover_last_transaction_delay(),
             cutover_timeout: Self::cutover_timeout(),
             cutover_timeout_action: Self::cutover_timeout_action(),
-            cutover_save_config: bool::default(),
             unique_id_function: Self::unique_id_function(),
             auth_token_cache_size: Self::auth_token_cache_size(),
             fips: Self::fips(),
@@ -1230,6 +1252,13 @@ impl General {
         )
     }
 
+    fn default_query_cancellation_timeout() -> Duration {
+        Duration::from_millis(Self::env_or_default(
+            "PGDOG_QUERY_CANCELLATION_TIMEOUT",
+            5_000,
+        ))
+    }
+
     pub fn query_timeout(&self) -> Duration {
         Duration::from_millis(self.query_timeout)
     }
@@ -1292,6 +1321,10 @@ impl General {
     }
 
     fn resharding_parallel_copies() -> usize {
+        1
+    }
+
+    fn resharding_parallel_within_table_copies() -> usize {
         1
     }
 
@@ -1500,7 +1533,7 @@ impl General {
     }
 
     pub fn prepared_statements_limit() -> usize {
-        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", i64::MAX as usize)
+        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", 5_000)
     }
 
     fn default_prepared_statements_ttl() -> Option<u64> {
@@ -1573,6 +1606,10 @@ impl General {
         } else {
             PassthroughAuth::default()
         }
+    }
+
+    fn passthrough_auth_debounce_delay() -> u64 {
+        Self::env_or_default("PGDOG_PASSTHROUGH_AUTH_DEBOUNCE_DELAY", 1_000)
     }
 
     /// An unrecognized `PGDOG_FIPS` fails closed: a typo must not silently
@@ -1983,6 +2020,7 @@ mod tests {
         let _guard = set_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT", "15000");
         let _guard = set_env_var("PGDOG_CONNECT_ATTEMPT_DELAY", "1000");
         let _guard = set_env_var("PGDOG_QUERY_TIMEOUT", "30000");
+        let _guard = set_env_var("PGDOG_QUERY_CANCELLATION_TIMEOUT", "12000");
         let _guard = set_env_var("PGDOG_CLIENT_IDLE_TIMEOUT", "3600000");
 
         assert_eq!(General::idle_healthcheck_interval(), 45000);
@@ -1996,6 +2034,10 @@ mod tests {
         );
         assert_eq!(General::default_connect_attempt_delay(), 1000);
         assert_eq!(General::default_query_timeout(), 30000);
+        assert_eq!(
+            General::default_query_cancellation_timeout(),
+            Duration::from_millis(12000)
+        );
         assert_eq!(General::default_client_idle_timeout(), 3600000);
 
         let _guard = remove_env_var("PGDOG_IDLE_HEALTHCHECK_INTERVAL");
@@ -2006,6 +2048,7 @@ mod tests {
         let _guard = remove_env_var("PGDOG_SHUTDOWN_TERMINATION_TIMEOUT");
         let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPT_DELAY");
         let _guard = remove_env_var("PGDOG_QUERY_TIMEOUT");
+        let _guard = remove_env_var("PGDOG_QUERY_CANCELLATION_TIMEOUT");
         let _guard = remove_env_var("PGDOG_CLIENT_IDLE_TIMEOUT");
 
         assert_eq!(General::idle_healthcheck_interval(), 30000);
@@ -2015,6 +2058,10 @@ mod tests {
         assert_eq!(General::default_shutdown_timeout(), 60000);
         assert_eq!(General::default_shutdown_termination_timeout(), None);
         assert_eq!(General::default_connect_attempt_delay(), 0);
+        assert_eq!(
+            General::default_query_cancellation_timeout(),
+            Duration::from_millis(5000)
+        );
     }
 
     #[test]
@@ -2114,7 +2161,7 @@ mod tests {
 
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
-        assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
+        assert_eq!(General::prepared_statements_limit(), 5_000);
         assert_eq!(General::default_prepared_statements_ttl(), None);
         assert_eq!(General::default_prepared_statements_ttl_jitter(), 30_000);
         assert_eq!(General::query_cache_limit(), 1_000);

@@ -1,7 +1,8 @@
 use crate::config::config;
 use crate::frontend::Command;
 use crate::frontend::client::TransactionType;
-use crate::frontend::router::parser::{Cache, Shard};
+use crate::frontend::router::parser::{Cache, Shard, route::ShardSource};
+use crate::net::ProtocolMessage;
 use std::collections::HashSet;
 use std::ops::Deref;
 
@@ -31,6 +32,51 @@ fn test_close_direct_single_shard() {
 }
 
 #[test]
+fn test_portal_messages_follow_set_shard() {
+    let mut test = QueryParserTest::new().with_param("pgdog.shard", "1");
+
+    for request in [
+        vec![Describe::new_portal("probe").into(), Sync.into()],
+        vec![Execute::new_portal("probe").into(), Sync.into()],
+        vec![Close::portal("probe").into(), Sync.into()],
+    ] {
+        let command = test.execute(request);
+        let route = command.route();
+        assert_eq!(route.shard(), &Shard::Direct(1), "{route:?}");
+        assert_eq!(
+            route.shard_with_priority().source(),
+            &ShardSource::Set,
+            "{route:?}"
+        );
+    }
+}
+
+#[test]
+fn test_portal_describe_follows_set_sharding_key() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables.clone())
+        .without_sharded_schemas()
+        .with_param("pgdog.sharding_key", "org_child");
+    let describe: Vec<ProtocolMessage> = vec![Describe::new_portal("probe").into(), Sync.into()];
+
+    let command = test.execute(describe.clone());
+    let pending = command.route().pending_lookups();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].value, "org_child");
+
+    warm_lookup_cache(&tables, "org_child", "org_root");
+    let declare = test.execute(vec![
+        Query::new("DECLARE probe NO SCROLL CURSOR FOR SELECT * FROM some_table").into(),
+    ]);
+    assert!(declare.route().shard().is_direct(), "{declare:?}");
+
+    let command = test.execute(describe);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(command.route().shard(), declare.route().shard());
+}
+
+#[test]
 fn test_dry_run_simple() {
     let mut test = QueryParserTest::new_single_shard(&config()).with_dry_run();
 
@@ -40,8 +86,8 @@ fn test_dry_run_simple() {
 
     let cache = Cache::queries();
     let stmt = cache.values().next().unwrap();
-    assert_eq!(stmt.stats.lock().direct, 1);
-    assert_eq!(stmt.stats.lock().multi, 0);
+    assert_eq!(stmt.stats().direct, 1);
+    assert_eq!(stmt.stats().multi, 0);
     assert_eq!(command.route().shard(), &Shard::Direct(0));
 }
 

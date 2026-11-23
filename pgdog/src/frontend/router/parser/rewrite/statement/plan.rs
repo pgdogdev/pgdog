@@ -1,12 +1,15 @@
 use super::super::ee;
-use super::insert::{build_resolved_split_requests, build_split_requests};
+use super::insert::build_resolved_split_requests;
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
-use super::{Error, InsertSplit, InsertSplitRewriteResult, PrepareExecute, ShardingKeyUpdate};
+use super::{Error, InsertSplitRewriteResult, PrepareExecute, ShardingKeyUpdate};
 use crate::frontend::client::QueryTimestamps;
 
 use crate::frontend::router::Route;
 use crate::frontend::router::parser::ShardWithPriority;
+use crate::frontend::router::parser::rewrite::statement::insert::{
+    InsertSplitPlan, Subquery, build_split_requests,
+};
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
@@ -40,6 +43,7 @@ impl BindParams {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn is_original(&self) -> bool {
         matches!(self, Self::Original { .. })
     }
@@ -119,7 +123,7 @@ where
 ///
 /// Executed in order of fields in this struct.
 ///
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug)]
 pub(crate) struct RewritePlan {
     /// One-based parameter indexes and ID sources in allocation order.
     /// Simple protocol records sequence calls here without using the indexes.
@@ -135,7 +139,11 @@ pub(crate) struct RewritePlan {
 
     /// Splitting of multi-tuple INSERT statements into
     /// multiple queries.
-    pub(crate) insert_split: Vec<InsertSplit>,
+    pub(crate) insert_split: Option<InsertSplitPlan>,
+
+    /// Executing an inner subquery separately to ensure proper routing
+    /// Involves injecting the results of the inner query into the outer query
+    pub(crate) subqueries: Vec<Subquery>,
 
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
@@ -145,10 +153,11 @@ pub(crate) struct RewritePlan {
     pub(crate) offset: Option<OffsetPlan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum RewriteResult {
     InPlace { offset: Option<OffsetPlan> },
     InsertSplit(InsertSplitRewriteResult),
+    Subquery(Vec<Subquery>),
     ShardingKeyUpdate(ShardingKeyUpdate),
 }
 
@@ -164,6 +173,8 @@ impl RewriteResult {
                     Some(Route::write(ShardWithPriority::new_table(Shard::All)))
                 }
             }
+            // TODO(jkaczman): check if it evaluates to the same shard like insert split
+            Self::Subquery(_) => Some(Route::write(ShardWithPriority::new_table(Shard::All))),
             Self::ShardingKeyUpdate(_) => {
                 Some(Route::write(ShardWithPriority::new_table(Shard::All)))
             }
@@ -202,11 +213,12 @@ impl RewritePlan {
     /// True if the plan would not modify the query or its messages.
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.bind_params.is_original()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
-            && self.insert_split.is_empty()
+            && self.insert_split.is_none()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
     }
@@ -364,7 +376,15 @@ impl RewritePlan {
         // Only rewrite executable requests. Some clients prepare the statement
         // separately (e.g. go/pq with Parse, Describe, Sync). We don't need to rewrite
         // those since insert split will return the same row(s) as multi-tuple insert.
-        if !self.insert_split.is_empty() && request.is_executable() {
+        if let Some(InsertSplitPlan::Unnest(unnest_insert)) = &self.insert_split
+            && request.is_executable()
+        {
+            return Ok(RewriteResult::InsertSplit(unnest_insert.build(request)?));
+        }
+
+        if let Some(InsertSplitPlan::Values(values_splits)) = &self.insert_split
+            && request.is_executable()
+        {
             if self
                 .bind_params
                 .iter()
@@ -374,14 +394,15 @@ impl RewritePlan {
                     _ => None,
                 })
             {
-                return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult {
-                    requests: build_resolved_split_requests(query, request)?,
-                }));
+                return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult::new(
+                    build_resolved_split_requests(query, request)?,
+                )));
             }
-            let requests = build_split_requests(&self.insert_split, request)?;
-            return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult {
+
+            let requests = build_split_requests(values_splits, request)?;
+            return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult::new(
                 requests,
-            }));
+            )));
         }
 
         if let Some(sharding_key_update) = &self.sharding_key_update
@@ -390,6 +411,10 @@ impl RewritePlan {
             return Ok(RewriteResult::ShardingKeyUpdate(
                 sharding_key_update.clone(),
             ));
+        }
+
+        if !self.subqueries.is_empty() && request.is_executable() {
+            return Ok(RewriteResult::Subquery(self.subqueries.clone()));
         }
 
         Ok(RewriteResult::InPlace {

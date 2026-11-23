@@ -7,7 +7,6 @@ use crate::{
         client::Sticky,
         router::{Ast, RoutingComment, parser::StatementParameters, sharding::ResolvedLookups},
     },
-    net::Parameters,
 };
 
 #[derive(Debug, Clone)]
@@ -37,7 +36,7 @@ pub(crate) struct RouterContext<'a> {
     /// Routing comment on the original query
     pub(super) comment: Option<&'a RoutingComment>,
     /// Schema.
-    pub(super) schema: Schema,
+    pub(super) schema: &'a Schema,
     /// Sharding key translations resolved for this statement. Routing
     /// reads these before the lookup cache, so a second routing pass
     /// after resolving lookups can't miss.
@@ -50,7 +49,7 @@ impl<'a> RouterContext<'a> {
     pub(crate) fn new(
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
-        params: &'a Parameters,
+        params: impl Into<ParameterHints<'a>>,
         transaction: Option<Transaction>,
         sticky: Sticky,
     ) -> Result<Self, Error> {
@@ -64,7 +63,7 @@ impl<'a> RouterContext<'a> {
                 .map(|query| query.extended())
                 .unwrap_or_default(),
             bind,
-            parameter_hints: ParameterHints::from(params),
+            parameter_hints: params.into(),
             cluster,
             transaction,
             copy_mode,
@@ -75,7 +74,7 @@ impl<'a> RouterContext<'a> {
             ast: buffer.ast.as_deref(),
             cached: buffer.cached,
             comment: buffer.routing_comment.as_deref(),
-            schema: cluster.schema(),
+            schema: cluster.loaded_schema(),
             resolved_lookups: ResolvedLookups::default(),
         })
     }

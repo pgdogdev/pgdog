@@ -26,17 +26,14 @@ impl<'a> SearchPath<'a> {
         search_path: Option<&'a ParameterValue>,
         schema: &'a Schema,
     ) -> Self {
-        let default_path = schema.search_path();
-        let search_path = match search_path {
-            Some(ParameterValue::Tuple(overriden)) => overriden.as_slice(),
-            _ => default_path,
-        };
+        let search_path = search_path.map_or(schema.search_path(), ParameterValue::as_slice);
         Self { search_path, user }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -50,5 +47,21 @@ mod test {
         };
         let res = resolver.resolve();
         assert_eq!(res, vec!["pgdog", "public"]);
+    }
+
+    #[test]
+    fn test_search_path_single_schema_override() {
+        let schema = Schema::from_parts(vec!["$user".into(), "public".into()], HashMap::new());
+        let param = ParameterValue::String("tenant_b".into());
+        let resolver = SearchPath::new("pgdog", Some(&param), &schema);
+        assert_eq!(resolver.resolve(), vec!["tenant_b"]);
+    }
+
+    #[test]
+    fn test_search_path_multi_schema_override() {
+        let schema = Schema::from_parts(vec!["public".into()], HashMap::new());
+        let param = ParameterValue::Tuple(vec!["$user".into(), "tenant_b".into()]);
+        let resolver = SearchPath::new("pgdog", Some(&param), &schema);
+        assert_eq!(resolver.resolve(), vec!["pgdog", "tenant_b"]);
     }
 }

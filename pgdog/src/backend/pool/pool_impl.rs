@@ -21,8 +21,8 @@ use crate::net::{
 
 use super::inner::CheckInResult;
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Stats, Waiting,
+    Address, CancelGuard, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids,
+    PoolConfig, Request, State, Stats, Waiting,
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
@@ -46,7 +46,7 @@ pub(crate) struct InnerSync {
     pub(super) id: u64,
     pub(super) config: Config,
     pub(super) health: TargetHealth,
-    pub(super) params: OnceCell<Parameters>,
+    pub(super) params: OnceCell<Arc<Parameters>>,
     pub(super) lsn_stats: RwLock<LsnStats>,
     pub(super) lsn_role_change: Notify,
     pub(super) oids: Arc<Oids>,
@@ -199,25 +199,21 @@ impl Pool {
 
     /// Server parameters
     pub(crate) fn cached_params(&self) -> Option<&Parameters> {
-        self.inner.params.get()
+        self.inner.params.get().map(Arc::as_ref)
     }
 
     /// Record the server parameters of a newly created connection
-    pub(super) fn cache_params(&self, params: &Parameters) {
-        if self.inner.params.get().is_none() {
-            let _ = self.inner.params.set(params.clone());
-        }
+    pub(super) fn cache_params(&self, params: &Arc<Parameters>) {
+        self.inner.params.get_or_init(|| params.clone());
     }
 
     /// Get server parameters, fetch them if necessary.
-    pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+    pub(crate) async fn params(&self, request: &Request) -> Result<&Arc<Parameters>, Error> {
         if let Some(params) = self.inner.params.get() {
-            Ok(params)
-        } else {
-            let conn = self.get(request).await?;
-            let params = conn.params().clone();
-            Ok(self.inner.params.get_or_init(|| params))
+            return Ok(params);
         }
+        let conn = self.get(request).await?;
+        Ok(self.inner.params.get_or_init(|| conn.params().clone()))
     }
 
     /// Perform a health check on the connection if one is needed.
@@ -301,8 +297,10 @@ impl Pool {
         // Must NOT hold the lock while doing async I/O.
         let key = self.lock().cancel_key(id).cloned();
         if let Some(key) = key {
-            Server::cancel(self.addr(), key).await?;
+            let _guard = CancelGuard::new(self, key.pid());
+            Server::cancel(self.addr(), key, self.config().cancel_timeout).await?;
         }
+
         Ok(())
     }
 
@@ -337,7 +335,7 @@ impl Pool {
 
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
-                to_guard.put(server, now)?;
+                to_guard.put(server, now);
             }
             to_guard.set_taken(taken);
         }
@@ -376,7 +374,7 @@ impl Pool {
         let futures: Vec<_> = self
             .lock()
             .cancel_keys()
-            .map(|key| Server::cancel(&addr, key.clone()))
+            .map(|key| Server::cancel(&addr, key.clone(), self.config().cancel_timeout))
             .collect();
 
         try_join_all(futures)
@@ -445,6 +443,11 @@ impl Pool {
     pub(crate) fn set_offline(self) {
         let mut guard = self.lock();
         guard.online = false;
+    }
+
+    /// Check if the pool is online.
+    pub(super) fn offline(&self) -> bool {
+        !self.lock().online
     }
 
     /// Pool exclusive lock.

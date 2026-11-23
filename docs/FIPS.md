@@ -34,7 +34,7 @@ When enforced, PgDog:
 
 The host flag is the node kernel's, so a container sees its node's setting. Configuring a base image for FIPS (for example OpenSSL's FIPS provider or a FIPS crypto-policy) doesn't set it.
 - **Checks every TLS configuration** it builds (the client-facing acceptor and every upstream connector, at startup, on reload, and on certificate rotation) with Rustls' `ServerConfig::fips()` / `ClientConfig::fips()`, and refuses ones that aren't FIPS-compliant. A failed reload keeps the previous TLS configuration.
-- **Refuses MD5 authentication**: `auth_type = "md5"` is refused like any other failing configuration, and an MD5 challenge from a Postgres server fails the connection.
+- **Refuses MD5 authentication**: `auth_type = "md5"`, in `[general]` or on any user in `users.toml`, is refused like any other failing configuration, and an MD5 challenge from a Postgres server fails the connection.
 - **Refuses cross-account RDS IAM** (`server_iam_assume_role` on an `rds_iam` user), whose STS request the AWS SDK signs with non-FIPS cryptography.
 - **Logs a warning** for settings that weaken a FIPS deployment without using non-approved crypto: client TLS not configured or not required, passthrough authentication enabled, or server TLS that isn't `verify_full`.
 

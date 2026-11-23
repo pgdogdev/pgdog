@@ -5,8 +5,8 @@ use tokio::sync::OnceCell;
 
 use futures::future::try_join_all;
 use pgdog_stats::{
-    Databases, SchemaShardDefinition, SchemaShardStatus, SchemaStatementFailure,
-    SchemaSyncDefinition, SchemaSyncStatus, TaskDefinition,
+    Databases, ReshardingDirection, SchemaShardDefinition, SchemaShardStatus,
+    SchemaStatementFailure, SchemaSyncDefinition, SchemaSyncStatus, TaskDefinition,
 };
 use tracing::{info, warn};
 
@@ -49,6 +49,9 @@ impl From<SchemaSyncPhase> for SyncState {
 pub(crate) struct SchemaSyncTask {
     #[builder(field)]
     dump: SchemaDump,
+    /// Sync only the publication's tables instead of the whole source schema.
+    #[builder(default)]
+    publication_tables_only: bool,
     databases: Databases,
     publication: String,
     phase: SchemaSyncPhase,
@@ -56,10 +59,14 @@ pub(crate) struct SchemaSyncTask {
     ignore_errors: bool,
     #[builder(default)]
     dry_run: bool,
+    #[builder(default)]
+    direction: ReshardingDirection,
 }
 
 pub(crate) type SchemaSyncBuilder = SchemaSyncTaskBuilder<
-    schema_sync_task_builder::SetPublication<schema_sync_task_builder::SetDatabases>,
+    schema_sync_task_builder::SetPublication<
+        schema_sync_task_builder::SetDatabases<schema_sync_task_builder::SetPublicationTablesOnly>,
+    >,
 >;
 
 impl Task for SchemaSyncTask {
@@ -77,6 +84,7 @@ impl Task for SchemaSyncTask {
             sync_state: self.phase.into(),
             ignore_errors: self.ignore_errors,
             dry_run: self.dry_run,
+            direction: self.direction,
         }
     }
 
@@ -89,6 +97,7 @@ impl Task for SchemaSyncTask {
             &self.databases.source,
             &self.databases.destination,
             &self.publication,
+            self.publication_tables_only,
         )?;
 
         ctx.set_status(SchemaSyncStatus::LoadingSchema);
@@ -299,6 +308,7 @@ mod tests {
                 sync_state: phase.into(),
                 ignore_errors: false,
                 dry_run: false,
+                direction: ReshardingDirection::Forward,
             });
 
             assert_eq!(definition.name, "schema_sync");

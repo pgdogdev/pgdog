@@ -2,7 +2,10 @@ use thiserror::Error;
 
 use crate::net::messages::ErrorResponse;
 
-use super::databases::User;
+use super::{
+    databases::User,
+    pool::connection::{aggregate::Error as AggregateError, multi_shard::Error as MultiShardError},
+};
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
@@ -105,8 +108,8 @@ pub(crate) enum Error {
     #[error("2pc commit supported with multi-shard binding only")]
     TwoPcMultiShardOnly,
 
-    #[error("unsupported aggregation {function}: {reason}")]
-    UnsupportedAggregation { function: String, reason: String },
+    #[error("{0}")]
+    Aggregate(#[from] AggregateError),
 
     #[error("toml: {0}")]
     TomlSer(#[from] toml::ser::Error),
@@ -119,6 +122,12 @@ pub(crate) enum Error {
 
     #[error("cannot switch shards in a direct-to-shard transaction")]
     DirectShardMismatch,
+
+    #[error("query cancellation timeout")]
+    QueryCancelTimeout,
+
+    #[error("query cancellation protocol mismatch")]
+    QueryCancelMismatch,
 }
 
 impl From<crate::frontend::Error> for Error {
@@ -137,6 +146,19 @@ impl Error {
             Error::Pool(PoolError::AllReplicasDown) => true,
             _ => false,
         }
+    }
+
+    /// It's not a supported feature so we should tell the client so.
+    pub(crate) fn is_unsupported(&self) -> bool {
+        use crate::backend::pool::Error as PoolError;
+        matches!(
+            self,
+            Self::Aggregate(AggregateError::UnsupportedAggregation { .. })
+                | Self::MultiShard(MultiShardError::Aggregate(
+                    AggregateError::UnsupportedAggregation { .. }
+                ))
+                | Self::Pool(PoolError::PubSubDisabled)
+        )
     }
 
     /// Transient network/pool fault worth retrying.

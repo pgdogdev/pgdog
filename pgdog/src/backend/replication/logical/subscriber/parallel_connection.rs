@@ -55,7 +55,11 @@ impl ParallelConnection {
 
     // Wait for a message from the server.
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
-        let reply = self.rx.recv().await.ok_or(Error::ParallelConnection)?;
+        let reply = self
+            .rx
+            .recv()
+            .await
+            .ok_or_else(|| Error::ParallelConnection)?;
         match reply {
             ParallelReply::Message(message) => Ok(message),
             ParallelReply::Server(_) => Err(Error::ParallelConnection),
@@ -111,7 +115,11 @@ impl ParallelConnection {
     // only work if the connection is idle (ReadyForQuery received, no more traffic expected).
     pub(crate) async fn reattach(mut self) -> Result<Server, Error> {
         self.stop.cancel();
-        let server = self.rx.recv().await.ok_or(Error::ParallelConnection)?;
+        let server = self
+            .rx
+            .recv()
+            .await
+            .ok_or_else(|| Error::ParallelConnection)?;
         match server {
             ParallelReply::Server(server) => Ok(*server),
             _ => Err(Error::ParallelConnection),

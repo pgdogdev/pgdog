@@ -1,4 +1,5 @@
 //! Connection pool errors.
+use pgdog_stats::ReplicaLag;
 use thiserror::Error;
 
 use crate::net::BackendPid;
@@ -53,8 +54,8 @@ pub(crate) enum Error {
     #[error("fast shutdown failed")]
     FastShutdown,
 
-    #[error("replica lag")]
-    ReplicaLag,
+    #[error("replica lag: {0}")]
+    ReplicaLag(ReplicaLag),
 
     #[error("initial health check has not been successfully performed")]
     InitialHealthCheck,
@@ -96,7 +97,7 @@ mod tests {
         assert!(Error::HealthcheckError.is_retryable());
         assert!(Error::ServerClosed.is_retryable());
         assert!(Error::Offline.is_retryable());
-        assert!(Error::ReplicaLag.is_retryable());
+        assert!(Error::ReplicaLag(ReplicaLag::default()).is_retryable());
         assert!(Error::PoolUnhealthy.is_retryable());
     }
 

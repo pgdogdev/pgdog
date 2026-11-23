@@ -2,6 +2,7 @@ use super::*;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::{AstContext, Cache};
 use crate::net::ProtocolMessage;
+use crate::parameters::KnownParameter;
 
 impl QueryEngine {
     /// Rewrite extended protocol messages.
@@ -9,7 +10,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_messages: &mut [ProtocolMessage],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PreparedStatementError> {
         for message in client_messages {
             if message.is_extended() {
                 let level = context.prepared_statements.level;
@@ -38,12 +39,14 @@ impl QueryEngine {
         }
 
         if let Some(query) = client_request.query()? {
+            let timestamps = context.timestamps();
             let cluster = self.backend.cluster()?;
-            let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
+            let ast_ctx = AstContext::from_cluster(cluster, context.params, timestamps);
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
             client_request.ast = Some(ast.ast);
             client_request.cached = ast.cached;
             client_request.routing_comment = Some(ast.comment);
+            client_request.comment_spans = ast.comment_spans;
         }
         Ok(())
     }
@@ -56,12 +59,16 @@ impl QueryEngine {
         let Some(ast) = client_request.ast.take() else {
             return Ok(None);
         };
+        let timestamps = context.timestamps();
         let cluster = self.backend.cluster()?;
-        let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
+        let timezone = context
+            .params
+            .get_known(KnownParameter::TimeZone)
+            .or_else(|| cluster.default_timezone());
 
         let mut rewrite_result = ast
             .rewrite_plan
-            .apply(client_request, ast_ctx.timezone, ast_ctx.query_timestamps)
+            .apply(client_request, timezone, timestamps)
             .await?;
         client_request.ast = Some(ast);
 
@@ -69,6 +76,7 @@ impl QueryEngine {
         // if all of them go to the same shard.
         if let RewriteResult::InsertSplit(ref mut insert_split) = rewrite_result {
             super::multi_step::InsertMulti::route(insert_split, context, self.backend.cluster()?)?;
+            insert_split.group_by_shard(client_request, context.prepared_statements)?;
         }
 
         Ok(Some(rewrite_result))

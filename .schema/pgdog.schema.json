@@ -46,7 +46,6 @@
         "cross_shard_disabled": false,
         "cutover_last_transaction_delay": 1000,
         "cutover_replication_lag_threshold": 0,
-        "cutover_save_config": false,
         "cutover_timeout": 30000,
         "cutover_timeout_action": "abort",
         "cutover_traffic_stop_threshold": 1000000,
@@ -84,14 +83,16 @@
         "openmetrics_namespace": null,
         "openmetrics_port": null,
         "passthrough_auth": "disabled",
+        "passthrough_auth_debounce_delay": 1000,
         "pooler_mode": "transaction",
         "port": 6432,
         "prepared_statements": "extended",
-        "prepared_statements_limit": 9223372036854775807,
+        "prepared_statements_limit": 5000,
         "prepared_statements_ttl": null,
         "prepared_statements_ttl_jitter": 30000,
         "pub_sub_channel_size": 0,
         "query_cache_limit": 1000,
+        "query_cancellation_timeout": 5000,
         "query_log": null,
         "query_log_stdout": false,
         "query_parser": "auto",
@@ -109,6 +110,7 @@
         "resharding_copy_retry_max_attempts": 5,
         "resharding_copy_retry_min_delay": 1000,
         "resharding_parallel_copies": 1,
+        "resharding_parallel_within_table_copies": 1,
         "resharding_replication_retry_max_attempts": 5,
         "resharding_replication_retry_min_delay": 1000,
         "rollback_timeout": 5000,
@@ -183,7 +185,8 @@
         "endpoint": null,
         "headers": {},
         "namespace": null,
-        "push_interval": 0
+        "push_interval": 0,
+        "temporality": "delta"
       }
     },
     "plugins": {
@@ -224,7 +227,8 @@
     "resharding": {
       "$ref": "#/$defs/Resharding",
       "default": {
-        "post_data_validation": "during_replication"
+        "post_data_validation": "during_replication",
+        "two_pc_cleanup_timeout": 600000
       }
     },
     "rewrite": {
@@ -235,7 +239,8 @@
         "non_deterministic_functions": "ignore",
         "primary_key": "ignore",
         "shard_key": "error",
-        "split_inserts": "error"
+        "split_inserts": "error",
+        "subqueries": "ignore"
       }
     },
     "sharded_mappings": {
@@ -860,11 +865,6 @@
           "default": 0,
           "minimum": 0
         },
-        "cutover_save_config": {
-          "description": "Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config>",
-          "type": "boolean",
-          "default": false
-        },
         "cutover_timeout": {
           "description": "Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout>",
           "type": "integer",
@@ -1106,6 +1106,13 @@
           "$ref": "#/$defs/PassthroughAuth",
           "default": "disabled"
         },
+        "passthrough_auth_debounce_delay": {
+          "description": "Passthrough auth debounce delay.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000,
+          "minimum": 0
+        },
         "pooler_mode": {
           "description": "Default pooler mode to use for database pools.\n\n_Default:_ `transaction`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode>",
           "$ref": "#/$defs/PoolerMode",
@@ -1128,7 +1135,7 @@
           "description": "Number of prepared statements that will be allowed for each server connection.\n\n**Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit>",
           "type": "integer",
           "format": "uint",
-          "default": 9223372036854775807,
+          "default": 5000,
           "minimum": 0
         },
         "prepared_statements_ttl": {
@@ -1160,6 +1167,13 @@
           "type": "integer",
           "format": "uint",
           "default": 1000,
+          "minimum": 0
+        },
+        "query_cancellation_timeout": {
+          "description": "Maximum time in milliseconds to connect, send a query cancellation request,\nand wait for Postgres to close the cancellation connection.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cancellation_timeout>",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
           "minimum": 0
         },
         "query_log": {
@@ -1260,6 +1274,13 @@
         },
         "resharding_parallel_copies": {
           "description": "How many parallel copies to launch, irrespective of the number of available replicas.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "resharding_parallel_within_table_copies": {
+          "description": "How many source copies we'll launch for a singular table copy.\nRecommended when dealing with TOAST-heavy tables, which usually\ncost multiple disk reads and bound the stream by read latency,\nespecially with a cold cache.\n\nWhen used effectively, this will massively speed up table copies\nby a factor of what this is set to (e.g., 30x, depending on disk IOPS),\nfully utilizing the disk IOPS.",
           "type": "integer",
           "format": "uint",
           "default": 1,
@@ -1723,9 +1744,29 @@
           "format": "uint64",
           "default": 10000,
           "minimum": 0
+        },
+        "temporality": {
+          "description": "How counters are reported to the OTLP endpoint.\n\n**Note:** If we send `delta`, GCP and Prometheus reject the counters.\nUse `cumulative` for GCP and Prometheus.\n\n_Default:_ `delta`\n\n_Options:_ `delta`, `cumulative`",
+          "$ref": "#/$defs/OtelTemporality",
+          "default": "delta"
         }
       },
       "additionalProperties": false
+    },
+    "OtelTemporality": {
+      "description": "How PgDog reports counters to the OTLP endpoint.",
+      "oneOf": [
+        {
+          "description": "Send the change since the previous push (default).",
+          "type": "string",
+          "const": "delta"
+        },
+        {
+          "description": "Send the running total and the time PgDog started counting.",
+          "type": "string",
+          "const": "cumulative"
+        }
+      ]
     },
     "PassthroughAuth": {
       "description": "toggle automatic creation of connection pools given the user name, database and password.\n\nSee [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>",
@@ -1938,6 +1979,11 @@
           "description": "Routes all queries to the primary by default. Replicas are used only when a\nquery explicitly opts in (`SET pgdog.role`, `SET LOCAL pgdog.role`, or a\n`/* pgdog_role: replica */` comment); those opt-in reads go to the replicas.",
           "type": "string",
           "const": "prefer_primary"
+        },
+        {
+          "description": "Include primary if all replicas are lagging.",
+          "type": "string",
+          "const": "include_primary_if_replica_lag"
         }
       ]
     },
@@ -1991,6 +2037,13 @@
         "post_data_validation": {
           "$ref": "#/$defs/PostDataValidationStage",
           "default": "during_replication"
+        },
+        "two_pc_cleanup_timeout": {
+          "description": "How long, in milliseconds, a table copy waits for a failed 2PC commit\nto be committed or rolled back. On timeout, the copy fails.\n_Default:_ `600000` (10 minutes)",
+          "type": "integer",
+          "format": "uint64",
+          "default": 600000,
+          "minimum": 0
         }
       },
       "additionalProperties": false
@@ -2023,6 +2076,11 @@
           "description": "Behavior for multi-row `INSERT` on sharded tables: `error` rejects, `rewrite` distributes rows to their shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts>",
           "$ref": "#/$defs/RewriteMode",
           "default": "error"
+        },
+        "subqueries": {
+          "description": "Behavior for queries containing subqueries: `rewrite` executes the subquery separately and injects its results into the outer query\n\n**Note:** Highly experimental and in development. Do not use in production.\n\n_Default:_ `ignore`",
+          "$ref": "#/$defs/RewriteMode",
+          "default": "ignore"
         }
       },
       "additionalProperties": false
@@ -2369,6 +2427,11 @@
             "null"
           ],
           "default": null
+        },
+        "prefix": {
+          "description": "Treat `name` as a prefix, e.g. `name = \"users\"` also matches `users_1` and `users_archive`.\n\n_Default:_ `false`",
+          "type": "boolean",
+          "default": false
         },
         "primary": {
           "description": "Marks this table as the primary sharding anchor (e.g. `users`). PgDog uses the primary table to resolve foreign-key relationships when routing queries.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#primary>",

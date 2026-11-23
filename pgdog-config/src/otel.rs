@@ -4,6 +4,17 @@ use std::env;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// How PgDog reports counters to the OTLP endpoint.
+#[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OtelTemporality {
+    /// Send the change since the previous push (default).
+    #[default]
+    Delta,
+    /// Send the running total and the time PgDog started counting.
+    Cumulative,
+}
+
 /// OpenTelemetry push exporter settings.
 ///
 /// When `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics
@@ -61,6 +72,17 @@ pub struct Otel {
     /// Env: `OTEL_METRIC_EXPORT_INTERVAL`
     #[serde(default = "Otel::push_interval")]
     pub push_interval: u64,
+
+    /// How counters are reported to the OTLP endpoint.
+    ///
+    /// **Note:** If we send `delta`, GCP and Prometheus reject the counters.
+    /// Use `cumulative` for GCP and Prometheus.
+    ///
+    /// _Default:_ `delta`
+    ///
+    /// _Options:_ `delta`, `cumulative`
+    #[serde(default)]
+    pub temporality: OtelTemporality,
 }
 
 impl Otel {
@@ -159,6 +181,20 @@ mod test {
         assert_eq!(
             config.otel.headers.get("Authorization").unwrap(),
             "Bearer token"
+        );
+    }
+
+    #[test]
+    fn temporality_from_toml() {
+        let otel: Otel = toml::from_str(r#"temporality = "cumulative""#).expect("parse");
+        assert_eq!(otel.temporality, OtelTemporality::Cumulative);
+
+        let invalid_temporality_error =
+            toml::from_str::<Otel>(r#"temporality = "invalid""#).expect_err("invalid temporality");
+
+        assert_eq!(
+            invalid_temporality_error.message(),
+            "unknown variant `invalid`, expected `delta` or `cumulative`"
         );
     }
 

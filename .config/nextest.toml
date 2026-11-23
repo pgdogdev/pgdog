@@ -1,5 +1,5 @@
 [profile.default]
-slow-timeout = { period = "15s" }
+slow-timeout = { period = "15s", terminate-after = 10 }
 fail-fast = true
 # ignore integration tests since they require a running pgdog instance
 default-filter = "not package(integration_tests_rust)"

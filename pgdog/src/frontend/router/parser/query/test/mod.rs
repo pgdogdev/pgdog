@@ -4,9 +4,10 @@ use crate::{
     config::config,
     frontend::client::QueryTimestamps,
     net::{
-        Close, Format, Parameters, Sync,
+        Close, Format, Sync,
         messages::{bind::Parameter, parse::Parse},
     },
+    parameters::ParameterStore,
 };
 use bytes::Bytes;
 
@@ -24,12 +25,14 @@ pub(crate) mod setup;
 
 pub(crate) mod test_bypass;
 pub(crate) mod test_comments;
+pub(crate) mod test_copy;
 pub(crate) mod test_ddl;
 pub(crate) mod test_delete;
 pub(crate) mod test_dml;
 pub(crate) mod test_explain;
 pub(crate) mod test_functions;
 pub(crate) mod test_insert;
+mod test_join_columns;
 pub(crate) mod test_prefer_primary;
 pub(crate) mod test_prepared;
 mod test_replica_only;
@@ -49,7 +52,7 @@ fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
     let cluster = Cluster::new_test(&config());
     let buffered = BufferedQuery::Query(Query::new(query));
-    let params = Parameters::default();
+    let params = ParameterStore::default();
     let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
     let ast = Cache::get()
         .query(&buffered, &ctx, &mut PreparedStatements::default())
@@ -65,6 +68,38 @@ fn parse_query(query: &str) -> Command {
     query_parser.parse(context).unwrap().clone()
 }
 
+#[test]
+fn parser_marks_dml_for_metrics() {
+    for query in [
+        "SELECT 1",
+        "INSERT INTO metrics_test VALUES (1)",
+        "UPDATE metrics_test SET id = 2",
+        "DELETE FROM metrics_test",
+        "COPY metrics_test TO STDOUT",
+    ] {
+        let command = parse_query(query);
+        assert_eq!(
+            command.route().statement_type(),
+            Some(StatementType::Dml),
+            "{query}"
+        );
+        assert_eq!(command.route().table_change(), TableChange::None);
+    }
+}
+
+#[test]
+fn parser_marks_table_ddl_for_metrics() {
+    let command = parse_query("CREATE TABLE metrics_test (id BIGINT)");
+    assert_eq!(command.route().statement_type(), Some(StatementType::Ddl));
+    assert_eq!(command.route().table_change(), TableChange::Created);
+}
+
+#[test]
+fn parser_does_not_count_session_commands_as_dml() {
+    let command = parse_query("SHOW transaction_isolation");
+    assert_eq!(command.route().statement_type(), None);
+}
+
 macro_rules! command {
     ($query:expr_2021) => {{ command!($query, false) }};
 
@@ -73,7 +108,7 @@ macro_rules! command {
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test(&crate::config::config());
         let buffered = BufferedQuery::Query(Query::new($query));
-        let params = Parameters::default();
+        let params = ParameterStore::default();
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(
             &cluster,
             &params,
@@ -131,7 +166,7 @@ macro_rules! query_parser {
             .expect("no query in client request");
 
         let mut prep_stmts = PreparedStatements::default();
-        let params = Parameters::default();
+        let params = ParameterStore::default();
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(
             &cluster,
             &params,
@@ -190,7 +225,7 @@ macro_rules! parse {
         let bind = Bind::new_params_codes($name, &params, $codes);
         let cluster = Cluster::new_test(&crate::config::config());
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous($query));
-        let client_params = Parameters::default();
+        let client_params = ParameterStore::default();
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(
             &cluster,
             &client_params,
@@ -481,7 +516,7 @@ fn test_set() {
     let cluster = Cluster::new_test(&config());
     let mut prep_stmts = PreparedStatements::default();
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
-    let params = Parameters::default();
+    let params = ParameterStore::default();
     let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
     let ast = Cache::get()
         .query(&buffered_query, &ctx, &mut prep_stmts)
@@ -571,10 +606,7 @@ fn test_insert_do_update() {
 #[test]
 fn test_begin_extended() {
     let command = query_parser!(QueryParser::default(), Parse::new_anonymous("BEGIN"), false);
-    match command {
-        Command::StartTransaction { extended, .. } => assert!(extended),
-        _ => panic!("not a transaction"),
-    }
+    assert!(matches!(command, Command::StartTransaction { .. }));
 }
 
 #[test]
@@ -627,7 +659,7 @@ WHERE t2.account = (
 	)
 	";
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
-    let params = Parameters::default();
+    let params = ParameterStore::default();
     let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::now());
     let ast = Cache::get()
         .query(&buffered_query, &ctx, &mut prep_stmts)
@@ -669,7 +701,7 @@ fn test_close_direct_one_shard() {
 
     let buf: ClientRequest = vec![Close::named("test").into(), Sync.into()].into();
     let transaction = None;
-    let params = Parameters::default();
+    let params = ParameterStore::default();
 
     let context = RouterContext::new(&buf, &cluster, &params, transaction, Sticky::new()).unwrap();
 

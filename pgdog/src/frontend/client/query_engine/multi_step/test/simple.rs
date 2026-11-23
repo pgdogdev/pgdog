@@ -42,7 +42,7 @@ mod insert {
         assert_eq!(messages.len(), 2);
 
         let command_complete = CommandComplete::from_bytes(messages[0].to_bytes()).unwrap();
-        assert_eq!(command_complete.rows().unwrap().unwrap(), 5);
+        assert_eq!(command_complete.rows().unwrap(), 5);
 
         truncate_table("sharded", &mut stream).await;
     }

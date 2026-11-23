@@ -13,7 +13,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{select, sync::Notify, time::Instant};
+use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -129,29 +129,15 @@ impl Manager {
         Ok(())
     }
 
-    /// Block until the monitor has removed this transaction from the manager,
-    /// or until a fixed timeout elapses.
+    /// Block until the monitor has removed this transaction from the manager.
+    /// The caller decides how long to wait.
     ///
     /// No-op if the transaction was never registered or is already gone.
     pub(crate) async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) {
-        const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
-
-        let deadline = Instant::now() + WAIT_TIMEOUT;
-        loop {
-            if !self.inner.lock().transactions.contains_key(&transaction) {
-                return;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                warn!(
-                    "[2pc] timed out waiting for transaction {} cleanup; monitor will retry",
-                    transaction
-                );
-                return;
-            }
+        while self.inner.lock().transactions.contains_key(&transaction) {
             select! {
                 _ = self.notify.notify.notified() => {}
-                _ = safe_sleep(remaining) => {}
+                _ = safe_sleep(MAINTENANCE) => {}
             }
         }
     }
@@ -183,7 +169,13 @@ impl Manager {
                     transaction,
                     identifier: identifier.clone(),
                 })
-                .await?;
+                .await
+                .inspect_err(|_| {
+                    // remove from the inner state, since we haven't be able
+                    // to record the transaction anyway and the first phase
+                    // is already failed.
+                    self.remove(transaction);
+                })?;
             } else {
                 wal.add(TwoPcRecordPhase::new(transaction)).await?;
             }
@@ -408,11 +400,11 @@ impl Manager {
         self.notify.notify.notify_one();
         let transactions = self.inner.lock().queue.len();
 
-        info!("[2pc] cleaning up {} two-phase transactions", transactions);
+        if transactions > 0 {
+            info!("[2pc] finishing {transactions} two-phase transactions");
+        }
 
         self.notify.done.cancelled().await;
-
-        info!("[2pc] manager shutdown successful");
     }
 }
 

@@ -35,6 +35,62 @@ pub(crate) use target_health::*;
 #[cfg(test)]
 mod test;
 
+/// Read target state that decides if the primary can serve a read.
+trait Candidate {
+    fn role(&self) -> Role;
+    fn banned(&self) -> bool;
+}
+
+impl Candidate for &Target {
+    fn role(&self) -> Role {
+        Target::role(self)
+    }
+
+    fn banned(&self) -> bool {
+        self.ban.banned()
+    }
+}
+
+/// Decide if the primary stays in `candidates` for a read.
+///
+/// `candidates` must already exclude resharding-only targets and replicas
+/// behind the requested LSN.
+///
+#[doc = include_str!("primary_reads.md")]
+fn primary_reads(rw_split: ReadWriteSplit, read_only: bool, candidates: &[impl Candidate]) -> bool {
+    use ReadWriteSplit::*;
+
+    let has_unbanned_replica = || {
+        candidates
+            .iter()
+            .any(|target| target.role() == Role::Replica && !target.banned())
+    };
+
+    match rw_split {
+        // If `read_only` is true, only allow if there's no replicas.
+        IncludePrimary => !(read_only && has_unbanned_replica()),
+        // Include primary only if all replicas have been eliminated by the replica
+        // lag filter or are banned.
+        IncludePrimaryIfReplicaLag => !has_unbanned_replica(),
+        IncludePrimaryIfReplicaBanned => {
+            !(read_only && has_unbanned_replica())
+                && (candidates
+                    .iter()
+                    .any(|target| target.role() == Role::Replica && target.banned())
+                    || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
+        }
+        // Read from primary only if there is no replicas at all.
+        // If replicas are banned that will lead to [`Error::AllReplicasDown`]
+        ExcludePrimary => !candidates
+            .iter()
+            .any(|target| target.role() == Role::Replica),
+        // We read from the primary anyway if we have no available replicas.
+        // PreferPrimary makes all queries writes. If a query lands here,
+        // it's because of pgdog.role=replica.
+        PreferPrimary => !has_unbanned_replica(),
+    }
+}
+
 /// Read query load balancer target.
 #[derive(Clone, Debug)]
 pub(crate) struct Target {
@@ -245,7 +301,7 @@ impl LoadBalancer {
     }
 
     /// Get parameters from first non-banned connection pool.
-    pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+    pub(crate) async fn params(&self, request: &Request) -> Result<&Arc<Parameters>, Error> {
         if let Some(target) = self.targets.iter().find(|target| !target.ban.banned()) {
             return target.pool.params(request).await;
         }
@@ -335,6 +391,7 @@ impl LoadBalancer {
     /// Wait until automatic role detection elects a primary.
     ///
     /// Fails with [`Error::CheckoutTimeout`] if no election happens in time.
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     async fn wait_primary(&self) -> Result<Pool, Error> {
         let mut receiver = self.elected_primary.subscribe();
 
@@ -343,7 +400,7 @@ impl LoadBalancer {
             .map_err(|_| Error::CheckoutTimeout)?
             .ok()
             .and_then(|elected| elected.as_ref().cloned())
-            .ok_or(Error::NoPrimary)
+            .ok_or_else(|| Error::NoPrimary)
     }
 
     /// Check out a connection from the primary.
@@ -362,9 +419,9 @@ impl LoadBalancer {
         self.wait_primary().await?.get(request).await
     }
 
+    /// Check out a read connection using the configured load balancing strategy.
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
-        use ReadWriteSplit::*;
         use smallvec::SmallVec;
 
         let mut candidates: SmallVec<[&Target; 32]> = self
@@ -373,24 +430,14 @@ impl LoadBalancer {
             .filter(|target| !target.pool.config().resharding_only) // Don't let reads on resharding-only replicas.
             .collect();
 
-        let has_unbanned_replica = candidates
-            .iter()
-            .any(|target| target.role() == Role::Replica && !target.ban.banned());
-        // If `read_only` is true, only allow if there's no replicas.
-        let primary_reads = match self.rw_split {
-            IncludePrimary => !(request.read_only && has_unbanned_replica),
-            IncludePrimaryIfReplicaBanned => {
-                !(request.read_only && has_unbanned_replica)
-                    && (candidates.iter().any(|target| target.ban.banned())
-                        || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
-            }
-            // we read from the primary if we have no replicas
-            ExcludePrimary => !has_unbanned_replica,
-            // PreferPrimary makes all queries writes. If a query lands here,
-            // it's because of pgdog.role=replica. Let it use the primary only if
-            // no replicas are available.
-            PreferPrimary => !has_unbanned_replica,
-        };
+        // Remove any replicas that are behind the requested LSN.
+        if let Some(lsn) = request.lsn {
+            candidates.retain(|target| {
+                target.role() == Role::Primary || target.pool.lsn_stats().lsn.lsn >= lsn
+            });
+        }
+
+        let primary_reads = primary_reads(self.rw_split, request.read_only, &candidates);
 
         if !primary_reads {
             candidates.retain(|target| target.role() == Role::Replica);
@@ -400,59 +447,70 @@ impl LoadBalancer {
             return Err(Error::AllReplicasDown);
         }
 
-        match self.lb_strategy {
-            Random => candidates.shuffle(&mut rand::rng()),
-            RoundRobin => {
-                let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % candidates.len();
-                let mut reshuffled = SmallVec::with_capacity(candidates.len());
-                reshuffled.extend_from_slice(&candidates[first..]);
-                reshuffled.extend_from_slice(&candidates[..first]);
-                candidates = reshuffled;
-            }
-            LeastActiveConnections => {
-                candidates.sort_by_cached_key(|target| target.pool.lock().checked_out());
-            }
-            WeightedRoundRobin => {
-                let total_weight: i64 = candidates
-                    .iter()
-                    .map(|target| target.pool.config().lb_weight as i64)
-                    .sum();
+        // make sure we don't use the banned targets calculations,
+        // since it can skew the distribution when we have banned instances
+        let mut healthy: SmallVec<[&Target; 32]> = candidates
+            .iter()
+            .copied()
+            .filter(|target| !target.ban.banned())
+            .collect();
 
-                if total_weight > 0 {
-                    for target in &candidates {
-                        target
-                            .current_weight
-                            .fetch_add(target.pool.config().lb_weight as i64, Ordering::Relaxed);
-                    }
-
-                    let max_idx = candidates
+        if !healthy.is_empty() {
+            match self.lb_strategy {
+                Random => healthy.shuffle(&mut rand::rng()),
+                RoundRobin => {
+                    let first = self.round_robin.fetch_add(1, Ordering::Relaxed) % healthy.len();
+                    healthy.rotate_left(first);
+                }
+                LeastActiveConnections => {
+                    healthy.sort_by_cached_key(|target| target.pool.lock().checked_out());
+                }
+                WeightedRoundRobin => {
+                    let total_weight: i64 = healthy
                         .iter()
-                        .enumerate()
-                        .max_by_key(|(_, t)| t.current_weight.load(Ordering::Relaxed))
-                        .map(|(idx, _)| idx)
-                        .unwrap_or_default();
+                        .map(|target| target.pool.config().lb_weight as i64)
+                        .sum();
 
-                    candidates[max_idx]
-                        .current_weight
-                        .fetch_sub(total_weight, Ordering::Relaxed);
+                    if total_weight > 0 {
+                        for target in &healthy {
+                            target.current_weight.fetch_add(
+                                target.pool.config().lb_weight as i64,
+                                Ordering::Relaxed,
+                            );
+                        }
 
-                    candidates.swap(0, max_idx);
+                        let max_idx = healthy
+                            .iter()
+                            .enumerate()
+                            .max_by_key(|(_, t)| t.current_weight.load(Ordering::Relaxed))
+                            .map(|(idx, _)| idx)
+                            .unwrap_or_default();
+
+                        healthy[max_idx]
+                            .current_weight
+                            .fetch_sub(total_weight, Ordering::Relaxed);
+
+                        healthy.swap(0, max_idx);
+                    }
                 }
             }
         }
 
-        // Only ban a candidate pool if there are more than one
-        // and we have alternates.
-        let bannable = candidates.len() > 1;
+        // Only ban a candidate pool if there are other healthy alternates.
+        let bannable = healthy.len() > 1;
 
-        for target in &candidates {
+        for target in &healthy {
+            // we still check banned state since the candidate
+            // could be banned in the middle of `get` awaiting
             if target.ban.banned() {
                 continue;
             }
             match target.pool.get(request).await {
                 Ok(conn) => return Ok(conn),
                 Err(Error::Offline) => {
-                    continue;
+                    // We never mark one pool as offline and leave it in the load balancer.
+                    // All pools are replaced at the same time.
+                    return Err(Error::Offline);
                 }
                 Err(err) => {
                     if bannable {
@@ -465,6 +523,13 @@ impl LoadBalancer {
         candidates
             .iter()
             .for_each(|target| target.ban.unban(true, UnbanReason::AllTargetsBanned));
+
+        // If all targets are banned (manually), this should still
+        // check that all pools are indeed offline and return the correct
+        // error the cluster connection manager can re-load its cluster reference.
+        if candidates.iter().all(|target| target.pool.offline()) {
+            return Err(Error::Offline);
+        }
 
         Err(Error::AllReplicasDown)
     }

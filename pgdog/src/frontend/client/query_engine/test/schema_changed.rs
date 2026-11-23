@@ -123,11 +123,11 @@ async fn test_create_table_sets_schema_changed() {
     setup_client.read_until('Z').await.unwrap();
     drop(setup_client);
 
-    assert_ddl_sets_schema_changed(
+    Box::pin(assert_ddl_sets_schema_changed(
         "CREATE TABLE test_sc_create (id INT)",
         "CREATE TABLE",
         Some("DROP TABLE IF EXISTS test_sc_create"),
-    )
+    ))
     .await;
 }
 
@@ -144,11 +144,11 @@ async fn test_alter_table_sets_schema_changed() {
     setup_client.read_until('Z').await.unwrap();
     drop(setup_client);
 
-    assert_ddl_sets_schema_changed(
+    Box::pin(assert_ddl_sets_schema_changed(
         "ALTER TABLE test_sc_alter ADD COLUMN name TEXT",
         "ALTER TABLE",
         Some("DROP TABLE IF EXISTS test_sc_alter"),
-    )
+    ))
     .await;
 }
 
@@ -163,7 +163,12 @@ async fn test_drop_table_sets_schema_changed() {
     setup_client.read_until('Z').await.unwrap();
     drop(setup_client);
 
-    assert_ddl_sets_schema_changed("DROP TABLE test_sc_drop", "DROP TABLE", None).await;
+    Box::pin(assert_ddl_sets_schema_changed(
+        "DROP TABLE test_sc_drop",
+        "DROP TABLE",
+        None,
+    ))
+    .await;
 }
 
 #[tokio::test]
@@ -175,11 +180,11 @@ async fn test_create_view_sets_schema_changed() {
     setup_client.read_until('Z').await.unwrap();
     drop(setup_client);
 
-    assert_ddl_sets_schema_changed(
+    Box::pin(assert_ddl_sets_schema_changed(
         "CREATE VIEW test_sc_view AS SELECT 1 AS col",
         "CREATE VIEW",
         Some("DROP VIEW IF EXISTS test_sc_view"),
-    )
+    ))
     .await;
 }
 

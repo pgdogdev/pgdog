@@ -3,7 +3,7 @@ use std::ops::Deref;
 use pg_raw_parse::{ConstValue, Node, deparse, make, nodes};
 
 use crate::frontend::ClientRequest;
-use crate::frontend::router::parser::Limit;
+use crate::frontend::router::parser::{Limit, LimitClause};
 use crate::net::ProtocolMessage;
 
 use super::*;
@@ -32,28 +32,30 @@ impl OffsetPlan {
         }
 
         // Resolve actual values: use literal if known, otherwise read from Bind.
+        // Expressions were already computed by `LimitClause` when routing.
+        let routed = *route.limit();
         let mut limit_val = self.limit.limit;
         let mut offset_val = self.limit.offset;
 
         for message in request.messages.iter_mut() {
             if let ProtocolMessage::Bind(bind) = message {
-                if limit_val.is_none() {
+                if limit_val.is_none() && self.limit_param > 0 {
                     let idx = self.limit_param - 1;
                     limit_val = Some(
                         bind.parameter(idx)?
-                            .ok_or(Error::MissingParameter(self.limit_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.limit_param as u16))?
                             .bigint()
-                            .ok_or(Error::MissingParameter(self.limit_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.limit_param as u16))?
                             as usize,
                     );
                 }
-                if offset_val.is_none() {
+                if offset_val.is_none() && self.offset_param > 0 {
                     let idx = self.offset_param - 1;
                     offset_val = Some(
                         bind.parameter(idx)?
-                            .ok_or(Error::MissingParameter(self.offset_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.offset_param as u16))?
                             .bigint()
-                            .ok_or(Error::MissingParameter(self.offset_param as u16))?
+                            .ok_or_else(|| Error::MissingParameter(self.offset_param as u16))?
                             as usize,
                     );
                 }
@@ -63,8 +65,8 @@ impl OffsetPlan {
         }
 
         route.set_limit(Limit {
-            limit: limit_val,
-            offset: offset_val,
+            limit: limit_val.or(routed.limit),
+            offset: offset_val.or(routed.offset),
         });
 
         Ok(())
@@ -91,8 +93,8 @@ impl OffsetPlan {
         );
 
         let node = &mut request.ast;
-        let node = node.as_mut().ok_or(Error::MissingAst)?;
-        let node = node.ast.first().ok_or(Error::MissingAst)?;
+        let node = node.as_mut().ok_or_else(|| Error::MissingAst)?;
+        let node = node.ast.first().ok_or_else(|| Error::MissingAst)?;
 
         let pg_raw_parse::Node::ExecuteStmt(execute) = node.stmt() else {
             unreachable!("The query must be ExecuteStmt to have reached here.");
@@ -146,20 +148,22 @@ impl OffsetPlan {
 enum LimitValueInfo {
     Literal(usize),
     Param(usize),
+    /// Computed by [`LimitClause`] when the route is built.
+    Expression,
 }
 
 impl LimitValueInfo {
     fn literal(&self) -> Option<usize> {
         match self {
             LimitValueInfo::Literal(v) => Some(*v),
-            LimitValueInfo::Param(_) => None,
+            LimitValueInfo::Param(_) | LimitValueInfo::Expression => None,
         }
     }
 
     fn param_index(&self) -> usize {
         match self {
             LimitValueInfo::Param(i) => *i,
-            LimitValueInfo::Literal(_) => 0,
+            LimitValueInfo::Literal(_) | LimitValueInfo::Expression => 0,
         }
     }
 }
@@ -172,6 +176,8 @@ fn extract_limit_value(node: Node<'_>) -> Option<LimitValueInfo> {
         Node::ParamRef(nodes::ParamRef { number, .. }) => {
             Some(LimitValueInfo::Param(*number as usize))
         }
+        Node::None => None,
+        node if LimitClause::is_computable(node) => Some(LimitValueInfo::Expression),
         _ => None,
     }
 }
@@ -210,9 +216,57 @@ pub(super) fn rewrite_select<'a>(
     select.set_limit_offset(mem.none());
 }
 
+/// Remove LIMIT and OFFSET from the shard query, so shards return every row
+/// and PgDog applies both after the merge.
+pub(super) fn remove_select<'a>(
+    select: &mut nodes::SelectStmtMut<'a, '_>,
+    mem: make::MemoryToken<'a>,
+) {
+    let limit = without_limit(select.limit_count(), mem);
+    let offset = without_limit(select.limit_offset(), mem);
+    select.set_limit_count(limit);
+    select.set_limit_offset(offset);
+}
+
+/// `CASE WHEN (x)::bigint < 0 THEN (x)::bigint END` is NULL (no limit) unless
+/// the value is negative, where Postgres returns its own error. It also keeps
+/// `$n` in the query, so Postgres infers the same parameter types.
+fn without_limit<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
+    if matches!(node, Node::None) {
+        return mem.none();
+    }
+    let negative = mem.make_a_expr(
+        nodes::A_Expr_Kind::AEXPR_OP,
+        mem.make_list(&[mem.make_string(Some("<")).uncast()]),
+        to_bigint(node, mem),
+        mem.make_a_const(ConstValue::Integer(0)).uncast(),
+    );
+    let mut when = mem.make_node::<nodes::CaseWhen>();
+    when.as_mut().set_expr(negative.uncast());
+    when.as_mut().set_result(to_bigint(node, mem));
+    let mut case = mem.make_node::<nodes::CaseExpr>();
+    case.as_mut().set_args(mem.make_list(&[when.uncast()]));
+    case.uncast()
+}
+
+/// LIMIT forms PgDog can't apply itself after removing them with [`remove_select`].
+pub(super) fn unsupported_limit(select: &nodes::SelectStmt) -> Option<&'static str> {
+    // PgDog pages rows by position, without the sort keys to find ties.
+    if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
+        return Some("FETCH FIRST WITH TIES is unsupported");
+    }
+    if !LimitClause::is_computable(select.limit_count())
+        || !LimitClause::is_computable(select.limit_offset())
+    {
+        return Some("LIMIT and OFFSET must be integer arithmetic over literals and parameters");
+    }
+    None
+}
+
 impl StatementRewrite<'_> {
     pub(super) fn limit_offset(&self, select: &nodes::SelectStmt, plan: &mut RewritePlan) {
-        if self.schema.shards <= 1 {
+        // Cross-shard HAVING applies LIMIT and OFFSET in its filter query.
+        if self.schema.shards <= 1 || !matches!(select.having_clause(), Node::None) {
             return;
         }
 
@@ -365,6 +419,55 @@ mod tests {
     fn test_limit_offset_skipped_no_limit() {
         let plan = run_limit_offset("SELECT * FROM t OFFSET 5", &sharded_schema());
         assert!(plan.offset.is_none());
+    }
+
+    #[test]
+    fn test_limit_offset_detection_expressions() {
+        let plan = run_limit_offset(
+            "SELECT * FROM t LIMIT 1 + 1 OFFSET $1::int",
+            &sharded_schema(),
+        );
+        let offset = plan.offset.unwrap();
+        assert_eq!(offset.limit, Limit::default());
+        assert_eq!(offset.limit_param, 0);
+        assert_eq!(offset.offset_param, 0);
+    }
+
+    #[test]
+    fn test_limit_offset_skipped_not_computable() {
+        let plan = run_limit_offset(
+            "SELECT * FROM t LIMIT (SELECT 1) OFFSET 5",
+            &sharded_schema(),
+        );
+        assert!(plan.offset.is_none());
+    }
+
+    #[test]
+    fn test_apply_after_route_expressions_keep_routed_values() {
+        let plan = OffsetPlan {
+            limit: Limit::default(),
+            limit_param: 0,
+            offset_param: 0,
+            prepare_execute: false,
+        };
+        let mut request = ClientRequest::from(vec![
+            ProtocolMessage::Parse(Parse::named(
+                "s",
+                "SELECT * FROM t LIMIT 1 + 1 OFFSET $1::int",
+            )),
+            ProtocolMessage::Bind(Bind::new_params("s", &[Parameter::new(b"3")])),
+        ]);
+        let mut route = cross_shard_route();
+        route.set_limit(Limit {
+            limit: Some(2),
+            offset: Some(3),
+        });
+        request.route = Some(route);
+        plan.apply_after_route(&mut request).unwrap();
+
+        let route = request.route.unwrap();
+        assert_eq!(route.limit().limit, Some(2));
+        assert_eq!(route.limit().offset, Some(3));
     }
 
     #[test]

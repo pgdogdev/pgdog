@@ -10,11 +10,16 @@ pub(crate) struct Transaction {
 }
 
 impl Transaction {
-    pub(crate) fn new(transaction_type: TransactionType) -> Self {
+    pub(crate) fn started_at(transaction_type: TransactionType, start_time: DateTime<Utc>) -> Self {
         Self {
             transaction_type,
-            start_time: Utc::now(),
+            start_time,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(transaction_type: TransactionType) -> Self {
+        Self::started_at(transaction_type, Utc::now())
     }
 
     pub(crate) fn transaction_type(&self) -> TransactionType {
@@ -25,16 +30,24 @@ impl Transaction {
         self.start_time
     }
 
-    //    pub(crate) fn read_only(&self) -> bool {
-    //      self.transaction_type.read_only()
-    //   }
-
     pub(crate) fn write(&self) -> bool {
         self.transaction_type.write()
     }
 
     pub(crate) fn error(&self) -> bool {
         self.transaction_type.error()
+    }
+
+    /// Mark the transaction as failed without changing its start time.
+    pub(crate) fn set_error(&mut self) {
+        self.transaction_type = match self.transaction_type {
+            TransactionType::ReadOnly | TransactionType::ErrorReadOnly => {
+                TransactionType::ErrorReadOnly
+            }
+            TransactionType::ReadWrite
+            | TransactionType::Implicit
+            | TransactionType::ErrorReadWrite => TransactionType::ErrorReadWrite,
+        };
     }
 }
 
@@ -67,6 +80,23 @@ impl QueryTimestamps {
 
     pub(crate) fn now() -> Self {
         Self::new(None, Utc::now())
+    }
+}
+
+/// Wrapper around an Option to de-duplicate logic of fetching the current time, if it hasn't been fetched,
+/// or if not, re-use it.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct StatementStart {
+    time: Option<DateTime<Utc>>,
+}
+
+impl StatementStart {
+    pub(crate) fn reset(&mut self) {
+        self.time = None;
+    }
+
+    pub(crate) fn time(&mut self) -> DateTime<Utc> {
+        *self.time.get_or_insert_with(Utc::now)
     }
 }
 

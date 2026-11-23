@@ -22,7 +22,7 @@ pub(super) fn is_set_statement(sql: &str) -> bool {
 
 fn is_set_or_error(sql: &str) -> Result<bool, Error> {
     let stmt = pg_raw_parse::parse(sql).map_err(|_| Error::Syntax)?;
-    let root = stmt.stmts().next().ok_or(Error::Syntax)?;
+    let root = stmt.stmts().next().ok_or_else(|| Error::Syntax)?;
 
     Ok(if let Node::VariableSetStmt(stmt) = root {
         !matches!(stmt.kind, VAR_RESET_ALL | VAR_RESET)
@@ -39,12 +39,12 @@ impl Command for Set {
 
     fn parse(sql: &str) -> Result<Self, Error> {
         let stmt = pg_raw_parse::parse(sql).map_err(|_| Error::Syntax)?;
-        let root = stmt.stmts().next().ok_or(Error::Syntax)?;
+        let root = stmt.stmts().next().ok_or_else(|| Error::Syntax)?;
         match root {
             Node::VariableSetStmt(stmt) => {
-                let name = stmt.name().ok_or(Error::Syntax)?.to_owned();
+                let name = stmt.name().ok_or_else(|| Error::Syntax)?.to_owned();
 
-                let setting = stmt.args().first().ok_or(Error::Syntax)?;
+                let setting = stmt.args().first().ok_or_else(|| Error::Syntax)?;
                 match setting {
                     Node::A_Const(a_const) if let Some(val) = a_const.val() => Ok(Self {
                         name,
@@ -77,6 +77,10 @@ impl Command for Set {
 
             "passthrough_auth" => {
                 config.config.general.passthrough_auth = Self::from_json(&self.value)?;
+            }
+
+            "passthrough_auth_debounce_delay" => {
+                config.config.general.passthrough_auth_debounce_delay = self.value.parse()?;
             }
 
             "read_write_strategy" => {
@@ -142,6 +146,13 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
+            "rewrite_subqueries" => {
+                config.config.rewrite.subqueries = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
             "rewrite_enabled" => {
                 config.config.rewrite.enabled = Self::from_json(&self.value)?;
             }
@@ -200,6 +211,13 @@ impl Command for Set {
 
             "dry_run" => {
                 config.config.general.dry_run = Self::from_json(&self.value)?;
+            }
+
+            "resharding_parallel_within_table_copies" => {
+                config
+                    .config
+                    .general
+                    .resharding_parallel_within_table_copies = self.value.parse()?;
             }
 
             _ => return Ok(vec![]),

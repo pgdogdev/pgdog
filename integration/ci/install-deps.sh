@@ -22,9 +22,15 @@ case "$ARCH" in
     *) echo "install-deps.sh: unsupported architecture ${ARCH}" >&2; exit 1 ;;
 esac
 
-if ! dpkg -s mold gdb >/dev/null 2>&1; then
+# Bencher compiles PgDog on the runner before assembling its runtime image.
+# pg-internals needs libclang plus PostgreSQL's default configure dependencies.
+build_packages=(
+    mold gdb clang libclang-dev pkg-config
+    libicu-dev libreadline-dev zlib1g-dev bison flex perl
+)
+if ! dpkg -s "${build_packages[@]}" >/dev/null 2>&1; then
     sudo apt-get update
-    sudo apt-get install -y --no-install-recommends mold gdb
+    sudo apt-get install -y --no-install-recommends "${build_packages[@]}"
 fi
 
 # The protocol_version smoke test needs a psql >= 18 client. The runner

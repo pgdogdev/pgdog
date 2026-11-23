@@ -5,7 +5,7 @@ use super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct KeepAlive {
-    pub(crate) wal_end: i64,
+    pub(crate) wal_end: u64,
     pub(crate) system_clock: i64,
     pub(crate) reply: u8,
 }
@@ -21,7 +21,7 @@ impl FromBytes for KeepAlive {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'k');
         Ok(Self {
-            wal_end: bytes.get_i64(),
+            wal_end: bytes.get_u64(),
             system_clock: bytes.get_i64(),
             reply: bytes.get_u8(),
         })
@@ -32,7 +32,7 @@ impl ToBytes for KeepAlive {
     fn to_bytes(&self) -> Bytes {
         let mut payload = BytesMut::new();
         payload.put_u8(b'k');
-        payload.put_i64(self.wal_end);
+        payload.put_u64(self.wal_end);
         payload.put_i64(self.system_clock);
         payload.put_u8(self.reply);
 

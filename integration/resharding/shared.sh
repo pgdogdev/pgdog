@@ -36,7 +36,7 @@ cleanup() {
     kill -TERM "${MIGRATION_PID:-}" 2>/dev/null || true
     kill -TERM "${PGBENCH_PID:-}" 2>/dev/null || true
     kill -TERM "${PGDOG_PID:-}" 2>/dev/null || true
-    (cd "${SCRIPT_DIR}" && docker compose down) || true
+    (cd "${SCRIPT_DIR}" && docker compose down -v) || true
 
     # Signal every process in this script's process group except ourselves.
     pkill -TERM -P $$ 2> /dev/null || true
@@ -83,21 +83,6 @@ wait_admin_task_inner_status() {
     wait_admin_inner_status "task $1" "$2" admin_task_row "$1"
 }
 
-admin_child_row() {
-    local parent_id="$1"
-    local kind="$2"
-    psql admin -tAc 'SHOW TASKS' | while IFS='|' read -r id parent type status inner rest; do
-        if [ "${parent}" = "${parent_id}" ] && [ "${type%% *}" = "${kind}" ]; then
-            printf '%s|%s' "${status}" "${inner}"
-            break
-        fi
-    done
-}
-
-wait_admin_child_inner_status() {
-    wait_admin_inner_status "$2 child of task $1" "$3" admin_child_row "$1" "$2"
-}
-
 wait_admin_inner_status() {
     local label="$1"
     local expected="$2"
@@ -132,7 +117,7 @@ run_finished_admin_task() {
 
 initialize_resharding() {
     pushd "${SCRIPT_DIR}"
-    docker compose down && docker compose up -d
+    docker compose down -v && docker compose up -d
 
     # Give it a second to boot up.
     # It restarts the DB during initialization.

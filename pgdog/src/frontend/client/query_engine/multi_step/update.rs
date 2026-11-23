@@ -14,8 +14,8 @@ use super::{Error, ForwardCheck, UpdateError};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct Row {
-    data_row: DataRow,
-    row_description: RowDescription,
+    pub(super) data_row: DataRow,
+    pub(super) row_description: RowDescription,
 }
 
 #[derive(Debug)]
@@ -41,6 +41,14 @@ impl<'a> UpdateMulti<'a> {
             Err(err) => {
                 // These are recoverable with a ROLLBACK.
                 if matches!(err, Error::Update(_) | Error::Execution(_)) {
+                    // Drain backends and set transaction error state.
+                    while self.engine.backend.has_more_messages() {
+                        self.engine.read_server_message().await?;
+                    }
+                    if let Some(transaction) = context.transaction.as_mut() {
+                        transaction.set_error();
+                    }
+
                     self.engine
                         .error_response(context, client_request, ErrorResponse::from_err(&err))
                         .await?;
@@ -59,8 +67,17 @@ impl<'a> UpdateMulti<'a> {
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
     ) -> Result<(), Error> {
+        // Omnisharded tables are identical on all shards,
+        // so there is no need to move rows between shards.
+        if client_request.route().is_omnisharded() {
+            debug!("[update] query is omnisharded");
+            self.execute_original(context, client_request).await?;
+
+            return Ok(());
+        }
+
         let mut check = self.rewrite.check.build_request(client_request)?;
-        self.route(&mut check, context)?;
+        route(self.engine, &mut check, context)?;
 
         // The new row is on the same shard as the old row
         // and we know this from the statement itself, e.g.
@@ -124,7 +141,7 @@ impl<'a> UpdateMulti<'a> {
             &row.row_description,
             &row.data_row,
         )?;
-        self.route(&mut request, context)?;
+        route(self.engine, &mut request, context)?;
 
         debug!("[update] executing multi-shard insert/delete");
 
@@ -244,7 +261,7 @@ impl<'a> UpdateMulti<'a> {
         client_request: &ClientRequest,
     ) -> Result<Option<Row>, Error> {
         let mut request = self.rewrite.delete.build_request(client_request)?;
-        self.route(&mut request, context)?;
+        route(self.engine, &mut request, context)?;
 
         self.engine
             .backend
@@ -287,7 +304,7 @@ impl<'a> UpdateMulti<'a> {
         client_request: &ClientRequest,
     ) -> Result<bool, Error> {
         let mut check = self.rewrite.check.build_request(client_request)?;
-        self.route(&mut check, context)?;
+        route(self.engine, &mut check, context)?;
 
         let new_shard = check.route().shard();
         let old_shard = client_request.route().shard();
@@ -296,29 +313,30 @@ impl<'a> UpdateMulti<'a> {
         // or it maps to the same shard as before.
         Ok(new_shard == old_shard)
     }
+}
 
-    fn route(
-        &self,
-        request: &mut ClientRequest,
-        context: &QueryEngineContext<'_>,
-    ) -> Result<(), Error> {
-        let cluster = self.engine.backend.cluster()?;
+/// TODO(jkaczman): this should be in a different file now that it's a cross-file helper
+pub(crate) fn route(
+    engine: &QueryEngine,
+    request: &mut ClientRequest,
+    context: &QueryEngineContext<'_>,
+) -> Result<(), Error> {
+    let cluster = engine.backend.cluster()?;
 
-        let context = RouterContext::new(
-            request,
-            cluster,
-            context.params,
-            context.transaction(),
-            context.sticky,
-        )?;
-        let mut router = Router::new();
-        let command = router.query(context)?;
-        if let Command::Query(route) = command {
-            request.route = Some(route.clone());
-        } else {
-            return Err(UpdateError::NoRoute.into());
-        }
-
-        Ok(())
+    let context = RouterContext::new(
+        request,
+        cluster,
+        &*context.params,
+        context.transaction(),
+        context.sticky,
+    )?;
+    let mut router = Router::new();
+    let command = router.query(context)?;
+    if let Command::Query(route) = command {
+        request.route = Some(route.clone());
+    } else {
+        return Err(UpdateError::NoRoute.into());
     }
+
+    Ok(())
 }

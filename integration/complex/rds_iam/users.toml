@@ -2,3 +2,11 @@
 name = "postgres"
 database = "postgres"
 server_auth = "rds_iam"
+
+[[users]]
+name = "pgdog"
+server_user = "postgres"
+database = "postgres"
+server_auth = "rds_iam"
+auth_type = "scram"
+password = "pgdog"

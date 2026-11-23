@@ -6,7 +6,8 @@ use derive_more::{Display, Error};
 use crate::util::sync::worker_pool;
 use crate::{
     backend::replication::publisher::PublicationTable,
-    frontend::client::query_engine::two_pc::TwoPcTransaction, net::ErrorResponse,
+    frontend::client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
+    net::ErrorResponse,
 };
 
 /// The kind of validation failure, decoupled from which table it occurred on.
@@ -84,6 +85,33 @@ pub(crate) enum Error {
         source: Box<crate::backend::Error>,
     },
 
+    #[error(
+        "Replication origin access denied for user \"{user}\" on database \"{database}\": {source}.
+    Check and update EXECUTE permissions for pg_replication_origin_* functions
+    or use a superuser/rds_superuser role.
+    "
+    )]
+    ReplicationOriginPermissionDenied {
+        user: String,
+        database: String,
+        #[source]
+        source: Box<crate::backend::Error>,
+    },
+
+    #[error(
+        "Replication origin limit reached on \"{addr}\": {source}.
+    For replication process pgdog requires on destination shard one replication origin for each source shard.
+    To fix this, increase `max_active_replication_origins` (pg 18+) or `max_replication_slots`
+    (for older pg) and restart pg, or drop unused origins
+    listed in `pg_replication_origin`.
+    "
+    )]
+    ReplicationOriginLimitExceeded {
+        addr: String,
+        #[source]
+        source: Box<crate::backend::Error>,
+    },
+
     #[error("pool: {0}")]
     Pool(#[from] crate::backend::pool::Error),
 
@@ -144,10 +172,13 @@ pub(crate) enum Error {
         confirmed: String,
     },
 
+    #[error("replication origin {0} is in use")]
+    ReplicationOriginInUse(String),
+
     #[error("replication slots for \"{0}\" are already created")]
     SlotsAlreadyCreated(String),
 
-    #[error("replication stream stopped before shutdown was requested")]
+    #[error("replication stopped before shutdown was requested")]
     ReplicationStreamStopped,
 
     #[error("publication \"{0}\" has no tables")]
@@ -155,6 +186,9 @@ pub(crate) enum Error {
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
+
+    #[error("shard {0} has no replication origins")]
+    NoReplicationOrigins(usize),
 
     #[error("shard {0} has no replication table entry")]
     NoReplicationTables(usize),
@@ -230,9 +264,12 @@ pub(crate) enum Error {
         op: &'static str,
     },
 
-    #[error("2pc commit failed for {transaction}: {source}")]
+    #[error(
+        "2pc {phase} failed for {transaction} and the 2pc manager did not finish it in time: {source}"
+    )]
     TwoPcCleanupPending {
         transaction: TwoPcTransaction,
+        phase: TwoPcPhase,
         #[source]
         source: Box<Error>,
     },
@@ -257,18 +294,9 @@ impl From<TableValidationError> for Error {
 }
 
 impl Error {
-    /// Two-phase commit transaction that still needs manager cleanup, if any.
-    pub(crate) fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
-        match self {
-            Self::TwoPcCleanupPending { transaction, .. } => Some(*transaction),
-            _ => None,
-        }
-    }
-
     /// Whether the table copy should be retried after this error.
     pub(crate) fn is_retryable(&self) -> bool {
         match self {
-            Self::TwoPcCleanupPending { source, .. } => source.is_retryable(),
             Self::Net(inner) => inner.is_retryable(),
             Self::Pool(inner) => inner.is_retryable(),
             Self::Backend(inner) => inner.is_retryable(),
@@ -287,6 +315,9 @@ impl Error {
             // handle was dropped). The transaction is torn down; retry from a
             // fresh connection.
             Self::PipelineClosed => true,
+            // Another session still holds the origin, e.g. a backend from
+            // before a reconnect that has not exited yet.
+            Self::ReplicationOriginInUse(_) => true,
             _ => false,
         }
     }

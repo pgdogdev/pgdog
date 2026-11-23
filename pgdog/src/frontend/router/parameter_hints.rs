@@ -10,15 +10,13 @@ use crate::{
             lookup::shard_for_bare_key,
         },
     },
-    net::{Parameters, parameter::ParameterValue},
+    parameters::{KnownParameter, ParameterStore, ParameterValue},
 };
 
 /// `SET pgdog.shard` — pin queries to an explicit shard number.
-pub(crate) const PGDOG_SHARD: &str = "pgdog.shard";
+pub(crate) const PGDOG_SHARD: &str = KnownParameter::PgdogShard.name();
 /// `SET pgdog.sharding_key` — pin queries to the shard a key resolves to.
-pub(crate) const PGDOG_SHARDING_KEY: &str = "pgdog.sharding_key";
-/// `SET pgdog.role` — pin queries to a primary or replica.
-pub(crate) const PGDOG_ROLE: &str = "pgdog.role";
+pub(crate) const PGDOG_SHARDING_KEY: &str = KnownParameter::PgdogShardingKey.name();
 /// Connection pinning.
 pub(crate) const PGDOG_PIN: &str = "pgdog.pin";
 
@@ -31,13 +29,13 @@ pub(crate) struct ParameterHints<'a> {
     hooks: ParserHooks,
 }
 
-impl<'a> From<&'a Parameters> for ParameterHints<'a> {
-    fn from(value: &'a Parameters) -> Self {
+impl<'a> From<&'a ParameterStore> for ParameterHints<'a> {
+    fn from(value: &'a ParameterStore) -> Self {
         Self {
             search_path: value.search_path(),
-            pgdog_shard: value.get(PGDOG_SHARD),
-            pgdog_role: value.get(PGDOG_ROLE),
-            pgdog_sharding_key: value.get(PGDOG_SHARDING_KEY),
+            pgdog_shard: value.get_known(KnownParameter::PgdogShard),
+            pgdog_role: value.get_known(KnownParameter::PgdogRole),
+            pgdog_sharding_key: value.get_known(KnownParameter::PgdogShardingKey),
             hooks: ParserHooks::default(),
         }
     }
@@ -85,17 +83,9 @@ impl ParameterHints<'_> {
             }
         }
         if let Some(search_path) = self.search_path {
-            match search_path {
-                ParameterValue::String(search_path) => {
-                    let schema = Schema::from(search_path.as_str());
-                    schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
-                }
-                ParameterValue::Tuple(search_paths) => {
-                    for schema in search_paths {
-                        let schema = Schema::from(schema.as_str());
-                        schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
-                    }
-                }
+            for schema in search_path.as_slice() {
+                let schema = Schema::from(schema.as_str());
+                schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
             }
 
             if let Some((shard, schema)) = schema_sharder.get() {

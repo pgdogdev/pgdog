@@ -1,322 +1,45 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::ptr;
 use std::sync::Arc;
 
-use super::StatementParameters;
-use crate::frontend::router::sharding::{varchar_extended, varchar_not_extended};
+use super::{
+    StatementParameters,
+    advisory_lock::{AdvisoryLocks, advisory_locks_from_func_call, collect_values_columns},
+    function::Function,
+};
 use crate::util::ResultControlFlowExt;
 use itertools::*;
 use pg_raw_parse::walk::Recurse;
-use pg_raw_parse::{ConstValue, Node, list, nodes, walk};
+use pg_raw_parse::{Node, list, nodes, walk};
 use std::ops::ControlFlow;
-
-fn advisory_locks_from_func_call(
-    func: &nodes::FuncCall,
-    bind: Option<StatementParameters<'_>>,
-    values_columns: Option<&ValuesColumns<'_>>,
-) -> Vec<AdvisoryLock> {
-    let mut name_parts = func.funcname().into_iter().filter_map(Node::as_str);
-
-    let name = match (name_parts.next(), name_parts.next(), name_parts.next()) {
-        (Some(name), None, None) | (Some("pg_catalog"), Some(name), None) => name,
-        _ => return Vec::new(),
-    };
-
-    let (unlock, scope) = match name {
-        "pg_advisory_lock"
-        | "pg_advisory_lock_shared"
-        | "pg_try_advisory_lock"
-        | "pg_try_advisory_lock_shared" => (false, LockScope::Session),
-        "pg_advisory_xact_lock"
-        | "pg_advisory_xact_lock_shared"
-        | "pg_try_advisory_xact_lock"
-        | "pg_try_advisory_xact_lock_shared" => (false, LockScope::Transaction),
-        // Session-scoped unlocks. xact locks can't be released by name;
-        // Postgres drops them automatically at COMMIT/ROLLBACK.
-        "pg_advisory_unlock" => (true, LockScope::Session),
-        "pg_advisory_unlock_all" => {
-            return vec![AdvisoryLock {
-                id: None,
-                unlock: true,
-                unlock_all: true,
-                scope: LockScope::Session,
-            }];
-        }
-        _ => return Vec::new(),
-    };
-
-    // TODO: I came across this as another kind of pg_advisory_lock arg: 'users'::regclass::integer
-    // that we don't handle right now (resolving to None) here as the id
-    let mut arg_iterator = func.args().iter();
-
-    let Some(arg) = arg_iterator.next() else {
-        return vec![AdvisoryLock {
-            id: None,
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    };
-
-    let second_arg = arg_iterator.next();
-
-    // Fast path: the key is a literal / param / cast we can resolve directly.
-    if let Some(id) = integer_arg(arg, bind)
-        && second_arg.is_none()
-    {
-        return vec![AdvisoryLock {
-            id: Some(AdvisoryLockId::OneParameter(id)),
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    } else if let Some(first_id) = integer_arg(arg, bind)
-        && let Some(second_arg) = second_arg
-        && let Some(second_id) = integer_arg(second_arg, bind)
-    {
-        return vec![AdvisoryLock {
-            id: Some(AdvisoryLockId::TwoParameters(
-                first_id as i32,
-                second_id as i32,
-            )),
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    }
-
-    // If the argument is a parameter placeholder ($1) and we have no Bind message,
-    // this is just a prepared statement being parsed — the lock isn't actually
-    // being taken yet. Return empty so we don't route as if a lock is held.
-    if bind.is_none()
-        && (is_param_ref(arg) || (second_arg.map(|s_arg| is_param_ref(s_arg)).unwrap_or(false)))
-    {
-        return Vec::new();
-    }
-
-    // TODO: If we have a second arg that isn't numeric,
-    //  e.g., two functions, this isn't handled yet.
-    if second_arg.is_some() {
-        return vec![AdvisoryLock {
-            id: None,
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    }
-
-    // SELECT pg_advisory_lock(hashtext('some text!'))
-    // Parse & evaluate a hashtext / hashtextended function within a pg_advisory_lock query.
-    // The purpose is to understand what ID the func resolves to, so we can set on `AdvisoryLock`
-    if let Node::FuncCall(call) = arg
-        && let Some(Node::String(name)) = call.funcname().first()
-        && let Some(function_name) = name.sval()
-    {
-        let args = call.args();
-        let hash_func_evaluated_to_num = if function_name.eq("hashtext")
-            && args.len() == 1
-            && let Some(Node::A_Const(arg1)) = args.first()
-            && let Some(ConstValue::String(hash_text)) = arg1.val()
-        {
-            Some(varchar_not_extended(hash_text.as_bytes()) as i64)
-        } else if function_name.eq("hashtextextended")
-            && args.len() == 2
-            && let Some(Node::A_Const(arg1)) = args.first()
-            && let Some(Node::A_Const(arg2)) = args.get(1)
-            && let Some(ConstValue::String(hash_text)) = arg1.val()
-            && let Some(ConstValue::Integer(seed)) = arg2.val()
-        {
-            // This is a u64 -> i64 cast (bitwise reinterpretation wrap-around)
-            // Postgres does this same thing.
-            Some(varchar_extended(hash_text.as_bytes(), seed as u64) as i64)
-        } else {
-            // TODO: There's likely some other funcs that are used;
-            // however, hashtext and hashtextended are the most common
-
-            // I'm really not a fan of silently routing everything else to 0.
-            // I tried re-working all this to return an Error, and it was like
-            // 200 LOC of changes though
-            None
-        };
-
-        if hash_func_evaluated_to_num.is_some() {
-            return vec![AdvisoryLock {
-                id: hash_func_evaluated_to_num.map(AdvisoryLockId::OneParameter),
-                unlock,
-                unlock_all: false,
-                scope,
-            }];
-        }
-    }
-
-    // Slow path: `SELECT pg_advisory_lock(value) FROM (VALUES (1),(2)) AS t(value)`.
-    // The function is called once per row, so we emit one lock per resolved value.
-    if let Node::ColumnRef(cref) = arg
-        // FIXME: Don't assume the name is unqualified
-        && let Some(col) = last_column_name(cref.fields())
-        && let Some(rows) = values_columns.and_then(|m| m.get(col))
-    {
-        return rows
-            .iter()
-            // Skip unresolvable param refs when there is no Bind.
-            .filter(|v| bind.is_some() || !is_param_ref(**v))
-            .map(|v| AdvisoryLock {
-                id: integer_arg(*v, bind).map(AdvisoryLockId::OneParameter),
-                unlock,
-                unlock_all: false,
-                scope,
-            })
-            .collect();
-    }
-
-    vec![AdvisoryLock {
-        id: None,
-        unlock,
-        unlock_all: false,
-        scope,
-    }]
-}
-
-fn last_column_name<'a>(fields: impl IntoIterator<Item = Node<'a>>) -> Option<&'a str> {
-    fields.into_iter().last().and_then(Node::as_str)
-}
-
-/// Map from unqualified VALUES column alias to the list of value nodes — one
-/// per row — introduced by a `FROM (VALUES (...), ...) AS t(col, ...)` in the
-/// current SELECT's FROM clause.
-type ValuesColumns<'a> = std::collections::HashMap<Cow<'a, str>, Vec<Node<'a>>>;
-
-fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>> {
-    let Node::RangeSubselect(rs) = stmt.from_clause().into_iter().exactly_one().ok()? else {
-        return None;
-    };
-    let alias = rs.alias();
-    let Node::SelectStmt(s) = rs.subquery() else {
-        return None;
-    };
-    if s.values_lists().is_empty() {
-        return None;
-    }
-    let colnames = alias
-        .map(|a| {
-            a.colnames()
-                .into_iter()
-                .filter_map(Node::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let values = s
-        .values_lists()
-        .into_iter()
-        .map(|values| values.expect_node_list())
-        .flat_map(|row| row.into_iter().enumerate())
-        .map(|(i, v)| {
-            let colname = colnames
-                .get(i)
-                .map(|&s| Cow::Borrowed(s))
-                .unwrap_or_else(|| format!("column{}", i + 1).into());
-            (colname, v)
-        })
-        .into_group_map();
-    Some(values)
-}
-
-fn integer_arg(node: Node<'_>, bind: Option<StatementParameters<'_>>) -> Option<i64> {
-    match node {
-        Node::A_Const(a) => a.val()?.numeric_value(),
-        Node::TypeCast(c) => integer_arg(c.arg(), bind),
-        Node::ParamRef(param_ref) => {
-            let index = (param_ref.number as usize).checked_sub(1)?;
-            let param = bind?.parameter(index).ok()??;
-            param.decode::<i64>()
-        }
-        _ => None,
-    }
-}
-
-/// Check whether a node is (or wraps) a parameter placeholder (`$N`).
-fn is_param_ref(node: Node<'_>) -> bool {
-    match node {
-        Node::ParamRef(_) => true,
-        Node::TypeCast(cast) => is_param_ref(cast.arg()),
-        _ => false,
-    }
-}
 
 use super::{
     super::sharding::Value as ShardingValue, Column, Error, Table, Value,
     explain_trace::ExplainEntry,
 };
 
-/// Lifetime of an advisory lock.
-///
-/// Used by the query engine to decide whether the lock should survive
-/// COMMIT/ROLLBACK (`Session`) or be dropped along with the transaction
-/// (`Transaction` — the `pg_advisory_xact_lock*` family).
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(crate) enum LockScope {
-    Session,
-    Transaction,
-}
-
-/// A pg_advisory_lock / pg_advisory_unlock call observed in a statement.
-/// if `unlock_all`, it's a pg_advisory_unlock_all call
-///
-///  `id` is `None` when the key isn't a literal we can resolve (parameter placeholder,
-/// subquery, etc.) or when the call takes no key at all (`pg_advisory_unlock_all()`).
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(crate) struct AdvisoryLock {
-    pub(crate) id: Option<AdvisoryLockId>,
-    pub(crate) unlock: bool,
-    pub(crate) unlock_all: bool,
-    pub(crate) scope: LockScope,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(crate) enum AdvisoryLockId {
-    /// pg_advisory_lock(ID)
-    OneParameter(i64),
-    /// pg_advisory_lock(ID_1, ID_2)
-    TwoParameters(i32, i32),
-}
-
-impl AdvisoryLockId {
-    /// Return the first parameter of the ID
-    /// OneParameter(x) => x
-    /// TwoParameters(x, y) => x
-    pub(crate) fn get_first_parameter(self) -> i64 {
-        match self {
-            Self::OneParameter(x) => x,
-            Self::TwoParameters(x, _) => x as i64,
-        }
-    }
-}
-
-/// Set of advisory locks discovered while walking a statement.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct AdvisoryLocks {
-    locks: HashSet<AdvisoryLock>,
-}
-
-impl AdvisoryLocks {
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &AdvisoryLock> {
-        self.locks.iter()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.locks.is_empty()
-    }
-}
-
 /// Accumulator shared across statement walkers — lets a single traversal
 /// collect tables and advisory locks without walking the AST twice.
 #[derive(Debug, Clone, Default)]
 struct Walk<'a> {
     tables: Vec<Table<'a>>,
-    advisory_locks: HashSet<AdvisoryLock>,
+    advisory_locks: AdvisoryLocks,
+    projection: Option<ProjectionState<'a>>,
     /// Names introduced by `WITH` clauses. An unqualified reference to one
     /// of these is the CTE, not a table.
     cte_names: HashSet<&'a str>,
+    mutates: bool,
+    cross_shard: bool,
+}
+
+/// Cursor over the client-visible SELECT targets, before any star expansion.
+#[derive(Debug, Clone)]
+struct ProjectionState<'a> {
+    targets: &'a list::CastNodeList<nodes::ResTarget>,
+    /// Unknown after a target expands into multiple output columns.
+    next_column: Option<usize>,
+    /// Match this exact node so nested expressions cannot inherit its index.
+    direct_call: Option<(&'a nodes::FuncCall, usize)>,
 }
 use crate::{
     backend::{Schema, ShardingSchema},
@@ -331,27 +54,38 @@ use crate::{
     net::{messages::Format, parameter::ParameterValue},
 };
 use pgdog_config::LookupResult;
+use pgdog_postgres_types::{Array, Datum};
+
+use super::rewrite::statement::insert::array_param_of_select_from_unnest;
+
+/// The kind of thing that a name in FROM refers to, i.e., a table, a derived table or a CTE
+/// E.g., in WITH c AS (..) SELECT .. FROM users u, (SELECT ..) s, c, the name u refers to the table users (Table), the name s refers to a derived table (Derived), and the name c refers to a CTE (Cte)
+#[derive(Debug, Clone, Copy)]
+enum Relation<'a> {
+    Table(Table<'a>),
+    Derived,
+    Cte,
+}
 
 /// Context for searching a SELECT statement, tracking table aliases.
 #[derive(Debug, Default, Clone)]
 struct SearchContext<'a> {
-    /// Maps alias -> full Table (including schema)
-    aliases: HashMap<&'a str, Table<'a>>,
+    /// Stores `Relations` encountered
+    /// E.g., for FROM users u JOIN orders ON .., we have u -> Table(users)
+    /// Key is alias (u) or the name of CTEs without an alias (c in WITH c AS (..) SELECT .. FROM c)
+    /// We don't store tables without an alias (orders) because `resolve_column` returns the columns belonging to those tables as-is
+    relations: HashMap<&'a str, Relation<'a>>,
     /// The primary table from the FROM clause (if simple)
     table: Option<Table<'a>>,
+    /// Base tables in this FROM clause, without descending into subqueries.
+    tables: Vec<Table<'a>>,
     /// Column equalities that can carry a key from one side of a join to the other.
     joined_columns: Vec<(Column<'a>, Column<'a>)>,
 }
 
 impl<'a> SearchContext<'a> {
     /// Build context from a FROM clause, extracting table aliases.
-    fn from_from_clause(nodes: &'a list::NodeList) -> Self {
-        let mut aliases = HashMap::new();
-
-        for node in nodes {
-            Self::extract_alias_from_node(&mut aliases, node);
-        }
-
+    fn from_from_clause(nodes: &'a list::NodeList, cte_names: &HashSet<&'a str>) -> Self {
         let table = nodes
             .into_iter()
             .exactly_one()
@@ -359,11 +93,11 @@ impl<'a> SearchContext<'a> {
             .and_then(|n| Table::try_from(n).ok());
 
         let mut ctx = Self {
-            aliases,
             table,
             ..Default::default()
         };
         for node in nodes {
+            ctx.extract_table_from_node(node, cte_names);
             ctx.extract_joined_columns(node);
         }
         ctx
@@ -438,29 +172,35 @@ impl<'a> SearchContext<'a> {
         });
     }
 
-    fn extract_alias_from_node(aliases: &mut HashMap<&'a str, Table<'a>>, node: Node<'a>) {
+    fn extract_table_from_node(&mut self, node: Node<'a>, cte_names: &HashSet<&'a str>) {
         match node {
-            Node::RangeVar(rv) if let Some(alias) = rv.alias() => {
+            Node::RangeVar(rv) => {
                 let table = Table::from(rv);
-                aliases.insert(alias.aliasname().expect("alias name always present"), table);
+                // Why check `cte_names`? Because CTEs can have the same name as a table
+                // E.g., if we consider the CTE WITH users AS (..) SELECT .. FROM users)
+                // - for FROM users, Postgres then uses the CTE users (instead of the table users)
+                // Names with a schema (e.g., public.users) can't be CTEs (so those are always tables)
+                if table.schema.is_none() && cte_names.contains(table.name) {
+                    self.relations
+                        .insert(table.alias.unwrap_or(table.name), Relation::Cte);
+                } else {
+                    self.tables.push(table);
+                    // We only store tables with an alias, which keeps `relations` empty (no allocation and no hashing) for most statements, e.g., SELECT .. FROM users WHERE id = $1
+                    if let Some(alias) = table.alias {
+                        self.relations.insert(alias, Relation::Table(table));
+                    }
+                }
             }
 
             Node::JoinExpr(join) => {
-                Self::extract_alias_from_node(aliases, join.larg());
-                Self::extract_alias_from_node(aliases, join.rarg());
+                self.extract_table_from_node(join.larg(), cte_names);
+                self.extract_table_from_node(join.rarg(), cte_names);
             }
 
             Node::RangeSubselect(subselect) if let Some(alias) = subselect.alias() => {
-                // For subselects, we don't have a real table name
-                // but we record the alias anyway for future use
-                let aliasname = alias.aliasname().expect("alias name always present");
-                aliases.insert(
-                    aliasname,
-                    Table {
-                        name: aliasname,
-                        schema: None,
-                        alias: None,
-                    },
+                self.relations.insert(
+                    alias.aliasname().expect("alias name always present"),
+                    Relation::Derived,
                 );
             }
 
@@ -468,23 +208,22 @@ impl<'a> SearchContext<'a> {
         }
     }
 
-    /// Resolve a table reference (which may be an alias) to the actual Table.
-    fn resolve_table(&self, name: &str) -> Option<Table<'a>> {
-        self.aliases.get(name).copied()
-    }
-
-    /// Qualify a column with the actual table its table alias refers to.
-    fn resolve_column(&self, column: Column<'a>) -> Column<'a> {
-        match column
-            .table()
-            .and_then(|table| self.resolve_table(table.name))
-        {
-            Some(resolved) => Column {
+    /// Replaces the alias in `column` with the name (and schema) of the table that the alias stands for, e.g., u.id in FROM users u becomes users.id
+    /// We need the table name to check whether the column is a sharding key since the sharding config lists table names (users) not aliases (u)
+    /// Returns `column` as-is if the column doesn't have a table (e.g., id in .. FROM users JOIN orders ON .. WHERE id = 1, where id can be from either table) or if the table that the column belongs to isn't in FROM
+    /// Returns None for columns belonging to derived tables and CTEs (e.g., s.id in FROM (SELECT ..) s), since those don't have any sharding keys
+    fn resolve_column(&self, column: Column<'a>) -> Option<Column<'a>> {
+        let Some(name) = column.table else {
+            return Some(column);
+        };
+        match self.relations.get(name) {
+            Some(Relation::Table(table)) => Some(Column {
                 name: column.name,
-                table: Some(resolved.name),
-                schema: resolved.schema,
-            },
-            None => column,
+                table: Some(table.name),
+                schema: table.schema,
+            }),
+            Some(Relation::Derived | Relation::Cte) => None,
+            None => Some(column),
         }
     }
 }
@@ -559,6 +298,14 @@ pub(crate) struct StatementParser<'a, 'b> {
     /// Sharding key lookups that missed the cache and need to be resolved.
     pending_lookups: Vec<PendingLookup>,
     resolved_lookups: Option<&'b ResolvedLookups>,
+
+    /// When recursing, if we see a subquery, should we recurse into it or ignore it?
+    /// Added for the ability to try to `shard()` the top-level statement (ignoring any subqueries within)
+    /// to see if there's a sharding key or not, to determine solely the top-level's routing
+    ignore_subqueries: bool,
+
+    // If a rewrite runs the INSERT instead of this route (e.g., the subquery rewrite evaluates the SELECT first), we don't need the shards of the rows.
+    insert_rewritten: bool,
 }
 
 impl<'a, 'b: 'a> StatementParser<'a, 'b> {
@@ -578,7 +325,25 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             all_omnisharded: None,
             pending_lookups: Vec::new(),
             resolved_lookups: None,
+            ignore_subqueries: false,
+            insert_rewritten: false,
         }
+    }
+
+    pub(crate) fn with_insert_rewritten(mut self, insert_rewritten: bool) -> Self {
+        self.insert_rewritten = insert_rewritten;
+        self
+    }
+
+    pub(crate) fn new_that_ignore_subqueries(
+        stmt: Node<'a>,
+        bind: Option<StatementParameters<'b>>,
+        schema: &'b ShardingSchema,
+    ) -> Self {
+        let mut parser = StatementParser::new(stmt, bind, schema);
+        parser.ignore_subqueries = true;
+
+        parser
     }
 
     /// Attach sharding key translations resolved for this statement.
@@ -712,60 +477,40 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             return false;
         }
 
-        let sharded_tables = self.schema.tables.tables();
-        let omnishards = self.schema.tables.omnishards();
-
-        // Separate configs with explicit table names from those without
-        let (named, nameless): (Vec<_>, Vec<_>) =
-            sharded_tables.iter().partition(|t| t.name.is_some());
-
-        for table in self.tables() {
-            // Omnisharded config takes priority over sharded tables.
-            if omnishards.contains_key(table.name) {
-                continue;
-            }
-
-            // Check named sharded table configs (fast path, no schema lookup needed)
-            for config in &named {
-                if let Some(ref name) = config.name
-                    && table.name == name
-                {
-                    // Also check schema match if specified in config
-                    if let Some(ref config_schema) = config.schema
-                        && table.schema != Some(config_schema.as_str())
-                    {
-                        continue;
-                    }
-                    return true;
-                }
-            }
-
-            // Check nameless configs by looking up the table in the db schema
-            // to see if it has the sharding column
-            if !nameless.is_empty()
-                && let Some(relation) = db_schema.table(*table, user, search_path)
-            {
-                for config in &nameless {
-                    if relation.has_column(&config.column) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
+        let schema = self.schema;
+        self.tables().iter().any(|table| {
+            schema
+                .tables
+                .is_table_sharded(*table, db_schema, user, search_path)
+        })
     }
 
     /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.
     pub(crate) fn extract_advisory_locks(&mut self) -> AdvisoryLocks {
-        AdvisoryLocks {
-            locks: self.walk().advisory_locks.clone(),
-        }
+        self.walk().advisory_locks.clone()
+    }
+
+    pub(crate) fn mutates(&mut self) -> bool {
+        self.walk().mutates
+    }
+
+    pub(crate) fn is_cross_shard(&mut self) -> bool {
+        self.walk().cross_shard
     }
 
     // Are we running? Or walking? MAKE UP YOUR MIND DAMMIT
     fn run_walk(&self) -> Walk<'a> {
-        let mut walk = Walk::default();
+        let mut walk = Walk {
+            projection: match self.stmt {
+                Node::SelectStmt(select) => Some(ProjectionState {
+                    targets: select.target_list(),
+                    next_column: Some(0),
+                    direct_call: None,
+                }),
+                _ => None,
+            },
+            ..Walk::default()
+        };
         self.walk_stmt(self.stmt, &mut walk);
 
         // A CTE name shadows an unqualified table of the same name for the
@@ -791,19 +536,69 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // Walk the select statement separately, as it may have its own
             // set of VALUES columns.
             Node::SelectStmt(_) => {
+                let projection = walk.projection.take();
                 self.walk_stmt(node, walk);
+                walk.projection = projection;
                 Recurse::no()
+            }
+
+            Node::ResTarget(target) => {
+                if let Some(projection) = walk.projection.as_mut()
+                    && let Some(index) = projection.next_column
+                    && projection
+                        .targets
+                        .get(index)
+                        .is_some_and(|expected| ptr::eq(expected, target))
+                {
+                    let value = target.val();
+                    // SELECT t.*, pg_try_advisory_lock(42) FROM t;
+                    // The lock's output column depends on how many columns t.*
+                    // expands into, so subsequent indexes become unknown.
+                    let expands = match value {
+                        Node::ColumnRef(column) => {
+                            matches!(
+                                column.fields().into_iter().next_back(),
+                                Some(Node::A_Star(_))
+                            )
+                        }
+                        Node::A_Indirection(indirection) => matches!(
+                            indirection.indirection().into_iter().next_back(),
+                            Some(Node::A_Star(_))
+                        ),
+                        _ => false,
+                    };
+                    projection.next_column = (!expands).then_some(index + 1);
+                    projection.direct_call = match value {
+                        Node::FuncCall(func) => Some((func, index)),
+                        _ => None,
+                    };
+                }
+                Recurse::yes()
             }
 
             // Extract any advisory locks that this function call may
             // represent, using the values clause of the current statement
             Node::FuncCall(func) => {
+                if let Some(function) =
+                    Function::from_strings(func.funcname().into_iter().filter_map(Node::as_str))
+                {
+                    let behavior = function.behavior();
+                    walk.cross_shard |= behavior.cross_shard;
+                    walk.mutates |= behavior.writes;
+                }
+                let column_index = walk
+                    .projection
+                    .as_ref()
+                    .and_then(|projection| projection.direct_call)
+                    .filter(|(direct_call, _)| ptr::eq(*direct_call, func))
+                    .map(|(_, index)| index);
                 walk.advisory_locks.extend(advisory_locks_from_func_call(
                     func,
                     self.bind,
                     values_columns.as_ref(),
+                    column_index,
                 ));
-                Recurse::no()
+                Recurse::yes()
             }
 
             Node::RangeVar(r) => {
@@ -815,6 +610,12 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                 if let Some(name) = cte.ctename() {
                     walk.cte_names.insert(name);
                 }
+                walk.mutates |= !matches!(cte.ctequery(), Node::SelectStmt(_));
+                Recurse::yes()
+            }
+
+            Node::LockingClause(_) => {
+                walk.mutates = true;
                 Recurse::yes()
             }
 
@@ -832,8 +633,10 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             let table = Table::from(range_var);
             ctx.table = Some(table);
             if let Some(alias) = range_var.alias() {
-                ctx.aliases
-                    .insert(alias.aliasname().expect("Alias name always present"), table);
+                ctx.relations.insert(
+                    alias.aliasname().expect("Alias name always present"),
+                    Relation::Table(table),
+                );
             }
         }
         ctx
@@ -903,7 +706,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn compute_shard(
         &mut self,
         column: Column<'a>,
-        value: Value<'a>,
+        value: Value<'_>,
     ) -> Result<Option<Shard>, Error> {
         let sharded_table = self.get_sharded_table(column);
         self.compute_shard_for_table(sharded_table, value)
@@ -913,7 +716,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn compute_shard_for_table(
         &mut self,
         sharded_table: Option<&ShardedTable>,
-        value: Value<'a>,
+        value: Value<'_>,
     ) -> Result<Option<Shard>, Error> {
         if let Some(table) = sharded_table {
             // Own the extracted values so the context can borrow them
@@ -1045,10 +848,10 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     }
 
     fn search_stmt(&mut self, stmt: Node<'a>) -> ControlFlow<Result<Shard, Error>> {
-        use nodes::{A_Expr_Kind, BoolExprType};
-
         let ctx = match stmt {
-            Node::SelectStmt(s) => SearchContext::from_from_clause(s.from_clause()),
+            Node::SelectStmt(s) => {
+                SearchContext::from_from_clause(s.from_clause(), &self.walk().cte_names)
+            }
             Node::UpdateStmt(s) => self.context_from_relation(s.relation()),
             Node::DeleteStmt(s) => self.context_from_relation(s.relation()),
             Node::InsertStmt(s) => {
@@ -1067,9 +870,31 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             self.search_joined_key(select.where_clause(), &ctx)?;
         }
 
+        self.search_node(stmt, &ctx)
+    }
+
+    fn search_node(
+        &mut self,
+        stmt: Node<'a>,
+        ctx: &SearchContext<'a>,
+    ) -> ControlFlow<Result<Shard, Error>> {
+        use nodes::{A_Expr_Kind, BoolExprType, JoinType};
+
         let result = walk::walk_manual(stmt, |node| match node {
             Node::SelectStmt(_) => {
-                self.search_stmt(node)?;
+                if !self.ignore_subqueries {
+                    self.search_stmt(node)?;
+                }
+                Recurse::no()
+            }
+
+            Node::JoinExpr(join) if join.jointype != JoinType::JOIN_INNER => {
+                // An outer join's ON clause does not restrict rows from its
+                // preserved side. Don't infer new key owners there; WHERE
+                // predicates still use the enclosing query's table context.
+                let mut ctx = ctx.clone();
+                ctx.tables.clear();
+                self.search_node(node, &ctx)?;
                 Recurse::no()
             }
 
@@ -1089,8 +914,8 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
                 let is_any = matches!(expr.kind, A_Expr_Kind::AEXPR_OP_ANY);
 
-                let left = self.search_expr(expr.lexpr(), &ctx)?;
-                let right = self.search_expr(expr.rexpr(), &ctx)?;
+                let left = self.search_expr(expr.lexpr(), ctx)?;
+                let right = self.search_expr(expr.rexpr(), ctx)?;
 
                 let Some(left) = left else {
                     return Recurse::no();
@@ -1100,26 +925,87 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     // For ANY expressions with sharding columns, we can't reliably
                     // parse array literals or parameters, so route to all shards.
                     (SearchResult::Column(column), _, true)
-                        if self.get_sharded_table(ctx.resolve_column(column)).is_some() =>
+                        if ctx
+                            .resolve_column(column)
+                            .and_then(|column| self.get_sharded_table(column))
+                            .is_some() =>
                     {
                         ControlFlow::Break(Ok(Shard::All))
                     }
                     (SearchResult::Column(column), Some(values), false)
                     | (values, Some(SearchResult::Column(column)), false) => {
+                        let Some(column) = ctx.resolve_column(column) else {
+                            return Recurse::no();
+                        };
                         let shards = values
                             .iter()
                             .filter_map(|value| {
-                                self.compute_shard_with_ctx(column, value.clone(), &ctx)
+                                self.compute_shard_of_resolved_column(column, value.clone())
                                     .transpose()
                             })
                             .collect::<Result<Vec<_>, _>>()
                             .break_err()?;
+
                         match Self::converge(&shards) {
                             Some(shard) => ControlFlow::Break(Ok(shard)),
                             None => Recurse::no(),
                         }
                     }
                     _ => Recurse::no(),
+                }
+            }
+
+            // E.g., if we have a statement such as
+            // UPDATE users SET status = 'changed' WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))
+            // and the Bind has {1, 2} for $1, then the UPDATE can only match the rows with the id 1 or 2.
+            // Therefore, we route the statement the same way as we would for id IN (1, 2), i.e., we compute the shards of the elements, and only send the statement to those shards.
+            Node::SubLink(sublink) => {
+                let Some(array_elements_as_text) =
+                    self.array_elements_of_in_select_from_unnest(sublink)
+                else {
+                    return Recurse::yes();
+                };
+                let Some(SearchResult::Column(sharding_key_column)) =
+                    self.search_expr(sublink.testexpr(), ctx)?
+                else {
+                    return Recurse::no();
+                };
+
+                // The array doesn't have to be the same type as the key, e.g., id could be a bigint while $1 is a numeric array such as {1.5}.
+                // Postgres is fine with comparing a bigint to a numeric, however, if we tried to compute the shard of 1.5 for a bigint key, PgDog would return an error to the client.
+                // Therefore, we skip this IN, and the statement is routed by whatever else is in the WHERE (which is also what we do for id IN (1.5)).
+                let sharding_key_data_type = ctx
+                    .resolve_column(sharding_key_column)
+                    .and_then(|column| self.get_sharded_table(column))
+                    .map(|sharded_table| sharded_table.data_type);
+
+                if sharding_key_data_type.is_some_and(|sharding_key_data_type| {
+                    array_elements_as_text.iter().any(|array_element_as_text| {
+                        !ShardingValue::new(array_element_as_text.as_str(), sharding_key_data_type)
+                            .valid()
+                    })
+                }) {
+                    return Recurse::no();
+                }
+
+                let Some(sharding_key_column) = ctx.resolve_column(sharding_key_column) else {
+                    return Recurse::no();
+                };
+                let shards_of_array_elements = array_elements_as_text
+                    .iter()
+                    .filter_map(|array_element_as_text| {
+                        self.compute_shard_of_resolved_column(
+                            sharding_key_column,
+                            Value::String(array_element_as_text),
+                        )
+                        .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .break_err()?;
+
+                match Self::converge(&shards_of_array_elements) {
+                    Some(shard) => ControlFlow::Break(Ok(shard)),
+                    None => Recurse::no(),
                 }
             }
 
@@ -1195,7 +1081,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     };
                     if !ctx
                         .resolve_column(column)
-                        .table
+                        .and_then(|column| column.table)
                         .is_some_and(|table| self.schema.tables.omnishards().contains_key(table))
                     {
                         continue;
@@ -1214,9 +1100,12 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                         if *from != column {
                             continue;
                         }
+                        let Some(to) = ctx.resolve_column(*to) else {
+                            continue;
+                        };
                         let shards = values
                             .iter()
-                            .map(|value| self.compute_shard_with_ctx(*to, value.clone(), ctx))
+                            .map(|value| self.compute_shard_of_resolved_column(to, value.clone()))
                             .collect::<Result<Vec<_>, _>>()
                             .break_err()?;
                         // Resolve every value above so all pending lookups
@@ -1248,11 +1137,36 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             Node::ColumnRef(c) => {
                 let mut column = Column::try_from(c).break_err()?;
 
-                // If column has no table, qualify with context table
+                // If the column doesn't have a table, we use the alias (or name) of `SearchContext::table`
+                // E.g., for id in FROM users u WHERE id = 1, we use u.id (not users.id), since `SearchContext::relations` stores the table under the alias u
+                // `resolve_column` then replaces u with users
                 if column.table().is_none()
                     && let Some(ref table) = ctx.table
                 {
-                    column.qualify(*table);
+                    column.table = Some(table.alias.unwrap_or(table.name));
+                    column.schema = table.schema;
+                }
+                // In joins, a named sharding config can identify the owner
+                // of an otherwise unqualified key. Only consider tables in
+                // this query scope, and leave ambiguous keys unresolved.
+                if column.table.is_none()
+                    && let Ok(table) = ctx
+                        .tables
+                        .iter()
+                        .filter(|table| {
+                            self.get_sharded_table_by_name(
+                                column.name,
+                                Some(table.name),
+                                table.schema,
+                            )
+                            .is_some_and(|config| config.name.is_some())
+                        })
+                        .exactly_one()
+                {
+                    // Keep the SQL reference until resolve_column resolves
+                    // aliases; another table may use this table's name as an alias.
+                    column.table = Some(table.alias.unwrap_or(table.name));
+                    column.schema = table.schema;
                 }
                 ControlFlow::Continue(Some(SearchResult::Column(column)))
             }
@@ -1268,7 +1182,13 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // the route.
             _ => {
                 let result = walk::walk_manual(node, |node| match node {
-                    Node::SelectStmt(_) => self.search_stmt(node).map_continue(|_| Recurse::No),
+                    Node::SelectStmt(_) => {
+                        if !self.ignore_subqueries {
+                            self.search_stmt(node).map_continue(|_| Recurse::No)
+                        } else {
+                            Recurse::no()
+                        }
+                    }
                     _ => Recurse::yes(),
                 })
                 .transpose()
@@ -1282,20 +1202,94 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         }
     }
 
-    /// Compute shard with alias resolution from context.
-    fn compute_shard_with_ctx(
-        &mut self,
-        column: Column<'a>,
-        value: Value<'a>,
-        ctx: &SearchContext<'a>,
-    ) -> Result<Option<Shard>, Error> {
-        let resolved_column = ctx.resolve_column(column);
+    // E.g., for id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1)), this returns the elements of the $1 array in the Bind as text (e.g., "1" and "2" for {1, 2}).
+    //
+    // This returns None if the expression is anything else (e.g., id = ANY (SELECT ..), or the SELECT returns u.c1 + 1), or if we can't read the array (e.g., we haven't received the Bind yet).
+    fn array_elements_of_in_select_from_unnest(
+        &self,
+        sublink: &'a nodes::SubLink,
+    ) -> Option<Vec<String>> {
+        let Node::ColumnRef(_) = sublink.testexpr() else {
+            return None;
+        };
 
+        let Node::SelectStmt(select_from_unnest) = sublink.subselect() else {
+            return None;
+        };
+
+        // Postgres parses both id IN (SELECT ..) and id = ANY (SELECT ..) as an ANY_SUBLINK.
+        // The difference is that IN leaves the operator name empty (while = ANY has "="), which is how we tell that this is an IN.
+        if sublink.sub_link_type != nodes::SubLinkType::ANY_SUBLINK
+            || !sublink.oper_name().is_empty()
+        {
+            return None;
+        }
+
+        let (array_param_ref, array_element_oid) =
+            array_param_of_select_from_unnest(select_from_unnest)?;
+        let array_bind_param = self
+            .bind?
+            .parameter((array_param_ref.number as usize).checked_sub(1)?)
+            .ok()??;
+
+        let array_elements_as_text = if array_bind_param.is_null() {
+            vec![]
+        } else {
+            Array::decode_typed(
+                array_bind_param.data(),
+                array_bind_param.format(),
+                array_element_oid,
+            )
+            .ok()?
+            .elements()
+            .iter()
+            .filter(|array_element| !matches!(array_element, Datum::Null))
+            .map(|array_element| {
+                let array_element_text = array_element.encode(Format::Text).ok()?;
+                String::from_utf8(array_element_text.to_vec()).ok()
+            })
+            .collect::<Option<Vec<_>>>()?
+        };
+
+        Some(array_elements_as_text)
+    }
+
+    /// Returns the shard that has the rows where `resolved_column` = `value`, e.g., the shard corresponding to 5 for users.id = 5, or None if `resolved_column` isn't a sharding key
+    /// `resolved_column` needs the table name (users.id), not the alias (u.id) (since the sharding config lists table names)
+    /// Callers resolve the column (`resolve_column`) once before the loop over the values (e.g., 1, 2 and 3 in users.id IN (1, 2, 3)).
+    /// Resolving looks up the alias of the column (u in u.id) in the hash map `SearchContext::relations`. Doing that per value (e.g., 1,000 times for a subquery that returns 1,000 rows) adds about 5% to the CPU instructions of those subqueries
+    fn compute_shard_of_resolved_column(
+        &mut self,
+        resolved_column: Column<'a>,
+        value: Value<'_>,
+    ) -> Result<Option<Shard>, Error> {
         let shard = self.compute_shard(resolved_column, value.clone())?;
         if let Some(ref shard) = shard {
             self.record_sharding_key(shard, resolved_column, &value);
         }
         Ok(shard)
+    }
+
+    /// If we're about to send a query round-robin, however, the SELECT provides the sharding key column,
+    /// meaning that we don't have a way to know where the query should actually go, then we error.
+    ///
+    /// This function performs those checks to see if it qualifies for the error.
+    fn select_sends_keys_without_shards(
+        &self,
+        stmt: &'a nodes::InsertStmt,
+        sharded_table: &ShardedTable,
+    ) -> bool {
+        let Node::SelectStmt(select) = stmt.select_stmt() else {
+            return false;
+        };
+
+        let waiting_for_bind = self.bind.is_none() && contains_param(Node::InsertStmt(stmt));
+
+        self.schema.shards > 1
+            && select.values_lists().is_empty()
+            && sharded_table.insert_sends_key_column(stmt)
+            && !self.insert_rewritten
+            && !waiting_for_bind
     }
 
     /// Get column names from the INSERT statement, or look them up from schema if not specified.
@@ -1309,7 +1303,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             .cols()
             .into_iter()
             .map(|n| match n {
-                Node::ResTarget(r) => r.name().ok_or(Error::ColumnDecode),
+                Node::ResTarget(r) => r.name().ok_or_else(|| Error::ColumnDecode),
                 _ => Err(Error::ColumnDecode),
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1396,14 +1390,27 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
         // Round-robin fallback: if table is sharded but no sharding key found,
         // pick a shard at random
+        let tables = Tables::new(self.schema);
         if let Some(table) = ctx.table
-            && Tables::new(self.schema).sharded(table).is_some()
+            && let Some(sharded_table) = tables.sharded(table)
         {
+            if self.select_sends_keys_without_shards(stmt, sharded_table) {
+                return Err(Error::InsertSelectWithoutShardingKey);
+            }
+
             Ok(Some(Shard::Direct(round_robin::next(self.schema.shards))))
         } else {
             Ok(None)
         }
     }
+}
+
+fn contains_param(node: Node<'_>) -> bool {
+    walk::walk_manual(node, |node| match node {
+        Node::ParamRef(_) => ControlFlow::Break(()),
+        _ => Recurse::yes(),
+    })
+    .is_some()
 }
 
 #[cfg(test)]
@@ -1890,6 +1897,149 @@ mod test {
         )
         .unwrap();
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_sharding_key_in_select_from_unnest_routes_like_in_list() {
+        let in_select_from_unnest = "(SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))";
+        let binary_array_with_null = pgdog_postgres_types::Array::new(
+            vec![Datum::Bigint(1), Datum::Null, Datum::Bigint(2)],
+            20,
+        )
+        .encode(Format::Binary)
+        .unwrap();
+
+        let text_and_binary_array_binds = [
+            Bind::new_params("", &[Parameter::new(b"{1,NULL,2}")]),
+            Bind::new_params_codes(
+                "",
+                &[Parameter::new(&binary_array_with_null)],
+                &[Format::Binary],
+            ),
+        ];
+
+        for array_bind in &text_and_binary_array_binds {
+            for statement_up_to_in in [
+                "SELECT * FROM sharded WHERE id IN",
+                "UPDATE sharded SET name = 'foo' WHERE id IN",
+                "DELETE FROM sharded WHERE name = 'foo' AND id IN",
+            ] {
+                let sorted_shards = |shard: Option<Shard>| match shard {
+                    Some(Shard::Multi(mut shards)) => {
+                        shards.sort();
+                        shards
+                    }
+                    shard => panic!("expected two shards, found {shard:?}"),
+                };
+
+                let shards_of_in_list =
+                    run_test(&format!("{statement_up_to_in} (1, 2)"), None).unwrap();
+                let shards_of_in_select_from_unnest = run_test(
+                    &format!("{statement_up_to_in} {in_select_from_unnest}"),
+                    Some(array_bind),
+                )
+                .unwrap();
+
+                assert_eq!(
+                    sorted_shards(shards_of_in_select_from_unnest),
+                    sorted_shards(shards_of_in_list)
+                );
+            }
+        }
+
+        let one_element_array_bind = Bind::new_params("", &[Parameter::new(b"{1}")]);
+        assert_eq!(
+            run_test(
+                &format!("SELECT * FROM sharded WHERE id IN {in_select_from_unnest}"),
+                Some(&one_element_array_bind)
+            )
+            .unwrap(),
+            run_test("SELECT * FROM sharded WHERE id = 1", None).unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_sharding_key_in_select_from_unnest_without_route() {
+        let one_element_array_bind = Bind::new_params("", &[Parameter::new(b"{1}")]);
+        let empty_array_bind = Bind::new_params("", &[Parameter::new(b"{}")]);
+        let fractional_array_bind = Bind::new_params("", &[Parameter::new(b"{1.5,1.0}")]);
+
+        for (statement, array_bind) in [
+            // NOT IN matches the rows that *aren't* in the array, and those rows can be on any of these shards
+            (
+                "SELECT * FROM sharded WHERE id NOT IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+            // Matches id = 2, not id = 1 (the SELECT adds 1 to the elements). Can't route with the array.
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 + 1 FROM unnest($1::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+            // Matches no rows. Nothing to route with (empty array)
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8) AS u(c1))",
+                &empty_array_bind,
+            ),
+            // id is a bigint, but the array is numeric. Can't compute the shard of 1.5 for a bigint, so we skip the IN (no error to the client).
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._numeric) AS u(c1))",
+                &fractional_array_bind,
+            ),
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($1::pg_catalog._float8) AS u(c1))",
+                &fractional_array_bind,
+            ),
+            // $0 doesn't exist. Shouldn't panic.
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($0::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+            // The Bind only has $1; no array for $2
+            (
+                "SELECT * FROM sharded WHERE id IN (SELECT u.c1 FROM unnest($2::pg_catalog._int8) AS u(c1))",
+                &one_element_array_bind,
+            ),
+        ] {
+            assert_eq!(
+                run_test(statement, Some(array_bind)).unwrap(),
+                None,
+                "{statement}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_varchar_sharding_key_in_select_from_unnest() {
+        let acme_array_bind = Bind::new_params("", &[Parameter::new(b"{acme}")]);
+        let shard_of_acme = run_test_with_column_data_type(
+            "SELECT * FROM users WHERE tenant_id = 'acme'",
+            None,
+            DataType::Varchar,
+        )
+        .unwrap();
+
+        assert!(matches!(shard_of_acme, Some(Shard::Direct(_))));
+        assert_eq!(
+            run_test_with_column_data_type(
+                "SELECT * FROM users WHERE tenant_id IN (SELECT u.c1 FROM unnest($1::pg_catalog._text) AS u(c1))",
+                Some(&acme_array_bind),
+                DataType::Varchar,
+            )
+            .unwrap(),
+            shard_of_acme,
+        );
+
+        // Postgres compares tenant_id with '1' (the bigint 1 casted to text), not with the '01' in the Bind. Can't route with the Bind.
+        let zero_one_array_bind = Bind::new_params("", &[Parameter::new(b"{01}")]);
+        assert_eq!(
+            run_test_with_column_data_type(
+                "SELECT * FROM users WHERE tenant_id IN (SELECT u.c1 FROM unnest($1::pg_catalog._int8::pg_catalog._text) AS u(c1))",
+                Some(&zero_one_array_bind),
+                DataType::Varchar,
+            )
+            .unwrap(),
+            None,
+        );
     }
 
     #[test]
@@ -3121,437 +3271,35 @@ mod test {
         );
     }
 
-    mod advisory_locks {
-        use super::*;
+    // This tests that the router doesn't pick a shard by the columns belonging to a derived table that has the name of the sharded table `sharded`
+    // E.g., in SELECT * FROM (SELECT 1 AS id) sharded WHERE sharded.id = 1, sharded.id is a column belonging to the derived table (not the sharding key)
+    #[test]
+    fn test_derived_table_named_like_a_sharded_table() {
+        let table = "SELECT * FROM sharded WHERE sharded.id = 1";
+        let derived_table = "SELECT * FROM (SELECT 1 AS id) sharded WHERE sharded.id = 1";
 
-        fn locks(query: &str) -> Vec<AdvisoryLock> {
-            locks_with_bind(query, None)
-        }
+        assert!(run_test(table, None).unwrap().is_some());
+        assert_eq!(run_test(derived_table, None).unwrap(), None);
+    }
 
-        fn locks_with_bind(query: &str, bind: Option<&Bind>) -> Vec<AdvisoryLock> {
-            let schema = ShardingSchema::default();
-            let raw = pg_raw_parse::parse(query).unwrap();
-            let stmt = raw.stmts().next().unwrap();
-            let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
-            let mut v: Vec<_> = parser.extract_advisory_locks().iter().copied().collect();
-            v.sort_by_key(|l| {
-                let id = match l.id {
-                    Some(AdvisoryLockId::OneParameter(id)) => Some((id, None)),
-                    Some(AdvisoryLockId::TwoParameters(a, b)) => Some((a as i64, Some(b))),
-                    None => None,
-                };
-                (id, l.unlock)
-            });
-            v
-        }
+    // Same test as `test_derived_table_named_like_a_sharded_table, but now for CTE that has name of the sharded table `sharded` since FROM sharded then refers to the CTE
+    #[test]
+    fn test_cte_named_like_a_sharded_table() {
+        let table = "SELECT * FROM sharded WHERE id = 1";
+        let cte = "WITH sharded AS (SELECT 1 AS id) SELECT * FROM sharded WHERE id = 1";
 
-        fn session(id: Option<AdvisoryLockId>, unlock: bool) -> AdvisoryLock {
-            AdvisoryLock {
-                id,
-                unlock,
-                unlock_all: false,
-                scope: LockScope::Session,
-            }
-        }
+        assert!(run_test(table, None).unwrap().is_some());
+        assert_eq!(run_test(cte, None).unwrap(), None);
+    }
 
-        fn xact(id: Option<AdvisoryLockId>, unlock: bool) -> AdvisoryLock {
-            AdvisoryLock {
-                id,
-                unlock,
-                unlock_all: false,
-                scope: LockScope::Transaction,
-            }
-        }
+    // If we have a sharding config that sets a column without a table (column = "tenant_id" without name in [[sharded_tables]]), all tables with a tenant_id column are sharded by tenant_id
+    // This tests that the router doesn't pick a shard by tenant_id columns belonging to derived tables (e.g., s.tenant_id in FROM (SELECT 1 AS tenant_id) s)
+    #[test]
+    fn test_column_only_config_derived_table() {
+        let table = "SELECT * FROM t WHERE tenant_id = 1";
+        let derived_table = "SELECT * FROM (SELECT 1 AS tenant_id) s WHERE s.tenant_id = 1";
 
-        fn unlock_all() -> AdvisoryLock {
-            AdvisoryLock {
-                id: None,
-                unlock: true,
-                unlock_all: true,
-                scope: LockScope::Session,
-            }
-        }
-
-        #[test]
-        fn unresolved_unlock_is_distinct_from_unlock_all() {
-            let null_bind = Bind::new_params("", &[Parameter::new_null()]);
-            for query in [
-                "SELECT pg_advisory_unlock(NULL::bigint)",
-                "SELECT pg_advisory_unlock($1::bigint)",
-                "SELECT pg_advisory_unlock(1, NULL::integer)",
-                "SELECT pg_advisory_unlock((SELECT 42))",
-                "SELECT pg_advisory_unlock(value) FROM (VALUES (NULL::bigint)) AS t(value)",
-            ] {
-                assert_eq!(
-                    locks_with_bind(query, Some(&null_bind)),
-                    vec![session(None, true)],
-                    "{query}"
-                );
-            }
-            assert_eq!(locks("SELECT pg_advisory_unlock_all()"), vec![unlock_all()]);
-        }
-
-        #[test]
-        fn lock_and_unlock() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(42)"),
-                vec![session(Some(AdvisoryLockId::OneParameter(42)), false)],
-            );
-            assert_eq!(
-                locks("SELECT pg_advisory_unlock(42)"),
-                vec![session(Some(AdvisoryLockId::OneParameter(42)), true)],
-            );
-        }
-
-        #[test]
-        fn lock_with_two_param() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(1, 2)"),
-                vec![session(Some(AdvisoryLockId::TwoParameters(1, 2)), false)]
-            );
-        }
-
-        #[test]
-        fn lock_with_hashtext_both() {
-            // Try out hashtext and hashtextended; compared against the numbers Postgres outputs!
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(hashtext('hello world'))"),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(1021725223)),
-                    false
-                )]
-            );
-
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(hashtextextended('hello world', 123))"),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(3896024775453578562)),
-                    false
-                )]
-            );
-        }
-
-        #[test]
-        fn pg_catalog_qualified_advisory_calls() {
-            let bind = Bind::new_params("", &[Parameter::new(b"123")]);
-            for function in [
-                "pg_advisory_lock",
-                "pg_advisory_lock_shared",
-                "pg_try_advisory_lock",
-                "pg_try_advisory_lock_shared",
-                "pg_advisory_xact_lock",
-                "pg_advisory_xact_lock_shared",
-                "pg_try_advisory_xact_lock",
-                "pg_try_advisory_xact_lock_shared",
-                "pg_advisory_unlock",
-            ] {
-                for argument in ["123", "$1::bigint"] {
-                    let unqualified = format!("SELECT {function}({argument})");
-                    let expected = locks_with_bind(&unqualified, Some(&bind));
-                    assert!(!expected.is_empty(), "{unqualified}");
-                    for schema in ["pg_catalog", "\"pg_catalog\""] {
-                        let qualified = format!("SELECT {schema}.{function}({argument})");
-                        assert_eq!(
-                            locks_with_bind(&qualified, Some(&bind)),
-                            expected,
-                            "{qualified}"
-                        );
-                    }
-                    let custom = format!("SELECT other.{function}({argument})");
-                    assert!(locks_with_bind(&custom, Some(&bind)).is_empty(), "{custom}");
-                }
-            }
-            assert_eq!(
-                locks("SELECT pg_catalog.pg_advisory_unlock_all()"),
-                vec![unlock_all()],
-            );
-        }
-
-        #[test]
-        fn bigint_argument() {
-            // Values larger than i32 are encoded as Float in PG internally.
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(9000000000)"),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(9_000_000_000)),
-                    false
-                )],
-            );
-        }
-
-        #[test]
-        fn all_session_lock_variants() {
-            for q in [
-                "SELECT pg_try_advisory_lock(7)",
-                "SELECT pg_advisory_lock_shared(7)",
-                "SELECT pg_try_advisory_lock_shared(7)",
-            ] {
-                assert_eq!(
-                    locks(q),
-                    vec![session(Some(AdvisoryLockId::OneParameter(7)), false)],
-                    "{q}"
-                );
-            }
-        }
-
-        #[test]
-        fn xact_variants_have_transaction_scope() {
-            // xact locks must still pin the backend for the lifetime of the transaction,
-            // but the engine drops them at COMMIT/ROLLBACK.
-            for q in [
-                "SELECT pg_advisory_xact_lock(7)",
-                "SELECT pg_advisory_xact_lock_shared(7)",
-                "SELECT pg_try_advisory_xact_lock(7)",
-                "SELECT pg_try_advisory_xact_lock_shared(7)",
-            ] {
-                assert_eq!(
-                    locks(q),
-                    vec![xact(Some(AdvisoryLockId::OneParameter(7)), false)],
-                    "{q}"
-                );
-            }
-        }
-
-        #[test]
-        fn multiple_and_dedup() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(5), pg_advisory_lock(5), pg_advisory_lock(6)"),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(5)), false),
-                    session(Some(AdvisoryLockId::OneParameter(6)), false)
-                ],
-            );
-        }
-
-        #[test]
-        fn cast_and_cte() {
-            assert_eq!(
-                locks("SELECT pg_try_advisory_lock(9)::bool"),
-                vec![session(Some(AdvisoryLockId::OneParameter(9)), false)],
-            );
-            assert_eq!(
-                locks("WITH x AS (SELECT pg_advisory_lock(11)) SELECT * FROM x"),
-                vec![session(Some(AdvisoryLockId::OneParameter(11)), false)],
-            );
-        }
-
-        #[test]
-        fn param_without_bind_is_ignored() {
-            // Without a Bind message, a parameter placeholder means the prepared
-            // statement is only being parsed — no lock is actually taken.
-            assert!(locks("SELECT pg_advisory_lock($1)").is_empty());
-        }
-
-        #[test]
-        fn two_params_without_bind_is_ignored() {
-            assert!(locks("SELECT pg_advisory_lock($1, $2)").is_empty());
-            assert!(locks("SELECT pg_advisory_lock($1, 1)").is_empty());
-            assert!(locks("SELECT pg_adivsory_lock(1, $2)").is_empty());
-        }
-
-        #[test]
-        fn unlock_all_without_bind() {
-            // unlock_all takes no arguments, so it always applies.
-            assert_eq!(locks("SELECT pg_advisory_unlock_all()"), vec![unlock_all()],);
-        }
-
-        #[test]
-        fn ignored_cases() {
-            // Schema-qualified — not the builtin.
-            assert!(locks("SELECT other.pg_advisory_lock(1)").is_empty());
-            // Unrelated functions.
-            assert!(locks("SELECT 1, now()").is_empty());
-        }
-
-        #[test]
-        fn key_from_values_subquery_no_bind() {
-            // Without a Bind, parameter-based VALUES rows are skipped — the
-            // prepared statement is only being parsed, no lock is taken.
-            assert!(
-                locks("SELECT pg_advisory_lock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
-            );
-            assert!(
-                locks("SELECT pg_advisory_unlock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
-            );
-            assert!(
-                locks("SELECT pg_try_advisory_lock(value) FROM (VALUES ($1)) AS t(value)")
-                    .is_empty()
-            );
-        }
-
-        #[test]
-        fn xact_lock_with_param_no_bind() {
-            // Without a Bind the prepared statement is just being parsed.
-            assert!(locks("SELECT pg_advisory_xact_lock($1)").is_empty());
-        }
-
-        #[test]
-        fn param_resolved_from_bind() {
-            let bind = Bind::new_params("", &[Parameter::new(b"4242")]);
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
-                vec![session(Some(AdvisoryLockId::OneParameter(4242)), false)],
-            );
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_xact_lock($1)", Some(&bind)),
-                vec![xact(Some(AdvisoryLockId::OneParameter(4242)), false)],
-            );
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_unlock($1)", Some(&bind)),
-                vec![session(Some(AdvisoryLockId::OneParameter(4242)), true)],
-            );
-        }
-
-        #[test]
-        fn bind_bigint_value() {
-            // Keys wider than i32 are encoded as text on the wire but still
-            // decode cleanly through FromDataType<i64>.
-            let bind = Bind::new_params("", &[Parameter::new(b"9000000000")]);
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(9_000_000_000)),
-                    false
-                )],
-            );
-        }
-
-        #[test]
-        fn multiple_locks_in_one_query_with_bind() {
-            // Single query taking multiple advisory locks from distinct bind params.
-            let bind = Bind::new_params(
-                "",
-                &[
-                    Parameter::new(b"11"),
-                    Parameter::new(b"22"),
-                    Parameter::new(b"33"),
-                ],
-            );
-            assert_eq!(
-                locks_with_bind(
-                    "SELECT pg_advisory_lock($1), pg_advisory_xact_lock($2), pg_advisory_unlock($3)",
-                    Some(&bind),
-                ),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(11)), false),
-                    xact(Some(AdvisoryLockId::OneParameter(22)), false),
-                    session(Some(AdvisoryLockId::OneParameter(33)), true),
-                ],
-            );
-        }
-
-        #[test]
-        fn multiple_literal_locks_in_one_query() {
-            assert_eq!(
-                locks(
-                    "SELECT pg_advisory_lock(10), pg_advisory_xact_lock(20), \
-                     pg_advisory_unlock(30), pg_advisory_unlock_all()",
-                ),
-                vec![
-                    unlock_all(),
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    xact(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), true),
-                ],
-            );
-        }
-
-        #[test]
-        fn values_multiple_rows_expand_to_multiple_locks() {
-            // `pg_advisory_lock(value) FROM (VALUES (1),(2),(3)) AS t(value)` is
-            // called once per row, so the parser should emit one lock per row.
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(value) FROM (VALUES (10), (20), (30)) AS t(value)",),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    session(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn advisory_lock_from_values_without_explicit_column_name() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(column1) FROM (VALUES (10), (20), (30))",),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    session(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn advisory_lock_when_client_is_sadistic() {
-            assert_eq!(
-                locks(
-                    "SELECT pg_advisory_lock(column1), (SELECT pg_advisory_lock(c) FROM (VALUES (20), (30)) AS t(c)) FROM (VALUES (10))",
-                ),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    session(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn values_multiple_rows_with_bind() {
-            let bind = Bind::new_params(
-                "",
-                &[
-                    Parameter::new(b"41"),
-                    Parameter::new(b"42"),
-                    Parameter::new(b"43"),
-                ],
-            );
-            assert_eq!(
-                locks_with_bind(
-                    "SELECT pg_advisory_lock(value) FROM (VALUES ($1), ($2), ($3)) AS t(value)",
-                    Some(&bind),
-                ),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(41)), false),
-                    session(Some(AdvisoryLockId::OneParameter(42)), false),
-                    session(Some(AdvisoryLockId::OneParameter(43)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn values_multi_rows_unlock_and_xact() {
-            // Same multi-row expansion for unlock and xact variants.
-            assert_eq!(
-                locks("SELECT pg_advisory_unlock(value) FROM (VALUES (1), (2)) AS t(value)",),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(1)), true),
-                    session(Some(AdvisoryLockId::OneParameter(2)), true)
-                ],
-            );
-            assert_eq!(
-                locks("SELECT pg_advisory_xact_lock(value) FROM (VALUES (5), (6)) AS t(value)",),
-                vec![
-                    xact(Some(AdvisoryLockId::OneParameter(5)), false),
-                    xact(Some(AdvisoryLockId::OneParameter(6)), false)
-                ],
-            );
-        }
-
-        #[test]
-        fn param_out_of_range_fallback() {
-            // $2 has no bound value — we should still record the lock but leave id=None.
-            let bind = Bind::new_params("", &[Parameter::new(b"99")]);
-            assert_eq!(
-                locks_with_bind(
-                    "SELECT pg_advisory_lock($1), pg_advisory_lock($2)",
-                    Some(&bind),
-                ),
-                vec![
-                    session(None, false),
-                    session(Some(AdvisoryLockId::OneParameter(99)), false)
-                ],
-            );
-        }
+        assert!(run_test_column_only(table, None).unwrap().is_some());
+        assert_eq!(run_test_column_only(derived_table, None).unwrap(), None);
     }
 }

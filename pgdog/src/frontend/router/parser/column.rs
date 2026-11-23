@@ -90,7 +90,7 @@ impl<'a> TryFrom<&'a nodes::ResTarget> for Column<'a> {
 
     fn try_from(value: &'a nodes::ResTarget) -> Result<Self, Self::Error> {
         Ok(Self {
-            name: value.name().ok_or(Error::ColumnDecode)?,
+            name: value.name().ok_or_else(|| Error::ColumnDecode)?,
             ..Default::default()
         })
     }
@@ -102,8 +102,8 @@ impl<'a> TryFrom<&'a list::NodeList> for Column<'a> {
     fn try_from(value: &'a list::NodeList) -> Result<Self, Self::Error> {
         let mut fields = value
             .into_iter()
-            .map(|s| s.as_str().ok_or(Error::ColumnDecode));
-        let name = fields.next_back().ok_or(Error::ColumnDecode)??;
+            .map(|s| s.as_str().ok_or_else(|| Error::ColumnDecode));
+        let name = fields.next_back().ok_or_else(|| Error::ColumnDecode)??;
         let table = fields.next_back().transpose()?;
         let schema = fields.next_back().transpose()?;
 

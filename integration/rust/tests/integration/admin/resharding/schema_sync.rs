@@ -22,6 +22,7 @@ const SHOW_SCHEMA_SYNC_LAYOUT: &[(&str, &str)] = &[
     ("source", "TEXT"),
     ("destination", "TEXT"),
     ("sync_state", "TEXT"),
+    ("direction", "TEXT"),
     ("shard", "INT8"),
     ("status", "TEXT"),
     ("inner_status", "TEXT"),
@@ -37,6 +38,7 @@ struct SchemaSyncRow {
     source: String,
     destination: String,
     sync_state: String,
+    direction: Option<String>,
     shard: Option<i64>,
     status: TaskProgress,
     inner_status: String,
@@ -75,6 +77,7 @@ async fn schema_sync_rows(admin: &Pool<Postgres>) -> Vec<SchemaSyncRow> {
                 source: row.get("source"),
                 destination: row.get("destination"),
                 sync_state: row.get("sync_state"),
+                direction: row.get("direction"),
                 shard,
                 status,
                 inner_status: row.get("inner_status"),
@@ -91,6 +94,7 @@ async fn assert_schema_sync_rows(admin: &Pool<Postgres>, task_id: i64, sync_stat
         .find(|row| row.id == task_id && row.shard.is_none())
         .unwrap_or_else(|| panic!("SHOW SCHEMA_SYNC has no row for task {task_id}"));
     assert_eq!(task.sync_state, sync_state);
+    assert_eq!(task.direction.as_deref(), Some("forward"));
     assert_eq!(task.source, "pgdog");
     assert_eq!(task.destination, "pgdog_sharded");
     assert!(
@@ -116,6 +120,7 @@ async fn assert_schema_sync_rows(admin: &Pool<Postgres>, task_id: i64, sync_stat
     );
     for row in shards {
         assert_eq!(row.sync_state, sync_state);
+        assert_eq!(row.direction, None);
         assert!(
             row.inner_status.starts_with("shard "),
             "shard row {} must report its cursor, got {:?}",

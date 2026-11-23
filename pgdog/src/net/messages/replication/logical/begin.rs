@@ -5,7 +5,7 @@ use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Begin {
-    pub(crate) final_transaction_lsn: i64,
+    pub(crate) final_transaction_lsn: u64,
     pub(crate) commit_timestamp: i64,
     pub(crate) xid: i32,
 }
@@ -14,7 +14,7 @@ impl FromBytes for Begin {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'B');
         Ok(Self {
-            final_transaction_lsn: bytes.get_i64(),
+            final_transaction_lsn: bytes.get_u64(),
             commit_timestamp: bytes.get_i64(),
             xid: bytes.get_i32(),
         })
@@ -25,7 +25,7 @@ impl ToBytes for Begin {
     fn to_bytes(&self) -> Bytes {
         let mut bytes = BytesMut::new();
         bytes.put_u8(self.code() as u8);
-        bytes.put_i64(self.final_transaction_lsn);
+        bytes.put_u64(self.final_transaction_lsn);
         bytes.put_i64(self.commit_timestamp);
         bytes.put_i32(self.xid);
 

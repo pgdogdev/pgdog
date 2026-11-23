@@ -1,5 +1,5 @@
 use super::prelude::*;
-use crate::frontend::router::parser::statement::AdvisoryLockId;
+use crate::frontend::router::parser::advisory_lock::AdvisoryLockId;
 
 #[tokio::test]
 async fn test_unknown_unlock_preserves_other_session_locks() {

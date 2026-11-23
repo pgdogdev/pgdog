@@ -39,6 +39,11 @@ database = "pgdog_sharded"
 password = "pgdog"
 
 [[users]]
+name = "pgdog"
+database = "pgdog_sharded_subqueries"
+password = "pgdog"
+
+[[users]]
 name = "pgdog_no_cross_shard"
 database = "pgdog_sharded"
 password = "pgdog"

@@ -21,6 +21,10 @@ use pgdog_postgres_types::Datum;
 
 use super::Aggregates;
 
+pub(crate) mod having;
+
+use having::HavingInputs;
+
 /// Sort and aggregate rows received from multiple shards.
 #[derive(Default, Debug, Clone)]
 pub(super) struct Buffer {
@@ -53,17 +57,17 @@ impl Buffer {
         let mut cols = vec![];
         for column in columns {
             match column {
-                OrderBy::Asc(_) => cols.push(column.clone()),
-                OrderBy::AscColumn(name) => {
+                OrderBy::Asc(..) => cols.push(column.clone()),
+                OrderBy::AscColumn(name, nulls) => {
                     if let Some(index) = decoder.row_description().field_index(name) {
-                        cols.push(OrderBy::Asc(index + 1));
+                        cols.push(OrderBy::Asc(index + 1, *nulls));
                     }
                     // TODO: Error out instead of silently not sorting.
                 }
-                OrderBy::Desc(_) => cols.push(column.clone()),
-                OrderBy::DescColumn(name) => {
+                OrderBy::Desc(..) => cols.push(column.clone()),
+                OrderBy::DescColumn(name, nulls) => {
                     if let Some(index) = decoder.row_description().field_index(name) {
-                        cols.push(OrderBy::Desc(index + 1));
+                        cols.push(OrderBy::Desc(index + 1, *nulls));
                     }
                     // TODO: Error out instead of silently not sorting.
                 }
@@ -83,6 +87,7 @@ impl Buffer {
                 .filter_map(|col| {
                     let index = col.index();
                     let asc = col.asc();
+                    let nulls_first = col.nulls_first();
                     let index = index?;
                     let left = a.get_column(index, decoder);
                     let right = b.get_column(index, decoder);
@@ -103,17 +108,17 @@ impl Buffer {
                                     Some(Ordering::Equal)
                                 }
                             } else {
-                                // FIXME(sage): We don't handle ASC NULLS FIRST or
-                                // DESC NULLS LAST we should either error or add
-                                // support rather than silently do the wrong sorting
-                                match (&left.value, &right.value, asc) {
-                                    (Datum::Null, Datum::Null, _) => Some(Ordering::Equal),
-                                    (Datum::Null, _, true) => Some(Ordering::Greater),
-                                    (_, Datum::Null, true) => Some(Ordering::Less),
-                                    (Datum::Null, _, false) => Some(Ordering::Less),
-                                    (_, Datum::Null, false) => Some(Ordering::Greater),
-                                    (a, b, true) => a.partial_cmp(b),
-                                    (a, b, false) => b.partial_cmp(a),
+                                let null = if nulls_first {
+                                    Ordering::Less
+                                } else {
+                                    Ordering::Greater
+                                };
+                                match (&left.value, &right.value) {
+                                    (Datum::Null, Datum::Null) => Some(Ordering::Equal),
+                                    (Datum::Null, _) => Some(null),
+                                    (_, Datum::Null) => Some(null.reverse()),
+                                    (a, b) if asc => a.partial_cmp(b),
+                                    (a, b) => b.partial_cmp(a),
                                 }
                             }
                         }
@@ -140,7 +145,7 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &ProjectionRewritePlan,
+        plan: Option<&ProjectionRewritePlan>,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let rows = if aggregate.is_empty() {
@@ -156,10 +161,30 @@ impl Buffer {
         Ok(())
     }
 
-    pub(super) fn drop_helper_columns(&mut self, plan: &ProjectionRewritePlan, decoder: &Decoder) {
-        if plan.is_noop() {
+    /// Collect the merged `HAVING` operands, before hidden columns are dropped.
+    pub(super) fn having_inputs(
+        &self,
+        plan: Option<&ProjectionRewritePlan>,
+        decoder: &Decoder,
+    ) -> Result<Option<HavingInputs>, super::Error> {
+        let Some(having) = plan.and_then(|plan| plan.having.as_deref()) else {
+            return Ok(None);
+        };
+        Ok(Some(HavingInputs::new(
+            &self.buffer,
+            having.rewrite().operand_aliases(),
+            decoder,
+        )?))
+    }
+
+    pub(super) fn drop_helper_columns(
+        &mut self,
+        plan: Option<&ProjectionRewritePlan>,
+        decoder: &Decoder,
+    ) {
+        let Some(plan) = plan else {
             return;
-        }
+        };
 
         let drop = plan.drop_columns(decoder.row_description());
 
@@ -234,11 +259,20 @@ impl Buffer {
     pub(super) fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Clear the buffer.
+    ///
+    /// Use this in case of an aggregation/sort/post-processing error. The data in the buffer
+    /// is not valid for client consumption.
+    pub(super) fn clear(&mut self) {
+        self.buffer.clear();
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::frontend::router::parser::Nulls;
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
 
@@ -246,7 +280,10 @@ mod test {
     fn test_sort_buffer() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::bigint("one"), Field::text("two")]);
-        let columns = [OrderBy::Asc(1), OrderBy::Desc(2)];
+        let columns = [
+            OrderBy::Asc(1, Nulls::Default),
+            OrderBy::Desc(2, Nulls::Default),
+        ];
 
         for i in 0..25_i64 {
             let mut dr = DataRow::new();
@@ -272,6 +309,71 @@ mod test {
         assert_eq!(i, 26);
     }
 
+    fn sorted_with_nulls(order_by: OrderBy) -> Vec<Option<i64>> {
+        let mut buf = Buffer::default();
+        let decoder = Decoder::from(RowDescription::new(&[Field::bigint("value")]));
+
+        for value in [Some(2_i64), None, Some(1), None, Some(3)] {
+            let mut dr = DataRow::new();
+            dr.add(value);
+            buf.add(dr.message()).unwrap();
+        }
+
+        buf.sort(&[order_by], &decoder);
+        buf.mark_full();
+
+        let mut sorted = vec![];
+        while let Some(message) = buf.take() {
+            let dr = DataRow::from_bytes(message.to_bytes()).unwrap();
+            sorted.push(dr.get::<i64>(0, Format::Text));
+        }
+        sorted
+    }
+
+    #[test]
+    fn test_sort_buffer_nulls_default() {
+        assert_eq!(
+            sorted_with_nulls(OrderBy::Asc(1, Nulls::Default)),
+            [Some(1), Some(2), Some(3), None, None]
+        );
+        assert_eq!(
+            sorted_with_nulls(OrderBy::Desc(1, Nulls::Default)),
+            [None, None, Some(3), Some(2), Some(1)]
+        );
+    }
+
+    #[test]
+    fn test_sort_buffer_nulls_first_last() {
+        assert_eq!(
+            sorted_with_nulls(OrderBy::Asc(1, Nulls::First)),
+            [None, None, Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(
+            sorted_with_nulls(OrderBy::Asc(1, Nulls::Last)),
+            [Some(1), Some(2), Some(3), None, None]
+        );
+        assert_eq!(
+            sorted_with_nulls(OrderBy::Desc(1, Nulls::First)),
+            [None, None, Some(3), Some(2), Some(1)]
+        );
+        assert_eq!(
+            sorted_with_nulls(OrderBy::Desc(1, Nulls::Last)),
+            [Some(3), Some(2), Some(1), None, None]
+        );
+    }
+
+    #[test]
+    fn test_sort_buffer_nulls_by_column_name() {
+        assert_eq!(
+            sorted_with_nulls(OrderBy::AscColumn("value".into(), Nulls::First)),
+            [None, None, Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(
+            sorted_with_nulls(OrderBy::DescColumn("value".into(), Nulls::Last)),
+            [Some(3), Some(2), Some(1), None, None]
+        );
+    }
+
     #[test]
     fn test_aggregate_buffer() {
         let mut buf = Buffer::default();
@@ -284,8 +386,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 1);
@@ -311,8 +412,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 2);
@@ -328,7 +428,7 @@ mod test {
     fn test_sort_buffer_with_timestamps() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::timestamp("created_at"), Field::text("name")]);
-        let columns = [OrderBy::Asc(1)]; // Sort by timestamp column
+        let columns = [OrderBy::Asc(1, Nulls::Default)]; // Sort by timestamp column
 
         // Add timestamps in random order
         let timestamps = [
@@ -371,7 +471,7 @@ mod test {
     fn test_sort_buffer_with_numeric() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::numeric("price"), Field::text("product")]);
-        let columns = [OrderBy::Desc(1)]; // Sort by numeric column descending
+        let columns = [OrderBy::Desc(1, Nulls::Default)]; // Sort by numeric column descending
 
         // Add numeric values in random order
         let prices = [
@@ -421,7 +521,7 @@ mod test {
     fn test_sort_buffer_with_numeric_binary() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::numeric_binary("price"), Field::text("product")]);
-        let columns = [OrderBy::Desc(1)]; // Sort by numeric column descending
+        let columns = [OrderBy::Desc(1, Nulls::Default)]; // Sort by numeric column descending
 
         // Test values with their expected binary representations
         let test_cases = [
@@ -467,7 +567,7 @@ mod test {
     fn test_sort_buffer_with_numeric_edge_cases() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::numeric("value"), Field::text("description")]);
-        let columns = [OrderBy::Asc(1)]; // Sort by numeric column ascending
+        let columns = [OrderBy::Asc(1, Nulls::Default)]; // Sort by numeric column ascending
 
         // Test edge cases: negative numbers, very large numbers, very small decimals, zero
         let values = [

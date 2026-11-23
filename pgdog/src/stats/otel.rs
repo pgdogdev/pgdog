@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::util::hostname;
+use pgdog_config::OtelTemporality;
 
 use super::open_metric::{MeasurementType, Metric};
 
@@ -30,6 +31,8 @@ struct CounterKey {
 /// Previous cumulative values for delta computation.
 static PREV_COUNTERS: Lazy<Mutex<HashMap<CounterKey, f64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) static COUNTERS_START_TIME: Lazy<String> = Lazy::new(now_nanos);
 
 pub(crate) fn now_nanos() -> String {
     SystemTime::now()
@@ -205,6 +208,7 @@ fn measurement_to_f64(m: &MeasurementType) -> f64 {
 /// Build an `ExportMetricsServiceRequest` from a collection of `Metric` objects.
 pub(crate) fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequest {
     let config = crate::config::config();
+    let temporality = config.config.otel.temporality;
     let namespace = config
         .config
         .otel
@@ -225,21 +229,23 @@ pub(crate) fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServ
         .map(|metric| {
             let name = format!("{}.{}", namespace, metric.name());
             let is_counter = metric.metric_type() == "counter";
+            let is_delta_counter = is_counter && temporality == OtelTemporality::Delta;
+            let is_cumulative_counter = is_counter && temporality == OtelTemporality::Cumulative;
 
             let data_points: Vec<NumberDataPoint> = metric
                 .measurements()
                 .iter()
                 .filter_map(|m| {
-                    let cumulative = measurement_to_f64(&m.measurement);
+                    let running_total = measurement_to_f64(&m.measurement);
 
-                    let as_double = if is_counter {
+                    let as_double = if is_delta_counter {
                         let key = CounterKey {
                             metric: name.clone(),
                             labels: m.labels.clone(),
                         };
                         let mut prev = PREV_COUNTERS.lock();
-                        let delta = cumulative - prev.get(&key).copied().unwrap_or(0.0);
-                        prev.insert(key, cumulative);
+                        let delta = running_total - prev.get(&key).copied().unwrap_or(0.0);
+                        prev.insert(key, running_total);
 
                         // Skip negative deltas (counter reset).
                         if delta < 0.0 {
@@ -247,7 +253,7 @@ pub(crate) fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServ
                         }
                         delta
                     } else {
-                        cumulative
+                        running_total
                     };
 
                     let mut attributes: Vec<KeyValue> = m
@@ -269,7 +275,8 @@ pub(crate) fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServ
                     }));
 
                     Some(NumberDataPoint {
-                        start_time_unix_nano: None,
+                        start_time_unix_nano: is_cumulative_counter
+                            .then(|| COUNTERS_START_TIME.clone()),
                         time_unix_nano: now.to_owned(),
                         as_double,
                         attributes,
@@ -281,7 +288,10 @@ pub(crate) fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServ
                 (
                     None,
                     Some(Sum {
-                        aggregation_temporality: 1, // DELTA
+                        aggregation_temporality: match temporality {
+                            OtelTemporality::Delta => 1,
+                            OtelTemporality::Cumulative => 2,
+                        },
                         is_monotonic: true,
                         data_points,
                     }),
@@ -318,6 +328,8 @@ pub(crate) fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServ
 
 #[cfg(test)]
 mod test {
+    use serde_json::json;
+
     use crate::stats::open_metric::{Measurement, MeasurementType};
     use crate::stats::pools::PoolMetric;
 
@@ -371,6 +383,83 @@ mod test {
         assert!(!json.contains("\"gauge\""));
         assert!(json.contains("\"isMonotonic\":true"));
         assert!(json.contains("\"aggregationTemporality\":1"));
+    }
+
+    fn counter_with_total(name: &str, total: i64) -> Metric {
+        Metric::new(PoolMetric {
+            name: name.into(),
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: MeasurementType::Integer(total),
+            }],
+            help: "Counter".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        })
+    }
+
+    fn first_sum_as_json(request: &ExportMetricsServiceRequest) -> serde_json::Value {
+        let sum = request.resource_metrics[0].scope_metrics[0].metrics[0]
+            .sum
+            .as_ref()
+            .expect("sum");
+
+        serde_json::to_value(sum).expect("serialize")
+    }
+
+    #[test]
+    fn cumulative_counter_sends_running_total_and_start_time() {
+        let _test_lock = TEST_LOCK.lock();
+
+        use crate::config::{self, ConfigAndUsers};
+
+        let mut cfg = ConfigAndUsers::default();
+        cfg.config.otel.temporality = OtelTemporality::Cumulative;
+        config::set(cfg).expect("set config");
+
+        build_request(&[&counter_with_total("cumulative_total", 5)], "20");
+        let request = build_request(&[&counter_with_total("cumulative_total", 8)], "30");
+
+        config::set(ConfigAndUsers::default()).expect("set config");
+
+        assert_eq!(
+            first_sum_as_json(&request),
+            json!({
+                "aggregationTemporality": 2,
+                "isMonotonic": true,
+                "dataPoints": [{
+                    "startTimeUnixNano": *COUNTERS_START_TIME,
+                    "timeUnixNano": "30",
+                    "asDouble": 8.0,
+                    "attributes": *RESOURCE_ATTRIBUTES,
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn delta_counter_sends_change_without_start_time() {
+        let _test_lock = TEST_LOCK.lock();
+
+        use crate::config::{self, ConfigAndUsers};
+
+        config::set(ConfigAndUsers::default()).expect("set config");
+
+        build_request(&[&counter_with_total("delta_total", 5)], "20");
+        let request = build_request(&[&counter_with_total("delta_total", 8)], "30");
+
+        assert_eq!(
+            first_sum_as_json(&request),
+            json!({
+                "aggregationTemporality": 1,
+                "isMonotonic": true,
+                "dataPoints": [{
+                    "timeUnixNano": "30",
+                    "asDouble": 3.0,
+                    "attributes": *RESOURCE_ATTRIBUTES,
+                }],
+            })
+        );
     }
 
     #[test]

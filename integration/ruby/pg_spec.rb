@@ -12,13 +12,17 @@ describe 'pg' do
     ensure_done
   end
 
-  it 'out of sync' do
+  it 'stays in sync after an invalid SET' do
     conn = connect 'pgdog', 'pgdog'
     conn.exec_params 'SELECT $1', [1]
     conn.exec 'SELECT 1'
-    conn.exec 'SET lock_timeout TO sdfs'
+    expect { conn.exec 'SET lock_timeout TO sdfs' }
+      .to raise_error(PG::InvalidParameterValue, /invalid value for parameter "lock_timeout"/)
     conn.exec "SET statement_timeout TO '1s'"
-    expect { conn.exec 'SELECT 1' }.to raise_error(/invalid value for parameter/)
+    expect(conn.exec('SELECT 1 AS one')[0]['one']).to eq('1')
+    expect(conn.exec_params('SELECT $1::int AS one', [1])[0]['one']).to eq('1')
+  ensure
+    conn&.close
   end
 
   it 'simple query' do

@@ -1,7 +1,10 @@
 use pg_raw_parse::nodes::{ExecuteStmt, PrepareStmt};
 
 use crate::{
-    frontend::{BufferedQuery, PreparedStatements},
+    frontend::{
+        BufferedQuery, PreparedStatements,
+        router::parser::rewrite::statement::{Error as RewriteError, projection},
+    },
     net::{PREPARE_TEMPLATE_NAME, Query},
 };
 
@@ -54,7 +57,7 @@ impl QueryParser {
         let prepare = PreparedStatements::global()
             .read()
             .prepare(stmt.name().expect("execute to have a name"))
-            .ok_or(Error::ExecuteRequiresFull)?;
+            .ok_or_else(|| Error::ExecuteRequiresFull)?;
 
         // Make sure we never store unique statement names
         // in the cache!
@@ -68,7 +71,28 @@ impl QueryParser {
         };
 
         match stmt {
-            Some(Node::SelectStmt(stmt)) => self.select(stmt, &mut context),
+            Some(Node::SelectStmt(stmt)) => {
+                let command = self.select(stmt, &mut context)?;
+                // The cross-shard HAVING check never sees EXECUTE, so each
+                // shard would filter its partial groups before the merge.
+                if !matches!(stmt.having_clause(), Node::None) && command.route().is_cross_shard() {
+                    return Err(RewriteError::UnsupportedHaving(
+                        "aggregates would be filtered on each shard before merging",
+                    )
+                    .into());
+                }
+                // The shard statement keeps its LIMIT, so each shard would page
+                // its own partial groups before the merge.
+                if command.route().is_cross_shard()
+                    && projection::pages_merged_groups(stmt, command.route().aggregate())
+                {
+                    return Err(RewriteError::UnsupportedGroupBy(
+                        "LIMIT and OFFSET with aggregates are unsupported in EXECUTE",
+                    )
+                    .into());
+                }
+                Ok(command)
+            }
             Some(Node::InsertStmt(stmt)) => self.insert(stmt.into(), &mut context),
             Some(Node::UpdateStmt(stmt)) => self.update(stmt.into(), &mut context),
             Some(Node::DeleteStmt(stmt)) => self.delete(stmt.into(), &mut context),

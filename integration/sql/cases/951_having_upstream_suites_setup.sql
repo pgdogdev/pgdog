@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS sql_regression_samples;
+CREATE TABLE sql_regression_samples (id BIGINT PRIMARY KEY, a INTEGER, b INTEGER, c TEXT, d INTEGER, name TEXT, day DATE, gap INTERVAL, ratio FLOAT8, flag BOOLEAN);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (1, 0, 1, 'XXXX', 10, 'apple', '2024-01-10', '1 day', 1.0, true);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (101, 1, 2, 'AAAA', 12, 'Banana', '2024-07-01', '3 days', 2.0, false);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (2, 2, 2, 'AAAA', 20, 'Banana', '2024-02-01', '12 hours', 2.5, true);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (102, 3, 3, 'BBBB', 5, 'cherry', '2024-03-01', '1 day', 0.5, false);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (3, 4, 3, 'BBBB', 30, 'cherry', '2024-05-20', '1 day 1 hour', 4.5, false);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (103, 5, 3, 'bbbb', 8, 'cherry', '2024-04-01', '2 days', 3.0, true);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (4, 6, 4, 'cccc', 1, 'Zebra', '2024-08-15', '5 days', 1.0, false);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (104, 7, 4, 'cccc', 2, 'Zebra', '2024-01-05', '1 hour', 9.0, true);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (5, 8, 4, 'CCCC', 40, 'Zebra', '2024-03-03', '2 hours', 1.5, false);
+INSERT INTO sql_regression_samples (id, a, b, c, d, name, day, gap, ratio, flag) VALUES (105, 9, 4, 'CCCC', 3, 'Zebra', '2024-02-02', '30 minutes', 2.0, true);

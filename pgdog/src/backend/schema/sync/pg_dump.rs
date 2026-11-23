@@ -44,8 +44,11 @@ fn validate_constraint(
     // TODO: multiple times we create schema.table identifier,
     // make it reusable
     let schema = crate::util::escape_identifier(schema_name(relation));
-    let table =
-        crate::util::escape_identifier(relation.relname().ok_or(SchemaSyncError::MissingEntity)?);
+    let table = crate::util::escape_identifier(
+        relation
+            .relname()
+            .ok_or_else(|| SchemaSyncError::MissingEntity)?,
+    );
     let constraint = crate::util::escape_identifier(constraint);
     let only = if relation.inh { "" } else { "ONLY " };
 
@@ -110,6 +113,7 @@ use tokio::process::Command;
 pub(crate) struct PgDump {
     source: Cluster,
     publication: String,
+    publication_tables_only: bool,
 }
 
 fn build_pg_dump_command(
@@ -138,12 +142,60 @@ fn build_pg_dump_command(
     command
 }
 
+/// `pg_dump --table` pattern matching exactly one table.
+fn table_pattern(schema: &str, name: &str) -> String {
+    format!(
+        "\"{}\".\"{}\"",
+        crate::util::escape_identifier(schema),
+        crate::util::escape_identifier(name)
+    )
+}
+
 impl PgDump {
-    pub(crate) fn new(source: &Cluster, publication: &str) -> Self {
+    /// With `publication_tables_only`, dump just the publication's tables
+    /// (and their partition parents) instead of the whole database.
+    pub(crate) fn new(source: &Cluster, publication: &str, publication_tables_only: bool) -> Self {
         Self {
             source: source.clone(),
             publication: publication.to_string(),
+            publication_tables_only,
         }
+    }
+
+    fn table_patterns(tables: &[PublicationTable]) -> Vec<String> {
+        let mut patterns = vec![];
+        for table in tables {
+            for pattern in [
+                table_pattern(table.destination_schema(), table.destination_name()),
+                table_pattern(&table.schema, &table.name),
+            ] {
+                if !patterns.contains(&pattern) {
+                    patterns.push(pattern);
+                }
+            }
+        }
+        patterns
+    }
+
+    /// `pg_dump --table` doesn't dump the schemas the tables are in.
+    fn create_schemas(tables: &[PublicationTable]) -> String {
+        let mut schemas = vec![];
+        for table in tables {
+            for schema in [table.destination_schema(), table.schema.as_str()] {
+                if !schemas.contains(&schema) {
+                    schemas.push(schema);
+                }
+            }
+        }
+        schemas
+            .into_iter()
+            .map(|schema| {
+                format!(
+                    "CREATE SCHEMA IF NOT EXISTS \"{}\";\n",
+                    crate::util::escape_identifier(schema)
+                )
+            })
+            .collect()
     }
 
     fn clean(source: &str) -> String {
@@ -169,10 +221,10 @@ impl PgDump {
             .source
             .shards()
             .first()
-            .ok_or(SchemaSyncError::NoDatabases)?
+            .ok_or_else(|| SchemaSyncError::NoDatabases)?
             .pools()
             .first()
-            .ok_or(SchemaSyncError::NoDatabases)?
+            .ok_or_else(|| SchemaSyncError::NoDatabases)?
             .addr()
             .clone();
 
@@ -218,10 +270,15 @@ impl PgDump {
         let mut command = build_pg_dump_command(
             pg_dump_path,
             &addr,
-            auth_secret.first().ok_or(SchemaSyncError::PgDump(
-                "server has no configured passwords".into(),
-            ))?,
+            auth_secret.first().ok_or_else(|| {
+                SchemaSyncError::PgDump("server has no configured passwords".into())
+            })?,
         );
+        if self.publication_tables_only {
+            for pattern in Self::table_patterns(&comparison) {
+                command.arg("--table").arg(pattern);
+            }
+        }
         let output = command.output().await?;
 
         if !output.status.success() {
@@ -232,7 +289,10 @@ impl PgDump {
         let original = from_utf8(&output.stdout)?.to_string();
         trace!("[pg_dump (original)] {}", original);
 
-        let cleaned = Self::clean(&original);
+        let mut cleaned = Self::clean(&original);
+        if self.publication_tables_only {
+            cleaned.insert_str(0, &Self::create_schemas(&comparison));
+        }
         trace!("[pg_dump (clean)] {}", cleaned);
 
         let stmts = pg_raw_parse::parse(&cleaned)?.into_inner();
@@ -264,6 +324,16 @@ pub(crate) use pgdog_stats::SyncState;
 /// is freed when the [`pg_raw_parse::DeparseResult`] drops.
 fn deparsed<'n, N: Into<Node<'n>>>(node: N) -> Result<Statement, SchemaSyncError> {
     Ok(Statement::new(pg_raw_parse::deparse(node)?.as_str()))
+}
+
+macro_rules! deparsed_with {
+    ($stmt:expr, $setter:ident) => {
+        deparsed(&*make::owned(|mem| {
+            let mut stmt = mem.make_unique($stmt);
+            stmt.as_mut().$setter(true);
+            stmt
+        }))
+    };
 }
 
 /// SQL longer than this is cut short in the log, with an ellipsis. The full
@@ -611,7 +681,7 @@ impl PgDumpOutput {
             let original = self
                 .original
                 .get(stmt.stmt_location as usize..(stmt.stmt_location + stmt.stmt_len) as usize)
-                .ok_or(SchemaSyncError::StmtOutOfBounds)?;
+                .ok_or_else(|| SchemaSyncError::StmtOutOfBounds)?;
 
             match stmt.stmt() {
                 Node::CreateStmt(create_stmt) => {
@@ -663,35 +733,20 @@ impl PgDumpOutput {
                 }
 
                 Node::CreateSeqStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
                 Node::CreateExtensionStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
                 Node::CreateSchemaStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
@@ -743,12 +798,14 @@ impl PgDumpOutput {
                                                     }
                                                 }
                                                 (SyncState::PostDataValidation, true) => {
-                                                    let relation = stmt
-                                                        .relation()
-                                                        .ok_or(SchemaSyncError::MissingEntity)?;
-                                                    let constraint = cons
-                                                        .conname()
-                                                        .ok_or(SchemaSyncError::MissingEntity)?;
+                                                    let relation =
+                                                        stmt.relation().ok_or_else(|| {
+                                                            SchemaSyncError::MissingEntity
+                                                        })?;
+                                                    let constraint =
+                                                        cons.conname().ok_or_else(|| {
+                                                            SchemaSyncError::MissingEntity
+                                                        })?;
                                                     validate_constraint(relation, constraint)?
                                                 }
                                                 _ => continue,
@@ -814,11 +871,28 @@ impl PgDumpOutput {
                                     }
                                 }
 
+                                nodes::AlterTableType::AT_AddInherit => {
+                                    if state == SyncState::PreData {
+                                        result.push(Statement::new(original).set_skip_if_exists());
+                                    }
+                                }
+
+                                nodes::AlterTableType::AT_ClusterOn => {
+                                    if state == SyncState::PostData {
+                                        result.push(Statement::new(original));
+                                    }
+                                }
+
                                 // AlterTableType::AtChangeOwner => {
                                 //     continue; // Don't change owners, for now.
                                 // }
                                 _ => {
-                                    if state == SyncState::PreData {
+                                    let phase = if stmt.objtype == nodes::ObjectType::OBJECT_INDEX {
+                                        SyncState::PostData
+                                    } else {
+                                        SyncState::PreData
+                                    };
+                                    if state == phase {
                                         result.push(Statement::new(original));
                                     }
                                 }
@@ -828,14 +902,12 @@ impl PgDumpOutput {
                 }
 
                 Node::CreateTrigStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_replace(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        if stmt.isconstraint {
+                            result.push(Statement::new(original).set_skip_if_exists());
+                        } else {
+                            result.push(deparsed_with!(stmt, set_replace)?);
+                        }
                     }
                 }
 
@@ -864,12 +936,12 @@ impl PgDumpOutput {
                         let sequence = stmt
                             .sequence()
                             .map(Table::from)
-                            .ok_or(SchemaSyncError::MissingEntity)?;
+                            .ok_or_else(|| SchemaSyncError::MissingEntity)?;
                         let sequence = Sequence::from(sequence);
                         let column = stmt
                             .options()
                             .first()
-                            .ok_or(SchemaSyncError::MissingEntity)?;
+                            .ok_or_else(|| SchemaSyncError::MissingEntity)?;
                         let column =
                             Column::try_from(column).map_err(|_| SchemaSyncError::MissingEntity)?;
 
@@ -909,52 +981,81 @@ impl PgDumpOutput {
                 }
 
                 Node::ViewStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_replace(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_replace)?);
                     }
                 }
 
                 Node::CreateTableAsStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_if_not_exists(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_if_not_exists)?);
                     }
                 }
 
                 Node::CreateFunctionStmt(stmt) => {
-                    let stmt = make::owned(|mem| {
-                        let mut stmt = mem.make_unique(&*stmt);
-                        stmt.as_mut().set_replace(true);
-                        stmt
-                    });
-
                     if state == SyncState::PreData {
-                        result.push(deparsed(&*stmt)?);
+                        result.push(deparsed_with!(stmt, set_replace)?);
                     }
                 }
 
-                Node::AlterOwnerStmt(stmt) => {
-                    if stmt.object_type != nodes::ObjectType::OBJECT_PUBLICATION
-                        && state == SyncState::PreData
-                    {
-                        result.push(Statement::new(original));
+                Node::DefineStmt(stmt) if stmt.kind == nodes::ObjectType::OBJECT_AGGREGATE => {
+                    if state == SyncState::PreData {
+                        result.push(deparsed_with!(stmt, set_replace)?);
                     }
                 }
+
+                Node::AlterOwnerStmt(stmt) => match stmt.object_type {
+                    nodes::ObjectType::OBJECT_PUBLICATION => continue,
+                    nodes::ObjectType::OBJECT_EVENT_TRIGGER => {
+                        if state == SyncState::PostData {
+                            result.push(Statement::new(original).set_ignore_errors());
+                        }
+                    }
+                    _ => {
+                        if state == SyncState::PreData {
+                            result.push(Statement::new(original));
+                        }
+                    }
+                },
 
                 Node::CreateEnumStmt(_)
                 | Node::CreateDomainStmt(_)
-                | Node::CompositeTypeStmt(_) => {
+                | Node::CompositeTypeStmt(_)
+                | Node::CreateRangeStmt(_)
+                | Node::DefineStmt(_)
+                | Node::CreateCastStmt(_)
+                | Node::CreateOpClassStmt(_)
+                | Node::CreateOpFamilyStmt(_)
+                | Node::CreateConversionStmt(_)
+                | Node::CreateAmStmt(_)
+                | Node::CreatePolicyStmt(_)
+                | Node::RuleStmt(_)
+                | Node::CreateStatsStmt(_)
+                | Node::CreateFdwStmt(_)
+                | Node::CreateForeignServerStmt(_)
+                | Node::CreateUserMappingStmt(_) => {
+                    if state == SyncState::PreData {
+                        result.push(Statement::new(original).set_skip_if_exists());
+                    }
+                }
+
+                Node::CreateEventTrigStmt(_) => {
+                    if state == SyncState::PostData {
+                        result.push(
+                            Statement::new(original)
+                                .set_skip_if_exists()
+                                .set_ignore_errors(),
+                        );
+                    }
+                }
+
+                Node::AlterEventTrigStmt(_) => {
+                    if state == SyncState::PostData {
+                        result.push(Statement::new(original).set_ignore_errors());
+                    }
+                }
+
+                Node::Invalid(node) if node.type_ == nodes::NodeTag::T_CreateForeignTableStmt => {
                     if state == SyncState::PreData {
                         result.push(Statement::new(original).set_skip_if_exists());
                     }
@@ -965,6 +1066,19 @@ impl PgDumpOutput {
                         result.push(Statement::new(original));
                     }
                 }
+                Node::CommentStmt(stmt)
+                    if matches!(
+                        stmt.objtype,
+                        nodes::ObjectType::OBJECT_INDEX
+                            | nodes::ObjectType::OBJECT_TABCONSTRAINT
+                            | nodes::ObjectType::OBJECT_EVENT_TRIGGER
+                    ) =>
+                {
+                    if state == SyncState::PostData {
+                        result.push(Statement::new(original).set_ignore_errors());
+                    }
+                }
+
                 Node::SelectStmt(_) => continue,
                 _ => {
                     if state == SyncState::PreData {
@@ -989,7 +1103,53 @@ mod test {
     #[tokio::test]
     async fn test_pg_dump_execute() {
         let cluster = Cluster::new_test_single_shard(&config());
-        let _pg_dump = PgDump::new(&cluster, "test_pg_dump_execute");
+        let _pg_dump = PgDump::new(&cluster, "test_pg_dump_execute", false);
+    }
+
+    #[test]
+    fn test_table_patterns_and_schemas_include_partition_parents() {
+        let tables = [
+            PublicationTable {
+                schema: "sales".into(),
+                name: "orders".into(),
+                ..Default::default()
+            },
+            PublicationTable {
+                schema: "sales".into(),
+                name: "events_2026".into(),
+                parent_schema: "sales".into(),
+                parent_name: "events".into(),
+                ..Default::default()
+            },
+            PublicationTable {
+                schema: "sales".into(),
+                name: "events_2027".into(),
+                parent_schema: "sales".into(),
+                parent_name: "events".into(),
+                ..Default::default()
+            },
+            PublicationTable {
+                schema: "My \"Schema\"".into(),
+                name: "T".into(),
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            PgDump::table_patterns(&tables),
+            [
+                r#""sales"."orders""#,
+                r#""sales"."events""#,
+                r#""sales"."events_2026""#,
+                r#""sales"."events_2027""#,
+                r#""My ""Schema"""."T""#,
+            ]
+        );
+        assert_eq!(
+            PgDump::create_schemas(&tables),
+            "CREATE SCHEMA IF NOT EXISTS \"sales\";\n\
+             CREATE SCHEMA IF NOT EXISTS \"My \"\"Schema\"\"\";\n"
+        );
     }
 
     #[test]
@@ -1141,6 +1301,140 @@ FROM public.s;"#,
         assert_eq!(
             statements[0].sql,
             "CREATE OR REPLACE VIEW public.v AS SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE (summary -> 'stop'::text ->> 'tz'::text))::date AS d FROM public.s"
+        );
+    }
+
+    #[test]
+    fn test_event_triggers_run_after_post_data_ddl() {
+        let output = parse(
+            r#"
+CREATE FUNCTION public.evt() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$;
+CREATE TABLE public.t (id bigint NOT NULL);
+CREATE INDEX t_id_idx ON public.t USING btree (id);
+CREATE EVENT TRIGGER et ON ddl_command_end
+   EXECUTE FUNCTION public.evt();
+ALTER EVENT TRIGGER et DISABLE;
+ALTER EVENT TRIGGER et OWNER TO pgdog;
+COMMENT ON EVENT TRIGGER et IS 'probe';"#,
+        );
+
+        let pre_data = output.statements(SyncState::PreData).unwrap();
+        assert_eq!(pre_data.len(), 2);
+        assert!(
+            pre_data[0]
+                .sql
+                .starts_with("CREATE OR REPLACE FUNCTION public.evt()")
+        );
+        assert!(
+            pre_data[1]
+                .sql
+                .starts_with("CREATE TABLE IF NOT EXISTS public.t")
+        );
+
+        let post_data = output.statements(SyncState::PostData).unwrap();
+        let sql: Vec<_> = post_data.iter().map(|s| s.sql.as_str()).collect();
+        assert_eq!(
+            sql,
+            [
+                "DROP INDEX IF EXISTS \"public\".\"t_id_idx\"",
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS t_id_idx ON public.t USING btree (id)",
+                "CREATE EVENT TRIGGER et ON ddl_command_end\n   EXECUTE FUNCTION public.evt()",
+                "ALTER EVENT TRIGGER et DISABLE",
+                "ALTER EVENT TRIGGER et OWNER TO pgdog",
+                "COMMENT ON EVENT TRIGGER et IS 'probe'",
+            ]
+        );
+        assert!(post_data[2].skip_if_exists);
+
+        for state in [SyncState::Cutover, SyncState::PostDataValidation] {
+            assert!(output.statements(state).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_index_dependent_statements_run_after_indexes() {
+        let output = parse(
+            r#"
+CREATE TABLE zz.orders (id bigint NOT NULL, n integer);
+COMMENT ON TABLE zz.orders IS 'orders';
+CREATE INDEX orders_expr_idx ON zz.orders USING btree (((n + 1)));
+ALTER INDEX zz.orders_expr_idx ALTER COLUMN 1 SET STATISTICS 500;
+CREATE INDEX orders_n_idx ON zz.orders USING btree (n);
+ALTER TABLE zz.orders CLUSTER ON orders_n_idx;
+COMMENT ON INDEX zz.orders_n_idx IS 'by n';
+COMMENT ON CONSTRAINT orders_fk ON zz.orders IS 'fk';"#,
+        );
+
+        let pre_data: Vec<_> = output
+            .statements(SyncState::PreData)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.sql)
+            .collect();
+        let post_data: Vec<_> = output
+            .statements(SyncState::PostData)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.sql)
+            .collect();
+
+        assert_eq!(
+            pre_data,
+            [
+                "CREATE TABLE IF NOT EXISTS zz.orders (id bigint NOT NULL, n int)",
+                "COMMENT ON TABLE zz.orders IS 'orders'",
+            ]
+        );
+        assert_eq!(
+            post_data,
+            [
+                "DROP INDEX IF EXISTS \"zz\".\"orders_expr_idx\"",
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_expr_idx ON zz.orders USING btree ((n + 1))",
+                "ALTER INDEX zz.orders_expr_idx ALTER COLUMN 1 SET STATISTICS 500",
+                "DROP INDEX IF EXISTS \"zz\".\"orders_n_idx\"",
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_n_idx ON zz.orders USING btree (n)",
+                "ALTER TABLE zz.orders CLUSTER ON orders_n_idx",
+                "COMMENT ON INDEX zz.orders_n_idx IS 'by n'",
+                "COMMENT ON CONSTRAINT orders_fk ON zz.orders IS 'fk'",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_constraint_trigger_is_not_replace() {
+        let output = parse(
+            r#"
+CREATE TRIGGER t_before BEFORE INSERT ON public.t FOR EACH ROW EXECUTE FUNCTION public.f();
+CREATE CONSTRAINT TRIGGER t_after AFTER INSERT ON public.t DEFERRABLE FOR EACH ROW EXECUTE FUNCTION public.f();"#,
+        );
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 2);
+        assert!(
+            statements[0]
+                .sql
+                .starts_with("CREATE OR REPLACE TRIGGER t_before")
+        );
+        assert!(
+            statements[1]
+                .sql
+                .starts_with("CREATE CONSTRAINT TRIGGER t_after")
+        );
+        assert!(statements[1].skip_if_exists);
+    }
+
+    #[test]
+    fn test_create_aggregate_is_replace() {
+        let output =
+            parse("CREATE AGGREGATE public.pgdog_sum(integer) (SFUNC = int4_sum, STYPE = bigint);");
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(
+            statements[0].sql,
+            "CREATE OR REPLACE AGGREGATE public.pgdog_sum (int) (sfunc = int4_sum, stype = bigint)"
         );
     }
 

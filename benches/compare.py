@@ -113,10 +113,10 @@ def main() -> None:
         if delta is None or abs(delta) < 1.0:
             pct_colored = pct_str
         elif delta < 0:
-            # lower is better for time; higher is worse for memory
-            pct_colored = color(pct_str, RED if label == "max_mem" else GREEN)
+            # lower is better for both time and memory
+            pct_colored = color(pct_str, GREEN)
         else:
-            pct_colored = color(pct_str, GREEN if label == "max_mem" else RED)
+            pct_colored = color(pct_str, RED)
 
         fmt = fmt_bytes if label == "max_mem" else fmt_time
         print(

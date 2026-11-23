@@ -5,7 +5,7 @@ role = "replica"
 
 [[databases]]
 name = "pgdog"
-host = "localhost"
+host = "127.0.0.1"
 role = "replica"
 
 [[databases]]
@@ -15,7 +15,7 @@ role = "replica"
 
 [[databases]]
 name = "pgdog"
-host = "localhost"
+host = "127.0.0.1"
 role = "replica"
 
 [[databases]]

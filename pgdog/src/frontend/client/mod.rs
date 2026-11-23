@@ -4,24 +4,24 @@
 //!
 
 use std::net::SocketAddr;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
+use tokio::time::Instant;
 use tokio::{select, spawn};
-use tokio_util::sync::CancellationToken;
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
 use crate::auth::{AUTH_TOKEN_CACHE, AuthResult, md5, scram::Server};
-use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
+use crate::backend::{maintenance_mode, passthrough_auth};
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
@@ -29,7 +29,8 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
-use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
+use crate::net::{MessageBuffer, ParameterStatus, ProtocolMessage, Stream};
+use crate::parameters::{ParameterStore, Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
@@ -41,7 +42,7 @@ pub(crate) mod transaction_type;
 
 use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
-pub(crate) use transaction_type::{QueryTimestamps, Transaction, TransactionType};
+pub(crate) use transaction_type::{QueryTimestamps, StatementStart, Transaction, TransactionType};
 
 /// PostgreSQL client.
 ///
@@ -58,9 +59,7 @@ pub(crate) struct Client {
     key: BackendKeyData,
     // Client startup parameters. Keeps track of any parameters
     // the client changes at runtime with `SET` as well.
-    params: Parameters,
-    // Parameters exactly as they came in the startup message.
-    startup_params: Parameters,
+    params: ParameterStore,
     // Process-global communication primitives used for clients
     // to talk to each other, e.g. to track their own state.
     comms: ClientComms,
@@ -97,7 +96,8 @@ pub(crate) struct Client {
     /// Maximum query message size before a warning is logged.
     query_size_limit: Option<usize>,
     /// When we received the first message of the current request.
-    statement_start: DateTime<Utc>,
+    request_start: Instant,
+    statement_start: StatementStart,
 }
 
 /// Inputs to the per-user client certificate check.
@@ -271,7 +271,7 @@ impl Client {
     /// Create new frontend client from the given TCP stream.
     async fn login(
         mut stream: Stream,
-        params: Parameters,
+        mut params: Parameters,
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
         protocol_version: ProtocolVersion,
@@ -283,9 +283,12 @@ impl Client {
         }
 
         let (user, database) = user_database_from_params(&params);
+        let database = database.to_string();
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
-        let auth_type = &config.config.general.auth_type;
+        let auth_type = databases::databases()
+            .auth_type((user, database.as_str()))
+            .unwrap_or(config.config.general.auth_type);
         let passthrough = config.config.general.passthrough_auth();
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(protocol_version, id)?;
@@ -304,7 +307,14 @@ impl Client {
             // The admin database is virtual and never present in the cluster
             // map, so authenticate directly against the configured admin password.
             let passwords = [PasswordKind::Plain(admin_password.clone())];
-            Self::check_password(&mut stream, user, database, auth_type, &passwords).await?
+            Self::check_password(
+                &mut stream,
+                user,
+                &database,
+                &config.config.general.auth_type, // Admin auth uses general auth_type on purpose, which defaults to scram.
+                &passwords,
+            )
+            .await?
         } else if passthrough {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
@@ -313,18 +323,14 @@ impl Client {
                 .await?;
             let password = stream.read().await?;
             let password = Password::from_bytes(password.to_bytes())?;
-            // Passthrough authentication assumes the client password is good
-            // and lets Postgres perform the authentication instead. If Postgres
-            // returns an error, the connection pool will be banned and the client
-            // won't be able to run queries.
             let user = user_from_params(&params, &password).ok();
             if let Some(user) = user {
-                databases::add(user)?
+                passthrough_auth::check_or_add(user).await?
             } else {
                 AuthResult::NoPassthroughNoUser
             }
         } else {
-            match databases::databases().cluster((user, database)) {
+            match databases::databases().cluster((user, database.as_str())) {
                 Ok(cluster) => {
                     if let Some(identity) = cluster.identity() {
                         // mTLS authentication: the client certificate identity
@@ -350,7 +356,7 @@ impl Client {
                         // entries to plaintext before the auth exchange
                         let passwords =
                             crate::auth::vault::resolve_passwords(cluster.passwords()).await;
-                        Self::check_password(&mut stream, user, database, auth_type, &passwords)
+                        Self::check_password(&mut stream, user, &database, &auth_type, &passwords)
                             .await?
                     }
                 }
@@ -366,7 +372,7 @@ impl Client {
                     user, database, auth_result
                 );
             }
-            stream.fatal(ErrorResponse::auth(user, database)).await?;
+            stream.fatal(ErrorResponse::auth(user, &database)).await?;
             return Ok(None);
         } else {
             stream.send(&Authentication::Ok).await?;
@@ -383,11 +389,11 @@ impl Client {
             return Ok(None);
         }
 
-        let mut conn = match Connection::new(user, database, admin) {
+        let mut conn = match Connection::new(user, &database, admin) {
             Ok(conn) => conn,
             Err(err) => {
                 debug!("connection error: {}", err);
-                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                stream.fatal(ErrorResponse::auth(user, &database)).await?;
                 return Ok(None);
             }
         };
@@ -403,7 +409,7 @@ impl Client {
                         addr
                     );
                     stream
-                        .fatal(ErrorResponse::connection(user, database))
+                        .fatal(ErrorResponse::connection(user, &database))
                         .await?;
                     return Ok(None);
                 } else {
@@ -411,14 +417,6 @@ impl Client {
                 }
             }
         };
-
-        for param in server_params {
-            stream.send(&param).await?;
-        }
-
-        stream.send(&key).await?;
-        stream.send_flush(&ReadyForQuery::idle()).await?;
-        comms.connect(key.clone(), addr, &params);
 
         if config.config.general.log_connections {
             info!(
@@ -440,6 +438,23 @@ impl Client {
             user, params, addr
         );
 
+        params.set_server_defaults(&server_params);
+
+        for (name, value) in server_params.iter() {
+            stream
+                .send(&Message::new(ParameterStatus::encode_payload(
+                    name.as_str(),
+                    params.tracked_value(name.as_str()).unwrap_or(value),
+                )))
+                .await?;
+        }
+
+        stream.send(&key).await?;
+        stream.send_flush(&ReadyForQuery::idle()).await?;
+        comms.connect(key.clone(), addr, &params);
+
+        let sticky = Sticky::from_params(&params);
+
         Ok(Some(Self {
             addr,
             stream,
@@ -447,8 +462,7 @@ impl Client {
             comms,
             admin,
             streaming: false,
-            startup_params: params.clone(),
-            params: params.clone(),
+            params: ParameterStore::new(params).with_server_reported(server_params),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
@@ -457,11 +471,12 @@ impl Client {
                 config.config.memory.message_buffer,
                 config.config.general.frontend_query_size_limit_block(),
             ),
-            sticky: Sticky::from_params(&params),
-            database: database.to_string(),
+            sticky,
+            database,
             query_log_stdout: false,
             query_size_limit: None,
-            statement_start: Utc::now(),
+            request_start: Instant::now(),
+            statement_start: StatementStart::default(),
         }))
     }
 
@@ -497,12 +512,12 @@ impl Client {
                 config().config.general.frontend_query_size_limit_block(),
             ),
             sticky: Sticky::from_params(&params),
-            startup_params: params.clone(),
-            params,
+            params: ParameterStore::new(params),
             database: "pgdog".to_string(),
             query_log_stdout: false,
             query_size_limit: None,
-            statement_start: Utc::now(),
+            request_start: Instant::now(),
+            statement_start: StatementStart::default(),
         }
     }
 
@@ -539,14 +554,16 @@ impl Client {
         let shutdown = self.comms.shutting_down();
         let mut query_engine = QueryEngine::from_client(self)?;
 
-        loop {
-            // Check if we should be shutting down.
-            let offline = self.comms.offline();
-            // Check that there are no active transactions.
-            let query_engine_done = query_engine.can_disconnect();
+        let mut offline = shutdown.is_cancelled();
+        let mut shutdown_signal = pin!(shutdown.cancelled());
 
+        let mut cluster_reloads = query_engine.cluster_reloads();
+        let mut admin_termination = pin!(query_engine.cancellation_token().cancelled_owned());
+
+        loop {
             // If query engine is idle and we requested shutdown, we're done.
-            if query_engine_done && offline {
+            // Admin clients stay connected, so admin commands work during shutdown.
+            if offline && !self.admin && query_engine.can_disconnect() {
                 // Send shutdown notification to client.
                 self.stream
                     .send_flush(&ErrorResponse::shutting_down())
@@ -554,13 +571,23 @@ impl Client {
                 break;
             }
 
+            if query_engine.cluster_reloads() != cluster_reloads {
+                cluster_reloads = query_engine.cluster_reloads();
+                admin_termination.set(query_engine.cancellation_token().cancelled_owned());
+            }
+
             let client_state = query_engine.client_state();
 
-            let cancellation_token = query_engine.cancellation_token();
-
             select! {
-                _ = shutdown.cancelled(), if !offline => {
-                    continue; // Wake up task.
+                _ = &mut shutdown_signal, if !offline => {
+                    offline = true;
+                }
+
+                // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
+                // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
+                // which will disconnect the `Client` (and `QueryEngine` transactions)
+                _ = &mut admin_termination => {
+                    return Err(Error::AdminTermination);
                 }
 
                 // Async messages.
@@ -569,7 +596,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state, &cancellation_token) => {
+                buffer = self.buffer(client_state) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -636,8 +663,12 @@ impl Client {
             QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
                 if extended {
-                    self.transaction
-                        .get_or_insert(Transaction::new(TransactionType::Implicit));
+                    self.transaction.get_or_insert_with(|| {
+                        Transaction::started_at(
+                            TransactionType::Implicit,
+                            self.statement_start.time(),
+                        )
+                    });
                 }
 
                 while let Some(mut request) = requests.next() {
@@ -654,6 +685,10 @@ impl Client {
                         }
                         _ => panic!("query engine cannot split requests twice"),
                     }
+
+                    if requests.len() > 0 {
+                        self.request_start = Instant::now();
+                    }
                 }
             }
         }
@@ -668,11 +703,7 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(
-        &mut self,
-        state: State,
-        cancellation_token: &CancellationToken,
-    ) -> Result<BufferEvent, Error> {
+    async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
         // Check config once per request.
@@ -691,17 +722,8 @@ impl Client {
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 
-            let message = select! {
-                message = safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)) => {
-                    message
-                }
-                // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
-                // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
-                // which will disconnect the `Client` (and `QueryEngine` transactions)
-                _ = cancellation_token.cancelled() => {
-                    return Err(Error::AdminTermination)
-                }
-            };
+            let message =
+                safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await;
 
             let message = match message {
                 Err(_) => {
@@ -723,7 +745,8 @@ impl Client {
 
             if !has_set_time {
                 has_set_time = true;
-                self.statement_start = Utc::now();
+                self.request_start = Instant::now();
+                self.statement_start.reset();
             }
 
             // Terminate (B & F).
@@ -735,23 +758,25 @@ impl Client {
             }
         }
 
-        let elapsed_time = Utc::now() - self.statement_start;
-        if !enabled!(LogLevel::TRACE) {
-            debug!(
-                "request buffered [{:.4}ms] {:?}",
-                elapsed_time.as_seconds_f64() * 1000.0,
-                self.client_request
-                    .messages
-                    .iter()
-                    .map(|m| m.code())
-                    .collect::<Vec<_>>(),
-            );
-        } else {
-            trace!(
-                "request buffered [{:.4}ms]\n{:#?}",
-                elapsed_time.as_seconds_f64() * 1000.0,
-                self.client_request,
-            );
+        if enabled!(LogLevel::DEBUG) {
+            let elapsed_time = self.request_start.elapsed();
+            if !enabled!(LogLevel::TRACE) {
+                debug!(
+                    "request buffered [{:.4}ms] {:?}",
+                    elapsed_time.as_secs_f64() * 1000.0,
+                    self.client_request
+                        .messages
+                        .iter()
+                        .map(|m| m.code())
+                        .collect::<Vec<_>>(),
+                );
+            } else {
+                trace!(
+                    "request buffered [{:.4}ms]\n{:#?}",
+                    elapsed_time.as_secs_f64() * 1000.0,
+                    self.client_request,
+                );
+            }
         }
 
         Ok(BufferEvent::HaveRequest)
@@ -793,7 +818,6 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Stream>()
             + std::mem::size_of::<BackendKeyData>()
             + self.params.memory_usage()
-            + self.startup_params.memory_usage()
             + std::mem::size_of::<ClientComms>()
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()

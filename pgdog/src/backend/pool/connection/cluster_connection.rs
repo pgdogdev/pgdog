@@ -1,7 +1,7 @@
 use super::Error;
 use crate::{
     backend::{
-        Cluster, databases,
+        Cluster, databases, passthrough_auth,
         pool::{
             Error as PoolError, Guard, Request,
             connection::mirror::{Mirror, MirrorHandler},
@@ -11,7 +11,10 @@ use crate::{
     config::config,
     frontend::router::parser::Shard,
 };
-use pgdog_config::{PoolerMode, User, users::PasswordKind};
+use pgdog_config::{
+    PoolerMode,
+    users::{PassthroughUser, PasswordKind},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -27,6 +30,7 @@ pub(crate) struct ClusterConnection {
     cluster: Option<Cluster>,
     // Cancelled when an admin terminates the cluster (`FORCE_RELOAD`).
     query_cancellation: CancellationToken,
+    reloads: usize,
     // Traffic mirrors.
     mirrors: Vec<MirrorHandler>,
 }
@@ -43,7 +47,9 @@ impl ClusterConnection {
 
     /// Get cluster reference.
     pub(super) fn cluster(&self) -> Result<&Cluster, Error> {
-        self.cluster.as_ref().ok_or(Error::ClusterNotConnected)
+        self.cluster
+            .as_ref()
+            .ok_or_else(|| Error::ClusterNotConnected)
     }
 
     /// Get mirror references.
@@ -54,6 +60,10 @@ impl ClusterConnection {
     /// Get cluster query cancellation token.
     pub(super) fn query_cancellation_token(&self) -> CancellationToken {
         self.query_cancellation.clone()
+    }
+
+    pub(super) fn reloads(&self) -> usize {
+        self.reloads
     }
 
     /// Perform an atomic and safe reload of the cluster config. This is needed
@@ -73,6 +83,7 @@ impl ClusterConnection {
         let cluster = databases::databases().cluster(self.identity())?;
         self.cluster = Some(cluster);
         self.query_cancellation = self.cluster()?.get_cancellation_token().child_token();
+        self.reloads += 1;
 
         self.init_mirrors()?;
 
@@ -138,18 +149,19 @@ impl ClusterConnection {
         shard: usize,
         is_read: bool,
     ) -> Result<Guard, Error> {
-        match self.get_conn_internal(request, shard, is_read).await {
-            Ok(conn) => Ok(conn),
-            Err(Error::Pool(PoolError::Offline | PoolError::AllReplicasDown)) => {
-                debug!(
-                    "detected configuration reload, reloading [{}]",
-                    self.cluster()?.identifier()
-                );
+        loop {
+            match self.get_conn_internal(request, shard, is_read).await {
+                Ok(conn) => return Ok(conn),
+                Err(Error::Pool(PoolError::Offline)) => {
+                    debug!(
+                        "detected configuration reload, reloading [{}]",
+                        self.cluster()?.identifier()
+                    );
 
-                self.safe_reload().await?;
-                self.get_conn_internal(request, shard, is_read).await
+                    self.safe_reload().await?;
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => Err(err),
         }
     }
 
@@ -193,31 +205,24 @@ impl ClusterConnection {
         let config = config();
         let databases = databases::databases();
 
-        let user = self.identity();
+        let identity = self.identity();
 
-        if config.config.general.passthrough_auth() && databases.passwords(user).is_none() {
-            let mut user = User {
-                name: user.0.to_string(),
-                database: user.1.to_string(),
-                ..Default::default()
+        if config.config.general.passthrough_auth()
+            && !databases.passthrough_cluster_ready(identity)
+        {
+            let user = PassthroughUser {
+                name: identity.0,
+                database: identity.1,
+                password: self
+                    .cluster()?
+                    .passwords()
+                    .iter()
+                    .find(|p| matches!(p, PasswordKind::Plain(_)))
+                    .expect("passthrough clusters use plain passwords")
+                    .as_str(),
             };
 
-            for pass in self.cluster()?.passwords() {
-                match pass {
-                    PasswordKind::Hashed(hashed) => {
-                        user.password_hash = Some(hashed.clone());
-                    }
-
-                    PasswordKind::Plain(plain) => {
-                        user.passwords.push(plain.clone());
-                    }
-
-                    // Vault static roles are for client auth only; skip for passthrough.
-                    PasswordKind::VaultStaticRole(_) => {}
-                }
-            }
-
-            databases::add(user)?;
+            passthrough_auth::restore_after_reload(&user)?;
         }
 
         Ok(())

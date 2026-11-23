@@ -1,6 +1,5 @@
 use bytes::BytesMut;
 
-use crate::backend::replication::publisher::Lsn;
 use crate::net::CopyData;
 use crate::net::replication::KeepAlive;
 use crate::net::replication::ReplicationMeta;
@@ -11,9 +10,9 @@ use super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusUpdate {
-    pub(crate) last_written: i64,
-    pub(crate) last_flushed: i64,
-    pub(crate) last_applied: i64,
+    pub(crate) last_written: u64,
+    pub(crate) last_flushed: u64,
+    pub(crate) last_applied: u64,
     pub(crate) system_clock: i64,
     pub(crate) reply: u8,
 }
@@ -23,18 +22,6 @@ impl StatusUpdate {
         Ok(CopyData::new(
             &ReplicationMeta::StatusUpdate(self).to_bytes(),
         ))
-    }
-
-    /// Generate a request from peer to update me now
-    /// with latest lsn.
-    pub(crate) fn new_reply(lsn: Lsn) -> Self {
-        Self {
-            last_applied: lsn.lsn,
-            last_flushed: lsn.lsn,
-            last_written: lsn.lsn,
-            system_clock: postgres_now(),
-            reply: 1,
-        }
     }
 }
 
@@ -55,9 +42,9 @@ impl FromBytes for StatusUpdate {
         code!(bytes, 'r');
 
         Ok(Self {
-            last_written: bytes.get_i64(),
-            last_flushed: bytes.get_i64(),
-            last_applied: bytes.get_i64(),
+            last_written: bytes.get_u64(),
+            last_flushed: bytes.get_u64(),
+            last_applied: bytes.get_u64(),
             system_clock: bytes.get_i64(),
             reply: bytes.get_u8(),
         })
@@ -69,9 +56,9 @@ impl ToBytes for StatusUpdate {
         let mut payload = BytesMut::new();
         payload.put_u8(b'r');
 
-        payload.put_i64(self.last_written);
-        payload.put_i64(self.last_flushed);
-        payload.put_i64(self.last_applied);
+        payload.put_u64(self.last_written);
+        payload.put_u64(self.last_flushed);
+        payload.put_u64(self.last_applied);
         payload.put_i64(self.system_clock);
         payload.put_u8(self.reply);
 
@@ -124,15 +111,5 @@ mod test {
         assert_eq!(update.last_flushed, 123);
         assert_eq!(update.last_applied, 123);
         assert_eq!(update.reply, 0);
-    }
-
-    #[test]
-    fn status_update_new_reply_sets_reply_flag() {
-        let lsn = Lsn::from_i64(999);
-        let update = StatusUpdate::new_reply(lsn);
-        assert_eq!(update.last_written, 999);
-        assert_eq!(update.last_flushed, 999);
-        assert_eq!(update.last_applied, 999);
-        assert_eq!(update.reply, 1);
     }
 }

@@ -4,12 +4,14 @@ mod strip;
 #[cfg(test)]
 mod tests;
 
+use std::ops::Range;
+
 use crate::backend::ShardingSchema;
 
 use super::Error;
 use crate::frontend::RoutingComment;
 use crate::frontend::router::parser::comment::directive::Directive;
-use strip::{leading_block_comment, trailing_block_comment};
+pub(crate) use strip::{leading_block_comment, trailing_block_comment};
 
 #[derive(Default, Debug, Clone)]
 pub(crate) struct QueryAndComment<'a> {
@@ -17,6 +19,40 @@ pub(crate) struct QueryAndComment<'a> {
     #[cfg(test)]
     pub(crate) raw_comment: String,
     pub(in crate::frontend) comment: RoutingComment,
+    /// Where the edge comments sit in the original query.
+    pub(crate) spans: CommentSpans,
+}
+
+/// Byte ranges of the leading and trailing block comments in a query, so
+/// their text can be read later without scanning the query again.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommentSpans {
+    leading: Option<Range<usize>>,
+    trailing: Option<Range<usize>>,
+}
+
+#[allow(dead_code)] // used by ee
+impl CommentSpans {
+    /// Leading comments, read from `query`: the string the spans were taken from.
+    pub(crate) fn leading_comment<'a>(&self, query: &'a str) -> Option<&'a str> {
+        query.get(self.leading.clone()?)
+    }
+
+    /// Trailing comments, read from `query`: the string the spans were taken from.
+    pub(crate) fn trailing_comment<'a>(&self, query: &'a str) -> Option<&'a str> {
+        query.get(self.trailing.clone()?)
+    }
+}
+
+/// Byte range of `part` inside `query`. `part` must be a sub-slice of `query`,
+/// as returned by the strip helpers.
+fn span_of(query: &str, part: &str) -> Range<usize> {
+    let start = part.as_ptr() as usize - query.as_ptr() as usize;
+    debug_assert!(
+        start + part.len() <= query.len(),
+        "part is not inside query"
+    );
+    start..start + part.len()
 }
 
 /// Extract SQL C-style block comments from both the beginning and the end
@@ -47,6 +83,11 @@ pub(crate) fn parse_edge_comment<'a>(
         });
     }
 
+    let spans = CommentSpans {
+        leading: leading.map(|comment| span_of(query, comment)),
+        trailing: trailing.map(|comment| span_of(query, comment)),
+    };
+
     // Leading wins per-field: extract from leading first, then fill in any
     // fields the leading didn't provide from trailing.
     let mut directive = match leading {
@@ -55,6 +96,7 @@ pub(crate) fn parse_edge_comment<'a>(
             shard_or_lookup: None,
             role: None,
             sharding_key: None,
+            lsn: None,
         },
     };
     if let Some(c) = trailing {
@@ -67,6 +109,9 @@ pub(crate) fn parse_edge_comment<'a>(
         }
         if directive.sharding_key.is_none() {
             directive.sharding_key = t_directive.sharding_key;
+        }
+        if directive.lsn.is_none() {
+            directive.lsn = t_directive.lsn;
         }
     }
 
@@ -83,6 +128,8 @@ pub(crate) fn parse_edge_comment<'a>(
             sharding_key: directive.sharding_key,
             shard: directive.shard_or_lookup,
             role: directive.role,
+            lsn: directive.lsn,
         },
+        spans,
     })
 }

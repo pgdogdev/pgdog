@@ -214,7 +214,7 @@ fn update_offset_plan_fields<'a>(
         let pg_raw_parse::Node::A_Const(constant) = stmt
             .params()
             .get(offset_plan.offset_param - 1)
-            .ok_or(Error::IncorrectExecuteParameters)?
+            .ok_or_else(|| Error::IncorrectExecuteParameters)?
         else {
             return Err(Error::IncorrectExecuteParameters);
         };
@@ -222,9 +222,9 @@ fn update_offset_plan_fields<'a>(
         offset_plan.limit.offset = Some(
             constant
                 .val()
-                .ok_or(Error::IncorrectExecuteParameters)?
+                .ok_or_else(|| Error::IncorrectExecuteParameters)?
                 .numeric_value::<i32>()
-                .ok_or(Error::IncorrectExecuteParameters)? as usize,
+                .ok_or_else(|| Error::IncorrectExecuteParameters)? as usize,
         );
     }
 
@@ -232,7 +232,7 @@ fn update_offset_plan_fields<'a>(
         let pg_raw_parse::Node::A_Const(constant) = stmt
             .params()
             .get(offset_plan.limit_param - 1)
-            .ok_or(Error::IncorrectExecuteParameters)?
+            .ok_or_else(|| Error::IncorrectExecuteParameters)?
         else {
             return Err(Error::IncorrectExecuteParameters);
         };
@@ -240,9 +240,9 @@ fn update_offset_plan_fields<'a>(
         offset_plan.limit.limit = Some(
             constant
                 .val()
-                .ok_or(Error::IncorrectExecuteParameters)?
+                .ok_or_else(|| Error::IncorrectExecuteParameters)?
                 .numeric_value::<i32>()
-                .ok_or(Error::IncorrectExecuteParameters)? as usize,
+                .ok_or_else(|| Error::IncorrectExecuteParameters)? as usize,
         );
     }
 

@@ -74,10 +74,8 @@ impl Monitor {
 
         for (i, target) in targets.iter().enumerate() {
             let healthy = target.health().healthy();
-            let replica_lag_bad = target
-                .pool
-                .replica_lag()
-                .greater_or_eq(replica_ban_threshold);
+            let replica_lag = target.pool.replica_lag();
+            let replica_lag_bad = replica_lag.greater_or_eq(replica_ban_threshold);
 
             // Clear expired bans.
             if healthy && !replica_lag_bad {
@@ -89,7 +87,7 @@ impl Monitor {
 
             if should_ban && bannable {
                 let reason = if replica_lag_bad {
-                    Error::ReplicaLag
+                    Error::ReplicaLag(replica_lag)
                 } else {
                     Error::PoolUnhealthy
                 };

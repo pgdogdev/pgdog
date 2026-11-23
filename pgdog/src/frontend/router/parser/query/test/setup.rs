@@ -13,7 +13,8 @@ use crate::{
             parser::{AstContext, Cache, Error},
         },
     },
-    net::{Parameters, ProtocolMessage, parameter::ParameterValue},
+    net::{ProtocolMessage, parameter::ParameterValue},
+    parameters::ParameterStore,
 };
 
 pub(super) use crate::net::*;
@@ -21,7 +22,7 @@ pub(super) use crate::net::*;
 /// Test harness for QueryParser that uses builder pattern for configuration.
 pub(crate) struct QueryParserTest {
     cluster: Cluster,
-    params: Parameters,
+    params: ParameterStore,
     transaction: Option<Transaction>,
     sticky: Sticky,
     prepared: PreparedStatements,
@@ -42,7 +43,7 @@ impl QueryParserTest {
 
         Self {
             cluster,
-            params: Parameters::default(),
+            params: ParameterStore::default(),
             transaction: None,
             sticky: Sticky::default(),
             parser: QueryParser::default(),
@@ -58,7 +59,7 @@ impl QueryParserTest {
 
         Self {
             cluster,
-            params: Parameters::default(),
+            params: ParameterStore::default(),
             transaction: None,
             sticky: Sticky::default(),
             parser: QueryParser::default(),
@@ -181,7 +182,7 @@ impl QueryParserTest {
         name: impl AsRef<str>,
         value: impl Into<ParameterValue>,
     ) -> Self {
-        self.params.insert(name, value);
+        self.params.set(name, value);
         self
     }
 

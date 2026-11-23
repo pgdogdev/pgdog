@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     container:
-      image: ghcr.io/pgdogdev/pgdog-ci:v2
+      image: ghcr.io/pgdogdev/pgdog-ci:v5
     steps:
       - uses: actions/checkout@v6
       # Compute the binary key before restoring rust-cache: rust-cache restores
@@ -49,7 +49,7 @@ jobs:
     needs: [build]
     timeout-minutes: 10
     container:
-      image: ghcr.io/pgdogdev/pgdog-ci:v2
+      image: ghcr.io/pgdogdev/pgdog-ci:v5
       options: ${{ matrix.needs_docker && '--privileged' || '' }}
     continue-on-error: ${{ matrix.continue_on_error == true }}
     strategy:
@@ -93,7 +93,12 @@ jobs:
           - { name: two-pc, script: integration/two_pc/run.sh }
           - { name: complex, script: integration/complex/run.sh }
           - { name: dry-run, script: integration/dry_run/run.sh }
-          - { name: copy-data, script: integration/copy_data/run.sh }
+          - {
+              name: copy-data,
+              script: integration/copy_data/run.sh,
+              needs_docker: true,
+            }
+          - { name: pg-dump, script: integration/pg_dump/run.sh }
           - {
               name: load-balancer,
               script: integration/load_balancer/run.sh,
@@ -124,6 +129,10 @@ jobs:
               name: resharding-cli,
               script: integration/resharding/cli.sh,
               needs_docker: true,
+            }
+          - {
+              name: server,
+              script: integration/server/run.sh,
             }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
           # the workspace target/ cache; the other entries just run the
@@ -205,6 +214,7 @@ jobs:
   success:
     name: All Integration Tests Passed
     needs: ci
+    if: always()
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - run: echo Done!
+    - run: test "${{ needs.ci.result }}" = "success"

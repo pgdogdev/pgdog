@@ -55,6 +55,14 @@ impl Parameter {
             data: Bytes::copy_from_slice(data),
         }
     }
+
+    // Takes `data` without copying the bytes.
+    pub(crate) fn from_bytes(data: Bytes) -> Self {
+        Self {
+            len: data.len() as i32,
+            data,
+        }
+    }
 }
 
 /// Parameter with encoded format.
@@ -262,6 +270,19 @@ impl Bind {
         me.results = buf.freeze();
 
         me
+    }
+
+    pub(crate) fn set_binary_results(&mut self) {
+        const BINARY_FOR_ALL_COLUMNS: &[u8] = &1i16.to_be_bytes();
+
+        self.results = Bytes::from_static(BINARY_FOR_ALL_COLUMNS);
+        self.original = None;
+    }
+
+    pub(crate) fn set_param(&mut self, index: usize, param: Parameter) -> Option<()> {
+        *self.params.get_mut(index)? = param;
+        self.original = None;
+        Some(())
     }
 
     pub(crate) fn params_raw(&self) -> &[Parameter] {

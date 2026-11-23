@@ -15,10 +15,10 @@ SENTINEL_ID=-1
 
 # Inherit PGDOG_CONFIG from run.sh (defaults to pgdog.toml for standalone use).
 PGDOG_CONFIG="${PGDOG_CONFIG:-${SETUP_DIR}/pgdog.toml}"
-POLL_INTERVAL=0.5  # seconds between destination polls
+POLL_INTERVAL=0.1  # seconds between destination polls
 
 # Start replication in the background.  Schema sync is skipped because prepare.sh
-# already ran it via --sync-only.
+# already ran schema-sync and created the slots.
 "${PGDOG_BIN}" \
     --config "${PGDOG_CONFIG}" \
     --users  "${SETUP_DIR}/users.toml" \
@@ -31,8 +31,17 @@ POLL_INTERVAL=0.5  # seconds between destination polls
     --replicate-only &
 PGDOG_PID=$!
 
-# Ensure pgdog is killed on any exit path
-trap 'kill "${PGDOG_PID}" 2>/dev/null || true; sleep 5; kill -9 "${PGDOG_PID}" 2>/dev/null || true' EXIT
+stop_pgdog() {
+    kill "${PGDOG_PID}" 2>/dev/null || return 0
+    for _ in $(seq 100); do
+        kill -0 "${PGDOG_PID}" 2>/dev/null || return 0
+        sleep 0.05
+    done
+    kill -9 "${PGDOG_PID}" 2>/dev/null || true
+}
+
+# Ensure pgdog is stopped on any exit path; returns as soon as it exits (max 5s before SIGKILL).
+trap stop_pgdog EXIT
 
 echo "  pgdog replication started (pid=${PGDOG_PID}), polling for sentinels..."
 

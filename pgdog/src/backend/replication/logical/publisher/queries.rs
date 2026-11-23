@@ -128,10 +128,7 @@ impl ReplicaIdentity {
             )
             .await?
             .pop()
-            .ok_or(Error::NoReplicaIdentity(
-                table.schema.clone(),
-                table.name.clone(),
-            ))?;
+            .ok_or_else(|| Error::NoReplicaIdentity(table.schema.clone(), table.name.clone()))?;
         Ok(identity)
     }
 }
@@ -263,8 +260,8 @@ pub(crate) async fn tables_missing_unique_index<'a>(
         .into_iter()
         .map(|row| {
             Ok((
-                row.get(0, Format::Text).ok_or(Error::MissingData)?,
-                row.get(1, Format::Text).ok_or(Error::MissingData)?,
+                row.get(0, Format::Text).ok_or_else(|| Error::MissingData)?,
+                row.get(1, Format::Text).ok_or_else(|| Error::MissingData)?,
             ))
         })
         .collect::<Result<HashSet<_>, Error>>()?;

@@ -77,9 +77,13 @@ impl TwoPc {
     pub(super) async fn done(&mut self) -> Result<(), Error> {
         let transaction = self.transaction();
         self.manager.done(transaction).await?;
+        self.reset();
+        Ok(())
+    }
+
+    pub(super) fn reset(&mut self) {
         self.transaction = None;
         self.auto = false;
-        Ok(())
     }
 
     pub(crate) fn set_auto(&mut self) {

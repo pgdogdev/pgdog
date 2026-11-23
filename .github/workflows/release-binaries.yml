@@ -33,20 +33,34 @@ jobs:
 
       # Mirrors docker/Dockerfile.base-builder: cmake + clang for aws-lc-sys,
       # libssl-dev for openssl-sys, mold is the linker pinned in .cargo/config.toml.
+      # pg-internals needs libclang plus PostgreSQL's configure/build dependencies.
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential cmake clang pkg-config libssl-dev mold
+            build-essential cmake clang pkg-config libssl-dev mold \
+            libclang-dev libicu-dev libreadline-dev zlib1g-dev bison flex perl
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      - name: Generate PGO profile
+        if: runner.os == 'Linux'
+        run: |
+          bash integration/ci/install-deps.sh
+          bash integration/ci/setup.sh --with-toxi
+          bash scripts/pgo-profile.sh ${{ matrix.target }}
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p pgdog
+        run: |
+          pgo_args=()
+          if [ -f pgo.profdata ]; then
+            pgo_args=(--config "target.'cfg(all())'.rustflags=['-Cprofile-use=$PWD/pgo.profdata']")
+          fi
+          cargo build --release --target ${{ matrix.target }} -p pgdog "${pgo_args[@]}"
 
       - name: Package tarball
         run: |

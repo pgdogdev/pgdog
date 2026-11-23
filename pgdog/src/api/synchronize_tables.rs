@@ -8,7 +8,7 @@ use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::util::safe_interval;
-use pgdog_stats::{ReplicationDirection, SynchronizeTablesStatus, TaskDefinition};
+use pgdog_stats::{SynchronizeTablesDefinition, SynchronizeTablesStatus, TaskDefinition};
 use tokio::select;
 use tracing::info;
 
@@ -25,7 +25,9 @@ impl Task for SynchronizeTablesTask {
     type Error = Error;
 
     fn definition(&self) -> impl Into<TaskDefinition> {
-        "synchronize tables"
+        SynchronizeTablesDefinition {
+            databases: self.state.databases(),
+        }
     }
 
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {
@@ -53,11 +55,7 @@ impl Task for SynchronizeTablesTask {
         let progress = ReplicationProgress::new(state.source.shards().len());
 
         // start the replication to make sure all the tables reach the same lsn on the shards
-        let (task, stop) = ReplicationClusterTask::new(
-            state.clone(),
-            ReplicationDirection::Forward,
-            progress.clone(),
-        );
+        let (task, stop) = ReplicationClusterTask::new(state.clone(), progress.clone());
         let mut replication = Box::pin(ctx.run(task));
         let mut check = safe_interval(STATUS_REPORT_INTERVAL);
 
@@ -65,6 +63,11 @@ impl Task for SynchronizeTablesTask {
             select! {
                 result = &mut replication => {
                     result?;
+                    if ctx.cancellation_token().is_cancelled() {
+                        // the tasks where cancelled and not
+                        // unexpectedly stopped
+                        return Err(Error::ReplicationAborted);
+                    }
                     return Err(Error::ReplicationStreamStopped);
                 }
                 _ = check.tick() => {

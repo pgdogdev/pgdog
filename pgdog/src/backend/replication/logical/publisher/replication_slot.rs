@@ -327,10 +327,10 @@ impl<K> ReplicationSlot<K> {
 
     async fn execute_creation(&self, server: &mut Server, query: &str) -> Result<(), Error> {
         let mut result = server.fetch_all::<DataRow>(query).await?;
-        let result = result.pop().ok_or(Error::MissingData)?;
+        let result = result.pop().ok_or_else(|| Error::MissingData)?;
         let lsn = result
             .get::<String>(1, Format::Text)
-            .ok_or(Error::MissingData)?;
+            .ok_or_else(|| Error::MissingData)?;
         let lsn = Lsn::from_str(&lsn)?;
 
         info!(
@@ -475,7 +475,7 @@ impl ReplicationSlotInner {
             .ok_or_else(|| Error::MissingReplicationSlot(self.name.clone()))?;
         let current = row
             .and_then(|row| row.get::<String>(0, Format::Text))
-            .ok_or(Error::MissingData)?;
+            .ok_or_else(|| Error::MissingData)?;
 
         Ok(ReplicationLag {
             current_lsn: Lsn::from_str(&current)?,
@@ -524,7 +524,7 @@ pub(crate) struct ReplicationLag {
 
 impl ReplicationLag {
     pub(crate) fn lag(&self) -> i64 {
-        self.current_lsn.lsn - self.confirmed_lsn.lsn
+        self.current_lsn.distance_bytes(&self.confirmed_lsn)
     }
 }
 
@@ -675,7 +675,7 @@ impl ReplicationSlotStream {
             self.server().addr()
         );
 
-        let lsn = Lsn::from_i64(status_update.last_flushed);
+        let lsn = Lsn::from_u64(status_update.last_flushed);
         self.slot.advance_lsn(lsn);
 
         self.server()
@@ -816,7 +816,7 @@ mod test {
             .await
             .unwrap();
         let lsn = Lsn::from_str(&result[0]).unwrap();
-        let lsn_2 = Lsn::from_i64(lsn.lsn);
+        let lsn_2 = Lsn::from_u64(lsn.lsn);
         assert_eq!(lsn.to_string(), result[0]);
         assert_eq!(lsn, lsn_2);
     }

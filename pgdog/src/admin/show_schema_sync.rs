@@ -30,6 +30,7 @@ impl Command for ShowSchemaSync {
             Field::text("source"),
             Field::text("destination"),
             Field::text("sync_state"),
+            Field::text("direction"),
             Field::bigint("shard"),
             Field::text("status"),
             Field::text("inner_status"),
@@ -43,12 +44,15 @@ impl Command for ShowSchemaSync {
         tasks_storage().try_for_each(|task| {
             let state = task.state();
 
-            let (databases, sync_state, shard) = match &state.definition.kind {
-                TaskDefinitionKind::SchemaSync(def) => {
-                    (&def.databases, def.sync_state, None::<i64>)
-                }
+            let (databases, sync_state, direction, shard) = match &state.definition.kind {
+                TaskDefinitionKind::SchemaSync(def) => (
+                    &def.databases,
+                    def.sync_state,
+                    Some(def.direction.to_string()),
+                    None::<i64>,
+                ),
                 TaskDefinitionKind::SchemaShard(def) => {
-                    (&def.databases, def.sync_state, Some(def.shard as i64))
+                    (&def.databases, def.sync_state, None, Some(def.shard as i64))
                 }
                 _ => return ControlFlow::Continue(()),
             };
@@ -66,6 +70,7 @@ impl Command for ShowSchemaSync {
                 .add(databases.source.as_str())
                 .add(databases.destination.as_str())
                 .add(sync_state.to_string().as_str())
+                .add(direction)
                 .add(shard)
                 .add(state.progress.to_string().as_str())
                 .add(state.status.to_string().as_str())

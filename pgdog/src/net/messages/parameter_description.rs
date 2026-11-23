@@ -39,11 +39,6 @@ impl Protocol for ParameterDescription {
 }
 
 impl ParameterDescription {
-    /// Create an empty parameter description.
-    pub(crate) fn empty() -> Self {
-        Self { params: Vec::new() }
-    }
-
     /// Keep only the first `len` parameters.
     pub(crate) fn truncate(&mut self, len: usize) {
         self.params.truncate(len);

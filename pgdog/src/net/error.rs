@@ -25,9 +25,6 @@ pub(crate) enum Error {
     #[error("unexpected payload")]
     UnexpectedPayload,
 
-    #[error("CommandComplete contains no row counts")]
-    CommandCompleteNoRows,
-
     #[error("unexpected replication meta message: {0}")]
     UnexpectedReplicationMetaMessage(char),
 

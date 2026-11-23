@@ -58,20 +58,10 @@ impl QueryEngine {
         }
     }
 
-    /// Return true if we should ignore this request because
-    /// the extended protocol state is out of sync, e.g., in error state.
-    ///
-    /// This is identical behavior to Postgres.
-    ///
-    /// If we see a [`crate::net::Sync`]-only request, we execute it to restore servers
-    /// back to normal state.
-    ///
-    pub(super) fn in_extended_pipeline_error(
-        &self,
-        context: &QueryEngineContext<'_>,
-        client_request: &ClientRequest,
-    ) -> bool {
-        self.backend.out_of_sync() && !client_request.is_sync_only() && !context.pipeline.is_done()
+    /// Discard messages until Sync when the backend is in an extended protocol error state.
+    /// Return true if the entire request was discarded.
+    pub(super) fn discard_until_sync(&self, client_request: &mut ClientRequest) -> bool {
+        self.backend.out_of_sync() && client_request.discard_until_sync()
     }
 
     /// Return true if we should ignore this query because

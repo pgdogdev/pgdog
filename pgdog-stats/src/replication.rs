@@ -23,22 +23,23 @@ use serde::{Deserialize, Serialize};
     JsonSchema,
 )]
 pub struct Lsn {
-    pub high: i64,
-    pub low: i64,
-    pub lsn: i64,
+    pub high: u32,
+    pub low: u32,
+    pub lsn: u64,
 }
 
 impl Lsn {
     /// Get LSN from the 64-bit representation.
-    pub fn from_i64(lsn: i64) -> Self {
-        let high = ((lsn >> 32) as u32) as i64;
-        let low = ((lsn & 0xFFFF_FFFF) as u32) as i64;
+    pub fn from_u64(lsn: u64) -> Self {
+        let high = (lsn >> 32) as u32;
+        let low = lsn as u32;
         Self { high, low, lsn }
     }
 
-    /// Replication lag in bytes.
+    /// Signed replication distance in bytes, saturated to the metric's i64 range.
     pub fn distance_bytes(&self, other: &Lsn) -> i64 {
-        self.lsn - other.lsn
+        (i128::from(self.lsn) - i128::from(other.lsn))
+            .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
     }
 }
 
@@ -60,18 +61,16 @@ impl FromStr for Lsn {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // This is not the right formula to get the LSN number but
-        // it survives (de)serialization which is all we care about.
-        //
-        // TODO: maybe just save it as a string?
         let mut parts = s.split("/");
-        let high = parts.next().ok_or(Error::LsnDecode)?;
-        let high = i64::from_str_radix(high, 16)?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let high = parts.next().ok_or_else(|| Error::LsnDecode)?;
+        let high = u32::from_str_radix(high, 16)?;
 
-        let low = parts.next().ok_or(Error::LsnDecode)?;
-        let low = i64::from_str_radix(low, 16)?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let low = parts.next().ok_or_else(|| Error::LsnDecode)?;
+        let low = u32::from_str_radix(low, 16)?;
 
-        let lsn = (high << 32) + low;
+        let lsn = (u64::from(high) << 32) | u64::from(low);
 
         Ok(Self { lsn, high, low })
     }
@@ -91,7 +90,7 @@ pub struct LsnStats {
     /// Replay LSN on replica, current LSN on primary.
     pub lsn: Lsn,
     /// LSN position in bytes from 0.
-    pub offset_bytes: i64,
+    pub offset_bytes: u64,
     /// Server timestamp.
     pub timestamp: TimestampTz,
     /// Our timestamp.
@@ -131,7 +130,9 @@ impl Default for LsnStats {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord,
+)]
 pub struct ReplicaLag {
     pub duration: Duration,
     pub bytes: i64,
@@ -152,10 +153,55 @@ impl ReplicaLag {
     }
 }
 
+impl Display for ReplicaLag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}, {}",
+            pgdog_util::human_duration(self.duration),
+            pgdog_util::format_bytes(self.bytes as u64)
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pgdog_config::General;
+
+    #[test]
+    fn test_lsn_unsigned_roundtrip() {
+        for (text, value) in [
+            ("0/0", 0),
+            ("1/0", 1 << 32),
+            ("7FFFFFFF/FFFFFFFF", (1 << 63) - 1),
+            ("80000000/0", 1 << 63),
+            ("FFFFFFFF/FFFFFFFF", u64::MAX),
+        ] {
+            let lsn = text.parse::<Lsn>().expect("valid LSN");
+            assert_eq!(lsn.lsn, value);
+            assert_eq!(lsn, Lsn::from_u64(value));
+            assert_eq!(lsn.to_string(), text);
+            let json = serde_json::to_string(&lsn).expect("serialize LSN");
+            assert_eq!(
+                serde_json::from_str::<Lsn>(&json).expect("deserialize LSN"),
+                lsn
+            );
+        }
+    }
+
+    #[test]
+    fn test_lsn_signed_distance() {
+        let before = Lsn::from_u64((1 << 63) - 1);
+        let after = Lsn::from_u64(1 << 63);
+        assert!(after > before);
+        assert_eq!(after.distance_bytes(&before), 1);
+        assert_eq!(before.distance_bytes(&after), -1);
+        assert_eq!(after.distance_bytes(&after), 0);
+        let max = Lsn::from_u64(u64::MAX);
+        assert_eq!(max.distance_bytes(&Lsn::default()), i64::MAX);
+        assert_eq!(Lsn::default().distance_bytes(&max), i64::MIN);
+    }
 
     #[test]
     fn test_default_replica_lag_never_exceeds_default_config_threshold() {

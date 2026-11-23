@@ -129,10 +129,11 @@ async fn fetch_server_cert_der()
         .await?;
 
     let (_, connection) = tls_stream.get_ref();
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let presented = connection
         .peer_certificates()
         .and_then(|certs| certs.first())
-        .ok_or("server did not present a certificate")?;
+        .ok_or_else(|| "server did not present a certificate")?;
 
     Ok(presented.clone().into_owned())
 }

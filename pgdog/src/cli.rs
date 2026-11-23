@@ -1,17 +1,17 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use tokio::{select, signal::ctrl_c};
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::api::Task;
 use crate::api::resharding::ReshardTask;
-use crate::api::run_task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
-use crate::api::tasks_storage;
+use crate::api::task::TaskError;
+use crate::api::{MigrationError, run_task};
 use crate::backend::databases::databases;
+use crate::backend::replication::logical::Error::ReplicationAborted;
 use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
+use crate::frontend::comms::comms;
 use crate::frontend::router::cli::RouterCli;
 use pgdog_stats::Databases;
 
@@ -93,6 +93,12 @@ pub(crate) enum Commands {
         /// Only replicate; skip the initial data copy.
         #[arg(long, default_value = "false")]
         replicate_only: bool,
+
+        /// Copy only the publication's tables: schema sync creates just those
+        /// tables, referenced tables must already exist on the destination,
+        /// and replication runs until stopped, without cutover.
+        #[arg(long)]
+        tables_only: bool,
 
         /// Only copy data and synchronize tables; skip replication and cutover.
         #[arg(long, default_value = "false")]
@@ -195,30 +201,6 @@ pub(crate) fn hash_password(password: &str) {
     );
 }
 
-/// Run an api task to completion in the foreground, cancelling it on Ctrl-C so
-/// it can wind down (e.g. stop replication) instead of the process being
-/// hard-killed. Returns the task output, or its error/cancellation outcome.
-async fn run_to_completion<T: Task + 'static>(
-    task: T,
-) -> Result<T::Output, Box<dyn std::error::Error>>
-where
-    T::Error: std::error::Error + 'static,
-{
-    let mut waiter = run_task(task);
-    let id = waiter.id();
-
-    loop {
-        select! {
-            result = &mut waiter => return Ok(result?),
-            signal = ctrl_c() => {
-                signal?;
-                warn!("interrupt received, cancelling task {id}");
-                tasks_storage().cancel_task(id);
-            }
-        }
-    }
-}
-
 /// FOR TESTING PURPOSES ONLY.
 pub(crate) async fn replicate_and_cutover(
     commands: Commands,
@@ -237,7 +219,7 @@ pub(crate) async fn replicate_and_cutover(
             .maybe_replication_slot(replication_slot.clone())
             .build()?;
 
-        run_to_completion(
+        run_task(
             ReshardTask::builder()
                 .state(state)
                 .auto_cutover(true)
@@ -255,6 +237,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         to_database,
         publication,
         replicate_only,
+        tables_only,
         sync_only,
         replication_slot,
         skip_schema_sync,
@@ -267,15 +250,26 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
             .maybe_replication_slot(replication_slot)
             .build()?;
 
-        run_to_completion(
+        let result = run_task(
             ReshardTask::builder()
                 .state(state)
+                .tables_only(tables_only)
                 .skip_schema_sync(skip_schema_sync)
                 .replicate_only(replicate_only)
                 .sync_only(sync_only)
                 .build(),
         )
-        .await?;
+        .await;
+
+        if let Err(TaskError::Failed(MigrationError::Replication(ReplicationAborted))) = result
+            && comms().offline()
+        {
+            // pgdog is shutting down, that's why the replication process is aborted.
+            // Consider this as a success replication and other errors as fail.
+            info!("replication stopped due to shutdown");
+        } else {
+            result?;
+        }
     }
 
     Ok(())
@@ -311,7 +305,7 @@ pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::e
     } = commands
     {
         let phase = legacy_phase(data_sync_complete, cutover, validation).unwrap_or(phase);
-        run_to_completion(
+        run_task(
             SchemaSyncTask::builder()
                 .databases(Databases {
                     source: from_database,
@@ -360,6 +354,38 @@ pub(crate) async fn route(commands: Commands) -> Result<(), Box<dyn std::error::
 
 #[cfg(test)]
 mod test {
+    mod data_sync {
+        use crate::cli::*;
+
+        fn parse(args: &[&str]) -> Result<Commands, clap::Error> {
+            let mut argv = vec![
+                "pgdog",
+                "data-sync",
+                "--from-database",
+                "a",
+                "--to-database",
+                "b",
+            ];
+            argv.extend_from_slice(args);
+            Ok(Cli::try_parse_from(argv)?
+                .command
+                .expect("data-sync is a command"))
+        }
+
+        #[test]
+        fn test_tables_only() {
+            for (args, expected) in [
+                (vec!["--publication", "p"], false),
+                (vec!["--publication", "p", "--tables-only"], true),
+            ] {
+                let Commands::DataSync { tables_only, .. } = parse(&args).unwrap() else {
+                    panic!("not a data sync command");
+                };
+                assert_eq!(tables_only, expected, "{args:?}");
+            }
+        }
+    }
+
     mod schema_sync {
         use crate::cli::*;
 

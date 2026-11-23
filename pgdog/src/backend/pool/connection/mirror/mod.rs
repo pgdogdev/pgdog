@@ -13,9 +13,10 @@ use crate::backend::Cluster;
 use crate::config::{ConfigAndUsers, config};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
-use crate::frontend::client::transaction_type::Transaction;
+use crate::frontend::client::transaction_type::{StatementStart, Transaction};
 use crate::frontend::{ClientComms, PreparedStatements};
 use crate::net::{FrontendPid, Parameter, Parameters, Stream};
+use crate::parameters::ParameterStore;
 use crate::tasks;
 
 use super::Error;
@@ -39,15 +40,14 @@ pub(crate) struct Mirror {
     /// to client's statements, if exposure is high.
     pub(crate) prepared_statements: PreparedStatements,
     /// Mirror connection parameters.
-    pub(crate) params: Parameters,
-    /// Parameters the mirrored client started with.
-    pub(crate) startup_params: Parameters,
+    pub(crate) params: ParameterStore,
     /// Timeouts.
     pub(crate) timeouts: Timeouts,
     /// Stream that absorbs all data.
     pub(crate) stream: Stream,
     /// Transaction state.
     pub(crate) transaction: Option<Transaction>,
+    pub(crate) statement_start: StatementStart,
 }
 
 impl Mirror {
@@ -58,11 +58,11 @@ impl Mirror {
         Self {
             id: FrontendPid::new(),
             prepared_statements,
-            params: params.clone(),
-            startup_params: params.clone(),
+            params: ParameterStore::new(params.clone()),
             timeouts: Timeouts::from_config(&config.config.general),
             stream: Stream::dev_null(),
             transaction: None,
+            statement_start: StatementStart::default(),
         }
     }
 

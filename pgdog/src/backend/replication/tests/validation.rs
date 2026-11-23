@@ -2,10 +2,15 @@ use std::panic::AssertUnwindSafe;
 
 use futures::FutureExt;
 use pgdog_config::resharding::PostDataValidationStage;
-use pgdog_stats::{ReplicationStatus, SyncState, TaskDefinitionKind, TaskProgress};
+use pgdog_stats::{
+    ReplicationStatus, ReshardingDirection, SyncState, TaskDefinitionKind, TaskProgress,
+};
 
 use super::*;
-use crate::api::{replication::ReplicationTask, schema_sync::SchemaSyncBuilder};
+use crate::api::{
+    replication::{CutoverMode, ReplicationTask},
+    schema_sync::SchemaSyncBuilder,
+};
 use crate::backend::maintenance_mode;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -19,13 +24,13 @@ struct FkValidation {
 }
 
 impl FkValidation {
-    fn start(&self, auto_cutover: bool) -> TaskWaiter<(), Error> {
+    fn start(&self, cutover: CutoverMode) -> TaskWaiter<(), Error> {
         run_task(
             ReplicationTask::builder()
                 .state(self.state.clone())
                 .schema_sync(self.schema_sync.clone())
                 .validate(true)
-                .auto_cutover(auto_cutover)
+                .cutover(cutover)
                 .build(),
         )
     }
@@ -85,6 +90,7 @@ async fn fk_validation_setup(
         .await?;
 
     let schema_sync = SchemaSyncTask::builder()
+        .publication_tables_only(false)
         .databases(pgdog_stats::Databases {
             source: schema.into(),
             destination: destination.into(),
@@ -102,13 +108,13 @@ async fn fk_validation_setup(
     state.sync_tables().await?;
     state.create_slots(&cancel).await?;
     let tables = state.tables();
-    let tables = tables.get(&0).ok_or(Error::MissingData)?;
+    let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
     let find = |name: &str| {
         tables
             .iter()
             .find(|table| table.table.name == name)
             .cloned()
-            .ok_or(Error::MissingData)
+            .ok_or_else(|| Error::MissingData)
     };
     let (child, parent) = (find("children")?, find("parents")?);
 
@@ -142,33 +148,6 @@ async fn fk_validation_setup(
         schema_sync,
         dest,
     })
-}
-
-fn replication_status(id: TaskId) -> Option<ReplicationStatus> {
-    let mut found = None;
-    tasks_storage().try_for_each(|task| {
-        if task.id != id {
-            return ControlFlow::Continue(());
-        }
-        if let TaskStatus::Replication(status) = task.state().status {
-            found = Some(status);
-        }
-        ControlFlow::Break(())
-    });
-    found
-}
-
-async fn wait_for_replication_status(
-    id: TaskId,
-    expected: ReplicationStatus,
-) -> Result<(), Box<dyn std::error::Error>> {
-    tokio::time::timeout(Duration::from_secs(60), async {
-        while replication_status(id) != Some(expected) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    Ok(())
 }
 
 fn validation_tasks(root: TaskId) -> Vec<TaskProgress> {
@@ -245,7 +224,7 @@ async fn test_replication_fk_inconsistent_validation() -> TestResult {
         PostDataValidationStage::DuringReplication,
         true,
         async |fixture| {
-            let outcome = fixture.start(false).await;
+            let outcome = fixture.start(CutoverMode::Manual).await;
             assert!(
                 is_fk_violation(&outcome),
                 "validation did not reject the orphan with a foreign key error: {outcome:?}"
@@ -276,7 +255,7 @@ async fn post_data_validation_off_does_not_validate() -> TestResult {
         PostDataValidationStage::Off,
         true,
         async |fixture| {
-            let task = fixture.start(false);
+            let task = fixture.start(CutoverMode::Manual);
             let id = task.id();
             wait_for_replication_status(id, ReplicationStatus::Replicating).await?;
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -304,7 +283,7 @@ async fn post_data_validation_before_cutover_stops_migration() -> TestResult {
         PostDataValidationStage::BeforeCutover,
         true,
         async |fixture| {
-            let task = fixture.start(true);
+            let task = fixture.start(CutoverMode::Auto);
             let id = task.id();
             let outcome = tokio::time::timeout(Duration::from_secs(120), task).await?;
             assert!(
@@ -329,7 +308,7 @@ async fn post_data_validation_after_cutover_keeps_replicating() -> TestResult {
         PostDataValidationStage::AfterCutover,
         true,
         async |fixture| {
-            let task = fixture.start(true);
+            let task = fixture.start(CutoverMode::Auto);
             let id = task.id();
             wait_for_replication_status(id, ReplicationStatus::ReverseReplicating).await?;
             let failed = wait_for_validation(id, |validations| {
@@ -343,6 +322,15 @@ async fn post_data_validation_after_cutover_keeps_replicating() -> TestResult {
             assert_eq!(
                 replication_status(id),
                 Some(ReplicationStatus::ReverseReplicating)
+            );
+            assert!(
+                subtree_definitions(id).iter().any(|definition| matches!(
+                    definition,
+                    TaskDefinitionKind::SchemaSync(sync)
+                        if sync.sync_state == SyncState::PostDataValidation
+                            && sync.direction == ReshardingDirection::Reverse
+                )),
+                "validation after cutover must report the reverse direction"
             );
 
             assert!(ReplicationTask::trigger_cutover(Some(id)));
@@ -380,7 +368,7 @@ async fn post_data_validation_during_replication_gates_cutover() -> TestResult {
             ))
             .await?;
 
-            let task = fixture.start(true);
+            let task = fixture.start(CutoverMode::Auto);
             let id = task.id();
             wait_for_validation(id, |validations| !validations.is_empty()).await?;
             tokio::time::sleep(Duration::from_secs(3)).await;

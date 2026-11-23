@@ -6,7 +6,7 @@ use crate::net::messages::{code, prelude::*};
 pub(crate) enum TransactionState {
     Idle,
     Error,
-    InTrasaction,
+    InTransaction,
 }
 
 // ReadyForQuery (F).
@@ -38,7 +38,7 @@ impl ReadyForQuery {
     pub(crate) fn state(&self) -> Result<TransactionState, Error> {
         match self.status {
             'E' => Ok(TransactionState::Error),
-            'T' => Ok(TransactionState::InTrasaction),
+            'T' => Ok(TransactionState::InTransaction),
             'I' => Ok(TransactionState::Idle),
             c => Err(Error::UnknownTransactionStateIdentifier(c)),
         }

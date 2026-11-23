@@ -1,9 +1,17 @@
+use std::sync::Arc;
+
 use crate::{
+    backend::pool::connection::aggregate::Error as AggregateError,
     frontend::router::parser::{
-        DistinctBy, OrderBy, Shard, ShardWithPriority,
-        rewrite::statement::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan},
+        Aggregate, DistinctBy, HavingRewritePlan, Nulls, OrderBy, Shard, ShardWithPriority,
+        rewrite::statement::{
+            group_by::GroupByRewrite,
+            projection::{
+                HavingRewriteResult, OrderByHelper, OrderBySource, ProjectionRewritePlan,
+            },
+        },
     },
-    net::{BindComplete, DataRow, Field, Format},
+    net::{BindComplete, DataRow, Field, Format, NoData},
 };
 
 use super::*;
@@ -74,12 +82,15 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
     });
     let mut route = Route::select(
         ShardWithPriority::new_default_unset(Shard::All),
-        vec![OrderBy::AscColumn("__pgdog_order_col0".into())],
+        vec![OrderBy::AscColumn(
+            "__pgdog_order_col0".into(),
+            Nulls::Default,
+        )],
         Default::default(),
         Default::default(),
         None,
     );
-    route.projection_rewrite_plan = plan;
+    route.projection_rewrite_plan = Some(std::sync::Arc::new(plan));
     let mut multi_shard = MultiShard::new(2, &route);
 
     let row_description = RowDescription::new(&[
@@ -135,6 +146,175 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
         assert_eq!(row.len(), 3);
         assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), expected);
     }
+}
+
+/// `SELECT customer_id, COUNT(*) ... GROUP BY customer_id HAVING ...`, with
+/// `operand` passed to the HAVING filter and `__pgdog_having_0` hidden.
+fn having_route(operand: &str) -> Route {
+    let aggregate = Aggregate::new_count_group_by(1, &[0]);
+    let plan = ProjectionRewritePlan {
+        having: Some(Box::new(HavingRewriteResult::new(
+            HavingRewritePlan::new(
+                String::new(),
+                vec![operand.into()],
+                vec!["__pgdog_having_0".into()],
+                vec![],
+            ),
+            aggregate.clone(),
+        ))),
+        ..Default::default()
+    };
+    let mut route = Route::select(
+        ShardWithPriority::new_default_unset(Shard::All),
+        vec![],
+        aggregate,
+        Default::default(),
+        None,
+    );
+    route.projection_rewrite_plan = Some(Arc::new(plan));
+    route
+}
+
+/// Sends a row description, two groups per shard and `CommandComplete` from both shards.
+/// Customer 1 has a partial count of 2 on each shard, customer 2 has 1.
+fn send_having_shard_results(multi_shard: &mut MultiShard) -> Result<Vec<Message>, Error> {
+    let row_description = RowDescription::new(&[
+        Field::bigint("customer_id"),
+        Field::bigint("count"),
+        Field::bigint("__pgdog_having_0"),
+    ]);
+    let mut forwarded = Vec::new();
+    for _ in 0..2 {
+        forwarded.extend(multi_shard.handle_server_message(row_description.message())?);
+    }
+    for _ in 0..2 {
+        for (customer, count) in [(1_i64, 2_i64), (2, 1)] {
+            let mut row = DataRow::new();
+            row.add(customer).add(count).add(3_i64);
+            forwarded.extend(multi_shard.handle_server_message(row.message())?);
+        }
+    }
+    for _ in 0..2 {
+        forwarded.extend(
+            multi_shard.handle_server_message(CommandComplete::from_str("SELECT 2").message())?,
+        );
+    }
+    Ok(forwarded)
+}
+
+#[test]
+fn test_having_collects_merged_inputs_and_drops_hidden_columns() {
+    let route = having_route("count");
+    let mut multi_shard = MultiShard::new(2, &route);
+
+    let forwarded = send_having_shard_results(&mut multi_shard).unwrap();
+    let [client_description] = forwarded.as_slice() else {
+        panic!("expected only the row description to be forwarded")
+    };
+    let client_description = RowDescription::from_bytes(client_description.to_bytes()).unwrap();
+    assert_eq!(
+        client_description
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["customer_id", "count"]
+    );
+
+    // Every merged group is kept for the query engine to filter, with the
+    // merged counts (2 + 2 and 1 + 1) as the HAVING input.
+    let mut counts = Vec::new();
+    for _ in 0..2 {
+        let row =
+            DataRow::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
+        assert_eq!(row.len(), 2);
+        counts.push(row.get::<i64>(1, Format::Text).unwrap());
+    }
+    counts.sort();
+    assert_eq!(counts, [2, 4]);
+
+    let command_complete =
+        CommandComplete::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
+    assert_eq!(command_complete.rows(), Some(2));
+    assert!(multi_shard.get_server_message().is_none());
+
+    multi_shard.query_complete();
+    let inputs = multi_shard.take_having_inputs().unwrap();
+    assert_eq!(inputs.rows(), 2);
+    assert_eq!(inputs.columns().len(), 1);
+}
+
+#[test]
+fn test_having_evaluation_error_clears_buffer() {
+    let route = having_route("__pgdog_missing");
+    let mut multi_shard = MultiShard::new(2, &route);
+
+    let error = send_having_shard_results(&mut multi_shard).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            Error::Aggregate(AggregateError::HavingColumnMissing(alias)) if alias == "__pgdog_missing"
+        ),
+        "{error}"
+    );
+    assert!(!multi_shard.buffer.can_take());
+}
+
+#[test]
+fn test_hidden_group_by_key_is_merged_then_dropped() {
+    // SELECT category FROM items GROUP BY category, region
+    let plan = ProjectionRewritePlan {
+        group_by: Some(Box::new(GroupByRewrite::new(
+            vec!["__pgdog_group_0".into()],
+            Aggregate::default().with_group_by(vec![0, 1]),
+        ))),
+        ..Default::default()
+    };
+    let mut route = Route::select(
+        ShardWithPriority::new_default_unset(Shard::All),
+        vec![],
+        Default::default(),
+        Default::default(),
+        None,
+    );
+    route.projection_rewrite_plan = Some(std::sync::Arc::new(plan));
+    let mut multi_shard = MultiShard::new(2, &route);
+
+    let row_description =
+        RowDescription::new(&[Field::text("category"), Field::text("__pgdog_group_0")]);
+    multi_shard
+        .handle_server_message(row_description.message())
+        .unwrap();
+    let client_description = multi_shard
+        .handle_server_message(row_description.message())
+        .unwrap()
+        .unwrap();
+    let client_description = RowDescription::from_bytes(client_description.to_bytes()).unwrap();
+    assert_eq!(client_description.fields.len(), 1);
+
+    for (category, region) in [("drinks", "eu"), ("drinks", "us"), ("drinks", "eu")] {
+        let mut row = DataRow::new();
+        row.add(category).add(region);
+        multi_shard.handle_server_message(row.message()).unwrap();
+    }
+    for _ in 0..2 {
+        multi_shard
+            .handle_server_message(CommandComplete::from_str("SELECT 2").message())
+            .unwrap();
+    }
+
+    // One row per (category, region), like Postgres.
+    for _ in 0..2 {
+        let message = multi_shard.get_server_message().unwrap();
+        let row = DataRow::from_bytes(message.to_bytes()).unwrap();
+        assert_eq!(row.len(), 1);
+        assert_eq!(row.get::<String>(0, Format::Text).unwrap(), "drinks");
+    }
+    let message = multi_shard.get_server_message().unwrap();
+    assert_eq!(
+        message.to_bytes(),
+        CommandComplete::from_str("SELECT 2").message().to_bytes()
+    );
 }
 
 #[test]
@@ -240,7 +420,7 @@ fn test_distinct_state_resets_between_requests() {
             .get_server_message()
             .unwrap_or_else(|| panic!("request {request} should return CommandComplete"));
         let complete = CommandComplete::from_bytes(message.to_bytes()).unwrap();
-        assert_eq!(complete.rows().unwrap(), Some(1), "request {request}");
+        assert_eq!(complete.rows(), Some(1), "request {request}");
         assert!(multi_shard.get_server_message().is_none());
 
         multi_shard.query_complete();
@@ -310,7 +490,7 @@ fn test_omni_command_complete_not_summed() {
     let result = multi_shard.get_server_message();
     let cc = CommandComplete::from_bytes(result.unwrap().to_bytes()).unwrap();
     // Should be 5 (from one shard), not 15 (sum of all shards)
-    assert_eq!(cc.rows().unwrap(), Some(5));
+    assert_eq!(cc.rows(), Some(5));
 }
 
 #[test]
@@ -343,7 +523,7 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
     let result = multi_shard.get_server_message();
     let cc = CommandComplete::from_bytes(result.unwrap().to_bytes()).unwrap();
     // Should be 7 (from FIRST shard), not 9 (from last)
-    assert_eq!(cc.rows().unwrap(), Some(7));
+    assert_eq!(cc.rows(), Some(7));
 }
 
 #[test]
@@ -459,6 +639,37 @@ fn test_bind_result_formats_apply_per_statement() {
         multi_shard.handle_server_message(rd.message()).unwrap();
     }
     assert_eq!(multi_shard.decoder.get_format(0), Format::Text);
+}
+
+/// Rows are decoded with the columns PgDog asked for itself,
+/// and the client only sees the descriptions it asked for.
+#[test]
+fn test_descriptions_pgdog_asked_for_are_not_forwarded() {
+    let mut multi_shard = MultiShard::new(
+        2,
+        &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
+    );
+    multi_shard.set_describes(VecDeque::from([
+        DescribedBy::Client,
+        DescribedBy::PgDog,
+        DescribedBy::PgDog,
+    ]));
+
+    let statement = RowDescription::new(&[Field::text("id")]);
+    let portal = RowDescription::new(&[Field::bigint("id")]);
+    let mut forwarded = vec![];
+
+    for message in [statement.message(), portal.message(), NoData.message()] {
+        for _ in 0..2 {
+            if let Some(message) = multi_shard.handle_server_message(message.clone()).unwrap() {
+                forwarded.push(message);
+            }
+        }
+    }
+
+    assert_eq!(forwarded, vec![statement.message()]);
+    assert_eq!(multi_shard.decoder.row_description(), &portal);
+    assert!(multi_shard.describes.is_empty());
 }
 
 /// A Bind that never completed is dropped at ReadyForQuery, so the next

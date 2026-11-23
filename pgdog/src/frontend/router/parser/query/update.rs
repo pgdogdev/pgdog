@@ -7,12 +7,12 @@ impl QueryParser {
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let mut parser =
-            StatementParser::new(stmt, context.router_context.bind, &context.sharding_schema)
+            StatementParser::new(stmt, context.router_context.bind, context.sharding_schema)
                 .with_explain(self.recorder_mut().is_some());
         parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
-            &context.router_context.schema,
+            context.router_context.schema,
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
@@ -50,7 +50,9 @@ impl QueryParser {
         }
 
         Ok(Command::Query(
-            Route::write(context.shards_calculator.shard()).with_omnisharded(omnisharded),
+            Route::write(context.shards_calculator.shard())
+                .with_omnisharded(omnisharded)
+                .dml(),
         ))
     }
 }

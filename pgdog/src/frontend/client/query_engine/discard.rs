@@ -19,7 +19,7 @@ impl QueryEngine {
 
         match target {
             DiscardTarget::All if context.in_transaction() => {
-                context.transaction = Some(Transaction::new(
+                context.transaction = Some(Transaction::started_at(
                     match context
                         .transaction
                         .map(|transaction| transaction.transaction_type())
@@ -29,6 +29,7 @@ impl QueryEngine {
                         }
                         _ => TransactionType::ErrorReadWrite,
                     },
+                    context.statement_start.time(),
                 ));
                 self.error_response(
                     context,
@@ -42,7 +43,7 @@ impl QueryEngine {
                 self.execute(context, client_request, None).await?;
                 if !context.in_error() {
                     self.temp_tables.discard(context.in_transaction());
-                    self.check_lock();
+                    self.sync_lock();
                     // execute() cleaned up before temp tracking was cleared.
                     // Try again now that the backend is unpinned.
                     self.cleanup_backend(context).await?;
@@ -59,23 +60,30 @@ impl QueryEngine {
                 context.prepared_statements.close_all();
                 self.backend.unlisten_all();
                 self.reset_session_params(context);
-                self.check_lock();
+                self.sync_lock();
                 self.cleanup_backend(context).await?;
             }
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }
 
+        let command = match target {
+            DiscardTarget::All => "DISCARD ALL",
+            DiscardTarget::Plans => "DISCARD PLANS",
+            DiscardTarget::Sequences => "DISCARD SEQUENCES",
+            DiscardTarget::Temp => "DISCARD TEMP",
+        };
+
         self.fake_command_response(
             context,
             &client_request.messages,
-            &FakeResponse::command("DISCARD"),
+            &FakeResponse::command(command),
         )
         .await?;
         Ok(())
     }
 
     fn reset_session_params(&mut self, context: &mut QueryEngineContext<'_>) {
-        context.params.restore_startup(context.startup_params);
+        context.params.restore_startup();
         self.manual_lock = context
             .params
             .get(PGDOG_PIN)

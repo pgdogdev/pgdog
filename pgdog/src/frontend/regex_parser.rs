@@ -10,7 +10,8 @@ use crate::util::truncate_utf8;
 static COMMENT_PREFIX: &str = r"(?i)^\s*(?:(?:--[^\n]*\n|/\*[\s\S]*?\*/)\s*)*";
 
 static CMD_BASE: &[&str] = &[
-    "(RE)?SET", "BEGIN", "COMMIT", "ROLLBACK", "LISTEN", "UNLISTEN", "NOTIFY", "DISCARD",
+    "(RE)?SET", "BEGIN", "START", "COMMIT", "END", "ROLLBACK", "LISTEN", "UNLISTEN", "NOTIFY",
+    "DISCARD", "ABORT",
 ];
 
 static CMD_ADVISORY: &[&str] = &[
@@ -31,6 +32,21 @@ fn cmd_base_patterns() -> impl Iterator<Item = String> {
     CMD_BASE
         .iter()
         .map(|cmd| format!("{}{}", COMMENT_PREFIX, cmd))
+}
+
+static COMMON_QUERY_KEYWORDS: &[&[u8]] = &[b"SELECT", b"INSERT", b"UPDATE", b"DELETE", b"WITH"];
+
+/// We explicitly know that this will never match with `CMD_RE`, and these
+/// cover the majority of queries. If a query starts with one of the `COMMON_QUERY_KEYWORDS`
+/// key words, then we can skip the expensive regex check.
+fn is_common_query(query: &str) -> bool {
+    let query = query.as_bytes();
+
+    COMMON_QUERY_KEYWORDS.iter().any(|keyword| {
+        query
+            .get(..keyword.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(keyword))
+    })
 }
 
 static CMD_RE: Lazy<RegexSet> = Lazy::new(|| RegexSet::new(cmd_base_patterns()).unwrap());
@@ -64,18 +80,27 @@ impl RegexParser {
         let session_control =
             self.level == QueryParserLevel::SessionControl || self.level == QueryParserLevel::Auto;
 
-        if (with_locks || session_control)
-            && let Ok(Some(query)) = request.query()
-        {
-            let prefix = truncate_utf8(query.query(), self.limit);
-            if with_locks {
-                return CMD_RE_ADVISORY.is_match(prefix);
-            } else {
-                return CMD_RE.is_match(prefix);
-            }
+        if !with_locks && !session_control {
+            return false;
         }
 
-        false
+        let Ok(Some(query)) = request.query() else {
+            return false;
+        };
+
+        let query = query.query();
+
+        if with_locks {
+            return CMD_RE_ADVISORY.is_match(truncate_utf8(query, self.limit));
+        }
+
+        // Do a cheap check to deny if it doesn't qualify (for 99%+ of cases)
+        // The ones on this list WILL NOT match with CMD_RE. Thus, it's okay to return early.
+        if is_common_query(query) {
+            return false;
+        }
+
+        CMD_RE.is_match(truncate_utf8(query, self.limit))
     }
 }
 
@@ -307,5 +332,20 @@ mod test {
         assert!(!matches("INSERT INTO users VALUES (1)"));
         assert!(!matches("UPDATE users SET name = 'foo'"));
         assert!(!matches("DELETE FROM users"));
+    }
+
+    /// For each of the `COMMON_QUERY_KEYWORDS`, ensure no match on `CMD_RE` to prevent incorrectly
+    /// early exit behavior.
+    #[test]
+    fn test_common_queries_are_never_session_control() {
+        for keyword in COMMON_QUERY_KEYWORDS {
+            let keyword = std::str::from_utf8(keyword).unwrap();
+
+            assert!(is_common_query(keyword), "{keyword}");
+            assert!(is_common_query(&keyword.to_lowercase()), "{keyword}");
+
+            assert!(!CMD_RE.is_match(keyword), "{keyword}");
+            assert!(!CMD_RE.is_match(&keyword.to_lowercase()), "{keyword}");
+        }
     }
 }

@@ -2,17 +2,21 @@
 
 use crate::{
     frontend::{
-        ClientRequest,
+        ClientRequest, SetParam,
         client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
+        router::parser::Shard,
     },
-    net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
+    net::{FrontendPid, ProtocolMessage, Query},
+    parameters::{ParameterStore, Parameters},
     state::State,
 };
 
 use futures::future::join_all;
+use tokio::time::Instant;
 
 use super::*;
 use crate::util::safe_sleep;
+use buffer::having::HavingInputs;
 use multi_shard::MultiBinding;
 
 /// The server(s) the client is connected to.
@@ -124,6 +128,34 @@ impl Binding {
         }
     }
 
+    /// Record successful parser-classified statements on each target pool.
+    pub(crate) fn statement_completed(&mut self, route: &Route) {
+        let Some(statement_type) = route.statement_type() else {
+            return;
+        };
+
+        match self {
+            Binding::Direct(server) => server
+                .stats_mut()
+                .statement_completed(statement_type, route.table_change()),
+            Binding::MultiShard(servers) => {
+                for server in servers.iter_mut() {
+                    let targeted = match route.shard() {
+                        Shard::Direct(shard) => *shard == server.shard,
+                        Shard::Multi(shards) => shards.contains(&server.shard),
+                        Shard::All => true,
+                    };
+                    if targeted {
+                        server
+                            .stats_mut()
+                            .statement_completed(statement_type, route.table_change());
+                    }
+                }
+            }
+            _ => (),
+        }
+    }
+
     /// Send one message to the server(s) the upcoming request targets and
     /// ignore the response.
     ///
@@ -176,6 +208,33 @@ impl Binding {
             Binding::Direct(server) => server.has_more_messages(),
             Binding::MultiShard(servers) => servers.has_more_messages(),
             _ => false,
+        }
+    }
+
+    /// Merged `HAVING` operands of the last cross-shard request.
+    pub(crate) fn take_having_inputs(&mut self) -> Option<HavingInputs> {
+        match self {
+            Binding::MultiShard(servers) => servers.take_having_inputs(),
+            _ => None,
+        }
+    }
+
+    /// A connected shard for internal queries that don't read sharded data.
+    pub(crate) fn any_connected_shard(&self) -> Option<usize> {
+        match self {
+            Binding::MultiShard(servers) => servers.connected_shards().next(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn take_last_query_exec_time(&mut self) -> Option<Instant> {
+        match self {
+            Binding::Direct(direct) => direct.server.take_last_query_exec_time(),
+            Binding::MultiShard(servers) => servers
+                .iter_mut()
+                .filter_map(|server| server.take_last_query_exec_time())
+                .max(),
+            Binding::Transaction(_) | Binding::Admin(_) | Binding::NotConnected => None,
         }
     }
 
@@ -237,7 +296,7 @@ impl Binding {
     pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
     ) -> Result<usize, Error> {
         match self {
             Binding::Direct(server, ..) => server.link_client(id, params).await,
@@ -247,12 +306,12 @@ impl Binding {
     }
 
     /// Handle transaction end.
-    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_complete(&mut self, rollback: bool) {
         match self {
-            Binding::Direct(server, ..) => server.transaction_params_hook(rollback),
+            Binding::Direct(server, ..) => server.transaction_complete(rollback),
             Binding::MultiShard(servers) => servers
                 .iter_mut()
-                .for_each(|server| server.transaction_params_hook(rollback)),
+                .for_each(|server| server.transaction_complete(rollback)),
             _ => (),
         }
     }
@@ -268,6 +327,16 @@ impl Binding {
                 }
             }
             _ => Parameters::default(),
+        }
+    }
+
+    pub(super) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+        match self {
+            Binding::Direct(server, ..) => server.record_set(param, in_transaction),
+            Binding::MultiShard(servers) => servers
+                .iter_mut()
+                .for_each(|server| server.record_set(param, in_transaction)),
+            _ => (),
         }
     }
 

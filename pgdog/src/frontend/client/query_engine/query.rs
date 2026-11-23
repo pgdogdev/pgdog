@@ -1,6 +1,7 @@
 use tracing::{info, trace};
 
 use crate::{
+    backend::Error as BackendError,
     frontend::{
         client::{TransactionType, transaction_type::Transaction},
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
@@ -9,10 +10,12 @@ use crate::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
+    parameters::is_session_identity,
     state::State,
-    util::safe_timeout,
+    util::safe_timeout_from,
 };
 
+use tokio::time::Instant;
 use tracing::{debug, error};
 
 use super::hooks::schema::schema_changed;
@@ -83,9 +86,10 @@ impl QueryEngine {
         let query_timeout = context.timeouts.query_timeout(&State::Active);
 
         let result = tokio::select! {
-            result = safe_timeout(
+            result = safe_timeout_from(
+                context.query_start,
                 query_timeout,
-                self.client_server_exchange(context, client_request, query_planner),
+                Box::pin(self.client_server_exchange(context, client_request, query_planner)),
             ) => {
                 result
             }
@@ -131,6 +135,43 @@ impl QueryEngine {
                 .await?;
             }
 
+            Some(RewriteResult::Subquery(subquery)) => {
+                // We get to here when detecting a Subquery in a top-level statement; this isn't recursed.
+                // Thus, we should now fetch the Bind, if present, and pass it in (at the top-level),
+                // so that we can supply the very top level's Bind to all sub-levels.
+
+                match multi_step::SubqueryMulti::new(subquery, client_request)
+                    .execute(self, context)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(err @ multi_step::Error::Subquery(_)) => {
+                        if let Some(transaction) = context.transaction.as_mut() {
+                            transaction.set_error();
+                        }
+                        self.error_response(
+                            context,
+                            client_request,
+                            ErrorResponse::unsupported(&err),
+                        )
+                        .await?;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+
+            Some(RewriteResult::InPlace { .. }) | None
+                if let Some(plan) = client_request
+                    .route()
+                    .projection_rewrite_plan
+                    .as_ref()
+                    .filter(|plan| plan.having.is_some())
+                    .cloned() =>
+            {
+                Box::pin(multi_step::HavingMulti::new(self, plan).execute(context, client_request))
+                    .await?;
+            }
+
             Some(RewriteResult::InPlace { .. }) | None => {
                 self.backend
                     .handle_client_request(client_request, &mut self.router, self.streaming)
@@ -140,8 +181,25 @@ impl QueryEngine {
                     && !self.backend.in_copy_mode()
                     && !self.streaming
                 {
-                    let message = self.read_server_message().await?;
-                    self.process_server_message(context, message).await?;
+                    match self.read_server_message().await {
+                        Ok(message) => self.process_server_message(context, message).await?,
+                        Err(err) => {
+                            if err.is_unsupported() {
+                                if let Some(transaction) = context.transaction.as_mut() {
+                                    transaction.set_error();
+                                }
+                                self.error_response(
+                                    context,
+                                    client_request,
+                                    ErrorResponse::unsupported(&err),
+                                )
+                                .await?;
+                                return Ok(());
+                            } else {
+                                return Err(err.into());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -157,140 +215,72 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub(crate) async fn read_server_message(&mut self) -> Result<Message, Error> {
-        Ok(self.backend.read().await?)
+    pub(crate) async fn read_server_message(&mut self) -> Result<Message, BackendError> {
+        self.backend.read().await
     }
 
+    /// Handle a message received from Postgres.
     pub(crate) async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         mut message: Message,
     ) -> Result<(), Error> {
         self.streaming = message.streaming();
-
         let code = message.code();
-        let payload = if code == 'T' {
-            Some(message.payload())
-        } else {
-            None
-        };
-        let has_more_messages = self.backend.has_more_messages();
 
-        if let Some(bytes) = payload
-            && let Some(state) = self.pending_explain.as_mut()
-        {
-            match RowDescription::from_bytes(bytes) {
-                Ok(row_description) => {
-                    state.capture_row_description(row_description);
+        match code {
+            'T' => {
+                if let Some(ref mut state) = self.pending_explain {
+                    if let Ok(rd) = RowDescription::from_bytes(message.payload()) {
+                        state.capture_row_description(rd);
+                    } else {
+                        state.annotated = true;
+                    }
                 }
-                _ => {
+            }
+
+            'D' => {
+                // N.B. Call this before self.cleanup_backend(), since `cleanup_backend()` resets
+                // the router and the command state.
+                self.handle_advisory_locks(&message);
+                self.result_row_counter += 1;
+            }
+
+            'C' => {
+                self.backend
+                    .statement_completed(self.router.command().route());
+                self.emit_explain_rows(context).await?;
+                self.result_row_counter = 0;
+            }
+
+            'E' => {
+                if matches!(self.router.command(), Command::Set { .. }) {
+                    self.set_failed();
+                }
+                self.result_row_counter = 0;
+                if let Some(ref mut state) = self.pending_explain {
                     state.annotated = true;
                 }
-            }
-        }
 
-        if code == 'C' {
-            self.emit_explain_rows(context).await?;
-        }
-
-        if code == 'E' {
-            if let Some(state) = self.pending_explain.as_mut() {
-                state.annotated = true;
+                self.pending_explain = None;
             }
-            self.pending_explain = None;
+
+            'Z' => {
+                // Before `handle_ready_for_query`, which resets the router.
+                self.record_sets(context.in_transaction());
+                let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
+                self.handle_ready_for_query(context, state, &mut message)
+                    .await?;
+            }
+
+            _ => (),
         }
 
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
-            || !has_more_messages
+            || (!self.backend.has_more_messages() && !self.defer_flush)
             || message.streaming();
-
-        // Server finished executing a query.
-        // ReadyForQuery (B)
-        if code == 'Z' {
-            self.stats.query();
-
-            let mut two_pc_auto = false;
-            let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
-
-            match state {
-                TransactionState::Error => {
-                    let error_state = match context.transaction.map(|t| t.transaction_type()) {
-                        Some(TransactionType::ReadOnly) => {
-                            Some(Transaction::new(TransactionType::ErrorReadOnly))
-                        }
-                        Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
-                            Some(Transaction::new(TransactionType::ErrorReadWrite))
-                        }
-                        _ => None,
-                    };
-                    context.transaction = error_state;
-                    if self.two_pc.auto() {
-                        self.end_two_pc(true).await?;
-                        // TODO: this records a 2pc transaction in client
-                        // stats anyway but not on the servers. Is this what we want?
-                        two_pc_auto = true;
-                    }
-                }
-
-                TransactionState::Idle => {
-                    context.transaction = None;
-                    self.backend.end_transaction();
-                }
-
-                TransactionState::InTrasaction => {
-                    if self.two_pc.auto() {
-                        self.end_two_pc(false).await?;
-                        two_pc_auto = true;
-                    }
-                    match context.transaction.map(|t| t.transaction_type()) {
-                        // Query parser is disabled, so the server is responsible for telling us
-                        // we started a transaction.
-                        None => {
-                            context.transaction =
-                                Some(Transaction::new(TransactionType::ReadWrite));
-                        }
-
-                        // Restore transaction state after rollback to savepoint.
-                        Some(TransactionType::ErrorReadOnly) => {
-                            context.transaction = Some(Transaction::new(TransactionType::ReadOnly));
-                        }
-
-                        Some(TransactionType::ErrorReadWrite) => {
-                            context.transaction =
-                                Some(Transaction::new(TransactionType::ReadWrite));
-                        }
-
-                        _ => (),
-                    }
-                }
-            }
-
-            if two_pc_auto {
-                // In auto mode, 2pc transaction was started automatically
-                // without the client's knowledge. We need to return a regular RFQ
-                // message and close the transaction.
-                context.transaction = None;
-                message = ReadyForQuery::in_transaction(false).message();
-            }
-
-            self.stats.idle(context.in_transaction());
-            // N.B. Call this before self.cleanup_backend(), since `cleanup_backend()` resets
-            // the router and the command state.
-            self.advisory_locks
-                .merge(self.router.command().route().advisory_locks());
-
-            if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
-                self.temp_tables.update(change, context.in_transaction());
-            }
-
-            self.check_lock();
-
-            if !context.in_transaction() {
-                self.stats.transaction(two_pc_auto);
-            }
-        }
 
         self.stats.sent(message.len());
 
@@ -299,10 +289,21 @@ impl QueryEngine {
 
         // Pipelined requests only return
         // one ReadyForQuery message.
-        let drop_message = message.code() == 'Z'
+        let mut drop_message = message.code() == 'Z'
             && !context.pipeline.is_done()
             && context.pipeline.is_simple()
             && !context.in_error(); // On error, pipeline is done executing.
+
+        // TODO(jkaczman): these constants can go in a new crate (waiting to rebase off main for the whole stack first)
+        const BIND_COMPLETE_CODE: char = '2';
+        const PARSE_COMPLETE_CODE: char = '1';
+        const NO_DATA_CODE: char = 'n';
+        let not_allowed = &[BIND_COMPLETE_CODE, PARSE_COMPLETE_CODE, NO_DATA_CODE];
+
+        drop_message = drop_message
+            || (context.drop_extended_parse_and_bind
+                && (not_allowed.iter().find(|e| message.code() == **e).is_some()));
+
         if !drop_message {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
@@ -313,10 +314,101 @@ impl QueryEngine {
             }
         }
 
-        if code == 'Z' {
-            self.pending_explain = None;
-        }
         self.hooks.on_server_message(context, &message)?;
+
+        Ok(())
+    }
+
+    async fn handle_ready_for_query(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        state: TransactionState,
+        message: &mut Message,
+    ) -> Result<(), Error> {
+        let now = self
+            .backend
+            .take_last_query_exec_time()
+            .filter(|ready_for_query_at| *ready_for_query_at >= context.query_start)
+            .unwrap_or_else(Instant::now);
+
+        self.pending_explain = None;
+        self.stats.query(now);
+
+        let mut two_pc_auto = false;
+
+        match state {
+            TransactionState::Error => {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                if self.two_pc.auto() {
+                    self.end_two_pc(true).await?;
+                    // TODO: this records a 2pc transaction in client
+                    // stats anyway but not on the servers. Is this what we want?
+                    two_pc_auto = true;
+                }
+            }
+
+            TransactionState::Idle => {
+                context.transaction = None;
+                self.backend.end_transaction();
+            }
+
+            TransactionState::InTransaction => {
+                if self.two_pc.auto() {
+                    self.end_two_pc(false).await?;
+                    two_pc_auto = true;
+                }
+                match context.transaction.map(|t| t.transaction_type()) {
+                    // Query parser is disabled, so the server is responsible for telling us
+                    // we started a transaction.
+                    None => {
+                        context.transaction = Some(Transaction::started_at(
+                            TransactionType::ReadWrite,
+                            context.statement_start.time(),
+                        ));
+                    }
+
+                    // Restore transaction state after rollback to savepoint.
+                    Some(TransactionType::ErrorReadOnly) => {
+                        context.transaction = Some(Transaction::started_at(
+                            TransactionType::ReadOnly,
+                            context.statement_start.time(),
+                        ));
+                    }
+
+                    Some(TransactionType::ErrorReadWrite) => {
+                        context.transaction = Some(Transaction::started_at(
+                            TransactionType::ReadWrite,
+                            context.statement_start.time(),
+                        ));
+                    }
+
+                    _ => (),
+                }
+            }
+        }
+
+        if two_pc_auto {
+            // In auto mode, 2pc transaction was started automatically
+            // without the client's knowledge. We need to return a regular RFQ
+            // message and close the transaction.
+            *message = ReadyForQuery::in_transaction(false).message();
+            context.transaction = None;
+        }
+
+        self.stats.idle(context.in_transaction());
+
+        if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
+            self.temp_tables.update(change, context.in_transaction());
+        }
+
+        // In case the advisory lock was inside a INSERT/UPDATE CTE which didn't return a row.
+        self.handle_advisory_locks(message);
+
+        if !context.in_transaction() {
+            self.stats.transaction(two_pc_auto, now);
+        }
 
         Ok(())
     }
@@ -347,6 +439,25 @@ impl QueryEngine {
         }
 
         Ok(())
+    }
+
+    /// The server ran the client's SETs, so record them on the server.
+    /// The next client is then synced against what the server actually has.
+    fn record_sets(&mut self, in_transaction: bool) {
+        if let Command::Set { params, .. } = self.router.command() {
+            for param in params {
+                self.backend.record_set(param, in_transaction);
+            }
+        }
+    }
+
+    /// A SET failed. Earlier SETs in the same request may have been rolled back,
+    /// or applied on some shards only, so the recorded state can't be trusted.
+    /// Reset the server when it goes back to the pool.
+    #[cold]
+    #[inline(never)]
+    fn set_failed(&mut self) {
+        self.backend.mark_dirty();
     }
 
     pub(super) async fn cleanup_backend(
@@ -387,9 +498,13 @@ impl QueryEngine {
             // Update client params with values
             // sent from the server using ParameterStatus(B) messages.
             if !changed_params.is_empty() {
-                for (name, value) in changed_params.iter() {
+                // The client's own SET statements are the source of truth for its identity.
+                for (name, value) in changed_params
+                    .iter()
+                    .filter(|(name, _)| !is_session_identity(name.as_str()))
+                {
                     debug!("setting client's \"{}\" to {}", name, value);
-                    context.params.insert(name.clone(), value.clone());
+                    context.params.set(name, value.clone());
                 }
                 self.comms.update_params(context.params);
             }
@@ -504,10 +619,14 @@ impl QueryEngine {
             && !context.rollback
             && client_request.is_executable()
             && !client_request.route().rollback_savepoint()
+            && client_request
+                .ast
+                .as_ref()
+                .is_some_and(|ast| ast.ast.stmts().next().is_some())
         {
             let error = ErrorResponse::in_failed_transaction();
 
-            self.error_response(context, client_request, error).await?;
+            self.send_error_response(context, error).await?;
 
             Ok(false)
         } else {
@@ -521,13 +640,22 @@ impl QueryEngine {
         client_request: &ClientRequest,
         mut error: ErrorResponse,
     ) -> Result<(), Error> {
-        error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
-
         // Attach query context.
         if error.detail.is_none() {
             let query = client_request.query()?.map(|q| q.query().to_owned());
             error.detail = Some(query.unwrap_or_default());
         }
+
+        self.send_error_response(context, error).await
+    }
+
+    /// Send an error without adding fields to PostgreSQL-compatible responses.
+    pub(super) async fn send_error_response(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        error: ErrorResponse,
+    ) -> Result<(), Error> {
+        error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
 
         self.hooks.on_engine_error(context, &error)?;
 

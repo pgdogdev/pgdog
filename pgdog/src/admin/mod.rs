@@ -12,6 +12,7 @@ pub(crate) mod force_reload;
 pub(crate) mod healthcheck;
 pub(crate) mod maintenance_mode;
 pub(crate) mod named_row;
+pub(crate) mod options;
 pub(crate) mod parser;
 pub(crate) mod pause;
 pub(crate) mod prelude;

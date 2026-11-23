@@ -4,6 +4,8 @@
 #       correctly.
 #
 export NODE_ID=pgdog-dev-1
+# override default 60s timeout in tests
+export PGDOG_SHUTDOWN_TIMEOUT=${PGDOG_SHUTDOWN_TIMEOUT:-10000}
 COMMON_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 function wait_for_pgdog() {
     echo "Waiting for PgDog"

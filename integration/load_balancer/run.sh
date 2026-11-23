@@ -15,7 +15,7 @@ echo "[load_balancer] Using PGDOG_BIN=${PGDOG_BIN}"
 echo "[load_balancer] LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}"
 echo "[load_balancer] PGDOG_PLUGIN_FEATURES=${PGDOG_PLUGIN_FEATURES:-}"
 
-docker compose down 2>/dev/null || true
+docker compose down -v 2>/dev/null || true
 
 for p in 45000 45001 45002; do
     container=$(docker ps -q --filter "publish=${p}")
@@ -73,5 +73,5 @@ fi
 
 stop_pgdog
 
-docker compose down
+docker compose down -v
 popd

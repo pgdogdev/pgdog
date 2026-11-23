@@ -206,7 +206,7 @@ impl Parser {
         let sql = sql.replace(";", "").to_lowercase();
         let mut iter = sql.split(" ");
 
-        Ok(match iter.next().ok_or(Error::Syntax)?.trim() {
+        Ok(match iter.next().ok_or_else(|| Error::Syntax)?.trim() {
             "pause" | "resume" => ParseResult::Pause(Pause::parse(&sql)?),
             "shutdown" => ParseResult::Shutdown(Shutdown::parse(&sql)?),
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
@@ -216,19 +216,19 @@ impl Parser {
             "healthcheck" => ParseResult::Healthcheck(Healthcheck::parse(&sql)?),
             // These are not covered by the show handler above
             // because they are not valid SQL syntax.
-            "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
+            "show" => match iter.next().ok_or_else(|| Error::Syntax)?.trim() {
                 // These two are duplicated because they support selecting columns from their output.
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
 
-                "server" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                "server" => match iter.next().ok_or_else(|| Error::Syntax)?.trim() {
                     "memory" => ParseResult::ShowServerMemory(ShowServerMemory::parse(&sql)?),
                     command => {
                         debug!("unknown admin show server command: '{}'", command);
                         return Err(Error::Syntax);
                     }
                 },
-                "client" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                "client" => match iter.next().ok_or_else(|| Error::Syntax)?.trim() {
                     "memory" => ParseResult::ShowClientMemory(ShowClientMemory::parse(&sql)?),
                     command => {
                         debug!("unknown admin show client command: '{}'", command);
@@ -241,7 +241,7 @@ impl Parser {
                     return Err(Error::Syntax);
                 }
             },
-            "reset" => match iter.next().ok_or(Error::Syntax)?.trim() {
+            "reset" => match iter.next().ok_or_else(|| Error::Syntax)?.trim() {
                 "prepared" => ParseResult::ResetPrepared(ResetPrepared::parse(&sql)?),
                 "query_cache" => ParseResult::ResetQueryCache(ResetQueryCache::parse(&sql)?),
                 "stats" => ParseResult::ResetStats(ResetStats::parse(&sql)?),
@@ -250,7 +250,7 @@ impl Parser {
                     return Err(Error::Syntax);
                 }
             },
-            "setup" => match iter.next().ok_or(Error::Syntax)?.trim() {
+            "setup" => match iter.next().ok_or_else(|| Error::Syntax)?.trim() {
                 "schema" => ParseResult::SetupSchema(SetupSchema::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);

@@ -73,6 +73,16 @@ pub struct Counts {
     pub rows_updated: usize,
     /// Rows reported affected by DELETE command tags.
     pub rows_deleted: usize,
+    /// Rows reported by COPY command tags.
+    pub rows_copied: usize,
+    /// Tables created by successfully executed parsed statements.
+    pub tables_created: usize,
+    /// Tables dropped by successfully executed parsed statements.
+    pub tables_dropped: usize,
+    /// Successfully executed DDL commands identified by the query parser.
+    pub ddl_commands: usize,
+    /// Successfully executed DML commands identified by the query parser.
+    pub dml_commands: usize,
     /// Checkout timeouts.
     pub checkout_timeouts: usize,
 }
@@ -113,6 +123,11 @@ impl Sub for Counts {
             rows_inserted: self.rows_inserted.saturating_sub(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_sub(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_sub(rhs.rows_deleted),
+            rows_copied: self.rows_copied.saturating_sub(rhs.rows_copied),
+            tables_created: self.tables_created.saturating_sub(rhs.tables_created),
+            tables_dropped: self.tables_dropped.saturating_sub(rhs.tables_dropped),
+            ddl_commands: self.ddl_commands.saturating_sub(rhs.ddl_commands),
+            dml_commands: self.dml_commands.saturating_sub(rhs.dml_commands),
             checkout_timeouts: self.checkout_timeouts.saturating_sub(rhs.checkout_timeouts),
         }
     }
@@ -154,6 +169,11 @@ impl Add for Counts {
             rows_inserted: self.rows_inserted.saturating_add(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_add(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_add(rhs.rows_deleted),
+            rows_copied: self.rows_copied.saturating_add(rhs.rows_copied),
+            tables_created: self.tables_created.saturating_add(rhs.tables_created),
+            tables_dropped: self.tables_dropped.saturating_add(rhs.tables_dropped),
+            ddl_commands: self.ddl_commands.saturating_add(rhs.ddl_commands),
+            dml_commands: self.dml_commands.saturating_add(rhs.dml_commands),
             checkout_timeouts: self.checkout_timeouts.saturating_add(rhs.checkout_timeouts),
         }
     }
@@ -197,6 +217,11 @@ impl Div<usize> for Counts {
             rows_inserted: self.rows_inserted.checked_div(rhs).unwrap_or(0),
             rows_updated: self.rows_updated.checked_div(rhs).unwrap_or(0),
             rows_deleted: self.rows_deleted.checked_div(rhs).unwrap_or(0),
+            rows_copied: self.rows_copied.checked_div(rhs).unwrap_or(0),
+            tables_created: self.tables_created.checked_div(rhs).unwrap_or(0),
+            tables_dropped: self.tables_dropped.checked_div(rhs).unwrap_or(0),
+            ddl_commands: self.ddl_commands.checked_div(rhs).unwrap_or(0),
+            dml_commands: self.dml_commands.checked_div(rhs).unwrap_or(0),
             checkout_timeouts: self.checkout_timeouts.checked_div(rhs).unwrap_or(0),
         }
     }
@@ -299,4 +324,44 @@ pub struct State {
     pub force_close: usize,
     // LSN stats.
     pub lsn_stats: LsnStats,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn statement_counts(value: usize) -> Counts {
+        Counts {
+            rows_copied: value,
+            tables_created: value,
+            tables_dropped: value,
+            ddl_commands: value,
+            dml_commands: value,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn statement_metrics_support_count_arithmetic() {
+        let sum = statement_counts(4) + statement_counts(2);
+        assert_eq!(sum.rows_copied, 6);
+        assert_eq!(sum.tables_created, 6);
+        assert_eq!(sum.tables_dropped, 6);
+        assert_eq!(sum.ddl_commands, 6);
+        assert_eq!(sum.dml_commands, 6);
+
+        let difference = statement_counts(4) - statement_counts(2);
+        assert_eq!(difference.rows_copied, 2);
+        assert_eq!(difference.tables_created, 2);
+        assert_eq!(difference.tables_dropped, 2);
+        assert_eq!(difference.ddl_commands, 2);
+        assert_eq!(difference.dml_commands, 2);
+
+        let average = statement_counts(4) / 2;
+        assert_eq!(average.rows_copied, 2);
+        assert_eq!(average.tables_created, 2);
+        assert_eq!(average.tables_dropped, 2);
+        assert_eq!(average.ddl_commands, 2);
+        assert_eq!(average.dml_commands, 2);
+    }
 }

@@ -21,7 +21,7 @@ impl Command for Probe {
     }
 
     fn parse(sql: &str) -> Result<Self, Error> {
-        let url = Url::parse(sql.split(" ").last().ok_or(Error::Empty)?)?;
+        let url = Url::parse(sql.split(" ").last().ok_or_else(|| Error::Empty)?)?;
         Ok(Self { url })
     }
 

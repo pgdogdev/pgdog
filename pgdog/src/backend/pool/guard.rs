@@ -66,6 +66,20 @@ impl Guard {
         self.locked
     }
 
+    /// Cancel the query running on this server, if any.
+    pub(in crate::backend) async fn cancel_query(&self) -> Result<(), crate::backend::Error> {
+        if let Some(ref server) = self.server {
+            Server::cancel(
+                server.addr(),
+                server.key().clone(),
+                self.pool.config().cancel_timeout,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
     /// Rollback any unfinished transactions and check the connection
     /// back into the pool.
     fn cleanup(&mut self) {
@@ -104,6 +118,8 @@ mod test {
     use pgdog_config::prepared_statements::PreparedStatementsConfig;
     use tokio::time::Instant;
 
+    use crate::net::{FrontendPid, Parameters};
+    use crate::parameters::ParameterStore;
     use crate::util::{safe_sleep, safe_timeout};
     use crate::{
         backend::{
@@ -174,6 +190,44 @@ mod test {
 
         guard.mark_dirty(true);
         drop(guard);
+    }
+
+    async fn identity(guard: &mut Guard) -> String {
+        let identity: Vec<String> = guard
+            .fetch_all("SELECT session_user || ',' || current_user")
+            .await
+            .unwrap();
+        identity.into_iter().next().expect("one row")
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_dirty_resets_session_identity() {
+        crate::logger();
+        let pool = pool();
+        let role = format!("pgdog_cleanup_role_{}", std::process::id());
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        guard.execute(format!("CREATE ROLE {role}")).await.unwrap();
+        guard.execute(format!("SET ROLE {role}")).await.unwrap();
+        assert_eq!(identity(&mut guard).await, format!("pgdog,{role}"));
+        guard.mark_dirty(true);
+        drop(guard);
+
+        // Our test pool is only 1 connection.
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        assert_eq!(identity(&mut guard).await, "pgdog,pgdog");
+
+        guard
+            .execute(format!("SET SESSION AUTHORIZATION {role}"))
+            .await
+            .unwrap();
+        assert_eq!(identity(&mut guard).await, format!("{role},{role}"));
+        guard.mark_dirty(true);
+        drop(guard);
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        assert_eq!(identity(&mut guard).await, "pgdog,pgdog");
+        guard.execute(format!("DROP ROLE {role}")).await.unwrap();
     }
 
     #[tokio::test]
@@ -760,6 +814,40 @@ mod test {
         assert_eq!(
             state.force_close, 1,
             "force_close should be incremented when connection has interrupted send"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bad_param_sync() {
+        let pool = pool();
+        let mut server = pool.get_test().await.unwrap();
+
+        let store = ParameterStore::new(Parameters::from(
+            [("application_name", "random"), ("statement_timeout", "sff")].as_slice(),
+        ));
+
+        server
+            .link_client(FrontendPid::new(), &store, None)
+            .await
+            .expect_err("statement_timeout has an invalid value");
+
+        drop(server);
+
+        let mut server = pool.get_test().await.unwrap();
+        // Default, should revert application_name change.
+        let application_name: Vec<String> =
+            server.fetch_all("SHOW application_name").await.unwrap();
+        assert_eq!(application_name[0], "PgDog");
+
+        assert!(server.params().get("statement_timeout").is_none());
+        assert_eq!(
+            server
+                .params()
+                .get("application_name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "PgDog"
         );
     }
 }

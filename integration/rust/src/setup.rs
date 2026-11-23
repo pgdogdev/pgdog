@@ -44,6 +44,10 @@ pub async fn connections_sqlx() -> Vec<Pool<Postgres>> {
     pools
 }
 
+pub async fn connection_sqlx_testing_direct() -> Pool<Postgres> {
+    connection_sqlx_direct_db("testing").await
+}
+
 pub async fn connection_sqlx_direct() -> Pool<Postgres> {
     connection_sqlx_direct_db("pgdog").await
 }

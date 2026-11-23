@@ -172,7 +172,7 @@ impl Address {
 
         socket_addrs
             .next()
-            .ok_or(Error::DnsResolutionFailed(self.host.clone()))
+            .ok_or_else(|| Error::DnsResolutionFailed(self.host.clone()))
     }
 
     /// A replacement for [`PartialEq`] which accounts for
@@ -242,10 +242,12 @@ impl TryFrom<Url> for Address {
     type Error = ();
 
     fn try_from(value: Url) -> Result<Self, Self::Error> {
-        let host = value.host().ok_or(())?.to_string();
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let host = value.host().ok_or_else(|| ())?.to_string();
         let port = value.port().unwrap_or(5432);
         let user = value.username().to_string();
-        let password = value.password().ok_or(())?.to_string();
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let password = value.password().ok_or_else(|| ())?.to_string();
         let database_name = value.path().replace("/", "").to_string();
 
         // A URL says nothing about role; fall through to `Role::Auto`

@@ -38,7 +38,7 @@ impl Statement {
         for param in &self.params {
             let param = bind
                 .parameter(*param as usize - 1)?
-                .ok_or(Error::MissingParameter(*param))?;
+                .ok_or_else(|| Error::MissingParameter(*param))?;
             new.push_param(param.parameter().clone(), param.format());
         }
 
@@ -50,7 +50,7 @@ impl Statement {
     /// Use the same protocol as the original statement.
     ///
     pub(crate) fn build_request(&self, request: &ClientRequest) -> Result<ClientRequest, Error> {
-        let query = request.query()?.ok_or(Error::EmptyQuery)?;
+        let query = request.query()?.ok_or_else(|| Error::EmptyQuery)?;
         let params = request.parameters()?;
 
         let mut request = ClientRequest::default();
@@ -165,7 +165,7 @@ impl Inner {
                     if let Ok(Value::Placeholder(number)) = Value::try_from(value) {
                         let param = params
                             .and_then(|p| p.parameter(number as usize - 1).transpose())
-                            .ok_or(Error::MissingParameter(number as u16))??;
+                            .ok_or_else(|| Error::MissingParameter(number as u16))??;
                         bind.push_param(param.parameter().clone(), param.format());
                         values.push(mem.make_param_ref(bind.params_raw().len() as _).uncast());
                     } else {
@@ -173,7 +173,9 @@ impl Inner {
                     }
                 } else {
                     // This column wasn't changed, get the value from the select
-                    let value = data_row.get_raw(idx).ok_or(Error::MissingColumn(idx))?;
+                    let value = data_row
+                        .get_raw(idx)
+                        .ok_or_else(|| Error::MissingColumn(idx))?;
 
                     if value.is_null() {
                         bind.push_param(Parameter::new_null(), Format::Text);

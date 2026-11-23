@@ -5,6 +5,7 @@ use super::*;
 use crate::backend::ShardingSchema;
 use crate::frontend::client::QueryTimestamps;
 use crate::frontend::router::parser::StatementRewriteContext;
+use crate::frontend::router::parser::rewrite::statement::insert::InsertSplitPlan;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
@@ -42,7 +43,11 @@ fn split_plan(sql: &str, extended: bool, prepared: bool) -> RewritePlan {
             .expect("rewrite succeeds");
         ast
     });
-    assert_eq!(plan.insert_split.len(), 2);
+    assert!(matches!(
+        &plan.insert_split,
+        Some(InsertSplitPlan::Values(splits))
+            if splits.len() == 2
+    ));
     plan
 }
 

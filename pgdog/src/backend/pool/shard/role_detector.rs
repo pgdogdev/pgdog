@@ -88,11 +88,11 @@ mod test {
         })
     }
 
-    fn set_lsn_stats(shard: &Shard, index: usize, replica: bool, lsn: i64) {
+    fn set_lsn_stats(shard: &Shard, index: usize, replica: bool, lsn: u64) {
         let pools = shard.pools();
         let stats: LsnStats = StatsLsnStats {
             replica,
-            lsn: Lsn::from_i64(lsn),
+            lsn: Lsn::from_u64(lsn),
             offset_bytes: lsn,
             fetched: SystemTime::now(),
             ..Default::default()

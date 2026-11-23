@@ -1,6 +1,7 @@
 //! Manage connections to the servers.
 
 pub(crate) mod address;
+pub(crate) mod cancel;
 pub(crate) mod cleanup;
 pub(crate) mod cluster;
 pub(crate) mod cluster_metrics;
@@ -50,6 +51,7 @@ pub(crate) use stats::Stats;
 
 pub use pgdog_config::pool::PoolConfig as Config;
 
+use cancel::CancelGuard;
 use comms::Comms;
 use connection_creation::ConnectionArgs;
 use inner::Inner;

@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 pushd "${SCRIPT_DIR}" >/dev/null
 
-docker compose down && docker compose up -d
+docker compose down -v && docker compose up -d
 for port in 15432 15433 15434 15435; do
     until PGPASSWORD=pgdog pg_isready -h 127.0.0.1 -p "${port}" -U pgdog -d postgres -q; do
         sleep 1
@@ -83,7 +83,7 @@ dump_deadlock_diagnostics() {
             "SELECT slot_name, active, confirmed_flush_lsn, pg_current_wal_lsn() - confirmed_flush_lsn AS lag_bytes FROM pg_replication_slots" || true
     done
     kill -TERM "${PGDOG_PID}" 2>/dev/null; wait "${PGDOG_PID}" 2>/dev/null || true
-    docker compose down
+    docker compose down -v
     exit 1
 }
 
@@ -158,5 +158,5 @@ done
 
 echo "OK — no deadlock observed (run again if flaky)"
 kill -TERM "${PGDOG_PID}" 2>/dev/null; wait "${PGDOG_PID}" 2>/dev/null || true
-docker compose down
+docker compose down -v
 exit 0

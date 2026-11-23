@@ -3,6 +3,135 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-11-19
+
+**OS version**: [v0.1.66](CHANGELOG.md#v0166)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-19`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-19` |
+
+#### Features
+
+- IAP authentication (JWT) for the control plane (in production on GCP)
+- QoS comment now supports custom regex to detect `unit`
+- Control plane metrics can now be filtered by user, database, and role
+- Added `host`, `port`, and `workers` (CPU threads) configs to `control.toml`
+- QoS page in the control plane UI now supports pagination to render thousands of unit graphs
+- Log warning if control plane authentication is disabled
+
+#### Bug fixes
+
+- Command queue would use a lot of memory during query cancellation request bursts
+- Control plane memory allocator will now return unused memory back to the operating system
+- Control plane logging improvements (it was too verbose by default)
+- Resharding cutover would incorrectly wait for stale instances, blocking cutover if a PgDog process has recently rebooted
+
+### v2026-11-12
+
+**OS version**: [v0.1.65](CHANGELOG.md#v0165)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-12`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-12` |
+
+#### Features
+
+- Add MCP server with tools to fetch instance status, metrics, logs and configuration
+- Add support for starting resharding from the control plane UI
+- Add support for cutting over traffic during resharding from the control plane UI
+
+#### Bug fixes
+
+- Make Aurora autodiscovery ignore instances from other regions (other region than specified in the seed `[[databases]]` entries). It wasn't possible to construct correct URLs since regions use hashes and not names, so it would previously create unroutable database entries in the config.
+
+### v2026-11-05
+
+**OS version**: [v0.1.64](CHANGELOG.md#v0164)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-05`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-05` |
+
+#### Security
+
+- The control plane UI would show passwords for users, which could trigger security scanners. We redact all passwords now, just to be extra safe.
+
+#### Features
+
+- **Breaking** Removed Redis backups. Use latest `helm-ee` chart version when upgrading (v0.4.0). Redis backups were not very useful and could cause intermittent timeout errors in the logs when storing too many metrics.
+- Maintenance mode can now be persisted in the Raft log, making it durable between control plane & PgDog restarts. This guarantees that PgDog does not allow traffic on the database if one of its pods is restarted by Kube. To use, enable Raft in the control plane and set:
+
+```toml
+# pgdog.toml
+[control]
+endpoint = "..."
+token = "..."
+required = true
+```
+
+### v2026-11-02
+
+**OS version**: [v0.1.63](CHANGELOG.md#v0163)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-02`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-02` |
+
+#### Features
+
+- Enterprise Docker images now use open source base images
+- Unify the resharding UI and add missing replication and resharding tasks
+- Use PGO (profile-guided optimization) for Docker images, which improves performance by 6% on x86 and 17% on ARM
+
+#### Bug fixes
+
+- Autodiscovery would not detect hostname changes during AWS RDS blue/green failover
+- Increase default Redis timeout on the control plane and make it configurable
+
+### v2026-10-16
+
+**OS version**: [v0.1.62](CHANGELOG.md#v0162)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-10-16`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-10-16` |
+
+#### Features
+
+- **Experimental** QoS write backoff: make clients sleep for a configurable amount of time before starting a transaction on the primary. This allows to reduce the write load on the database, allowing the vacuum to catch up.
+
+#### Bug fixes
+
+- Deployments with many RDS databases would hit RDS API limits. Control plane can now accept a list of tags which would cause it to only fetch data from those databases instead.
+
+### v2026-10-09
+
+**OS version**: [v0.1.61](CHANGELOG.md#v0161)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-10-09`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-10-09` |
+
+#### Features
+
+- Show the current value of all globally distributed sequences in the control plane
+- Allow to supply the control plane authentication token via environment variable (`helm-ee` chart supports this, too)
+- Show replication state during resharding in the control plane
+
+#### Bug fixes
+
+- Pool autoscaling would reload the configuration unnecessarily when pool sizes didn't change
+- PgDog better handles shutdown during resharding by sending final updates to the control plane
+- Better preserve resharding tasks state across PgDog restarts so the information in control plane information isn't lost
+- Autodiscovery would use delayed interval, causing `check_interval` to be larger than configured
+
 ### v2026-09-17
 
 **OS version**: [v0.1.59](CHANGELOG.md#v0159)
@@ -19,7 +148,6 @@ the most optimal way to share those changes.
 - Add staging banner to the control plane UI, to let operators know they are _not_ using the production deployment of the control plane
 - Show `COPY_DATA` (resharding) tasks in the control plane UI
 - Add checkout timeout metric graph and Incident.io alert trigger
-
 
 #### Bug fixes
 

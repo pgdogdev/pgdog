@@ -1,8 +1,12 @@
-use pg_raw_parse::{ConstValue, Node, make, nodes};
+use pg_raw_parse::{ConstValue, Node, make, nodes, walk};
 
-use crate::frontend::router::parser::Column;
+use crate::backend::schema::Schema;
+use crate::frontend::router::parser::aggregate::AggregateFunction;
+use crate::frontend::router::parser::{Column, Function, OrderBy};
 
-use super::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan};
+use super::projection::{
+    OrderByHelper, OrderBySource, ProjectionRewritePlan, column_name, is_star, target_output_name,
+};
 
 impl OrderBySource {
     fn name(&self) -> &str {
@@ -10,21 +14,6 @@ impl OrderBySource {
             Self::Column(name) | Self::Vector(name) => name,
         }
     }
-}
-
-fn column_name(column: &nodes::ColumnRef) -> Option<&str> {
-    column
-        .fields()
-        .into_iter()
-        .next_back()
-        .and_then(Node::as_str)
-}
-
-fn is_star(column: &nodes::ColumnRef) -> bool {
-    matches!(
-        column.fields().into_iter().next_back(),
-        Some(Node::A_Star(_))
-    )
 }
 
 /// Compare complete column references so `a.price` and `b.price` remain distinct.
@@ -57,16 +46,6 @@ fn star_covers(star: &nodes::ColumnRef, column: &nodes::ColumnRef) -> bool {
                         .map(Node::as_str))))
 }
 
-fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
-    if let Some(alias) = target.name() {
-        return Some(alias);
-    }
-    match target.val() {
-        Node::ColumnRef(column) if !is_star(column) => column_name(column),
-        _ => None,
-    }
-}
-
 fn single_relation(select: &nodes::SelectStmtMut<'_, '_>) -> bool {
     let from = select.from_clause();
     from.len() == 1 && matches!(from.first(), Some(Node::RangeVar(_)))
@@ -78,9 +57,6 @@ fn explicit_output_name(
     name: &str,
     unqualified: bool,
 ) -> Option<String> {
-    if unqualified && target.name() == Some(name) {
-        return Some(name.to_owned());
-    }
     let Node::ColumnRef(projected) = target.val() else {
         return None;
     };
@@ -102,6 +78,10 @@ fn unique_output_name(
 ) -> Option<String> {
     let name = column_name(column)?;
     let unqualified = column.fields().len() == 1;
+
+    if unqualified && select.target_list().iter().any(|t| t.name() == Some(name)) {
+        return Some(name.to_owned());
+    }
 
     let mut star_match = false;
     let mut output = None;
@@ -154,6 +134,31 @@ fn push_helper(
     });
 }
 
+pub(super) fn is_computed_sort_key(sort_key: Node) -> bool {
+    match sort_key {
+        Node::ColumnRef(_) => false,
+        Node::A_Const(sort_constant) => {
+            !matches!(sort_constant.val(), Some(ConstValue::Integer(_)))
+        }
+        Node::A_Expr(sort_expression) => {
+            sort_expression.name().iter().next().and_then(Node::as_str) != Some("<->")
+        }
+        _ => true,
+    }
+}
+
+pub(super) fn contains_aggregate(sort_key: Node, schema: &Schema) -> bool {
+    let mut found_aggregate = false;
+
+    walk::walk(sort_key, |sort_key_node| {
+        found_aggregate |= Function::try_from(sort_key_node).is_ok_and(|sort_key_function| {
+            AggregateFunction::from_name(sort_key_function.name, schema).is_some()
+        });
+    });
+
+    found_aggregate
+}
+
 /// Project missing or ambiguous sort values so PgDog can merge shard results.
 /// Helpers use aliases rather than AST target positions because `*` expands
 /// only in Postgres.
@@ -163,8 +168,7 @@ pub(super) fn rewrite_select<'a>(
     plan: &mut ProjectionRewritePlan,
 ) {
     let mut helpers = Vec::new();
-    let mut sort_position = 0;
-    for sort in select.sort_clause() {
+    for (current_sort_position, sort) in select.sort_clause().into_iter().enumerate() {
         let node = sort.node();
         let source = match node {
             Node::ColumnRef(column) => {
@@ -178,6 +182,9 @@ pub(super) fn rewrite_select<'a>(
                     .find_map(|node| Column::try_from(node).ok())
                     .map(|column| OrderBySource::Vector(column.name.to_owned()))
             }
+            sort_key if is_computed_sort_key(sort_key) => Some(OrderBySource::Column(
+                OrderBy::helper_column_name(current_sort_position),
+            )),
             _ => None,
         };
         let supported = source.is_some()
@@ -186,9 +193,6 @@ pub(super) fn rewrite_select<'a>(
         if !supported {
             continue;
         }
-
-        let current_sort_position = sort_position;
-        sort_position += 1;
 
         match node {
             Node::ColumnRef(column) => match unique_output_name(select, column) {
@@ -201,7 +205,7 @@ pub(super) fn rewrite_select<'a>(
                     false,
                 ),
                 None => {
-                    let alias = format!("__pgdog_order_col{current_sort_position}");
+                    let alias = OrderBy::helper_column_name(current_sort_position);
                     helpers.push(mem.make_res_target(
                         Some(&alias),
                         mem.empty(),
@@ -216,8 +220,8 @@ pub(super) fn rewrite_select<'a>(
                     );
                 }
             },
-            Node::A_Expr(_) if source.is_some() => {
-                let alias = format!("__pgdog_order_col{current_sort_position}");
+            _ if source.is_some() => {
+                let alias = OrderBy::helper_column_name(current_sort_position);
                 helpers.push(mem.make_res_target(
                     Some(&alias),
                     mem.empty(),
@@ -226,7 +230,7 @@ pub(super) fn rewrite_select<'a>(
                 push_helper(
                     plan,
                     current_sort_position,
-                    source.expect("vector sorts always have a source"),
+                    source.expect("expression and vector sorts always have a source"),
                     alias,
                     true,
                 );
@@ -268,6 +272,28 @@ mod tests {
     }
 
     #[test]
+    fn adds_helper_column_for_case_sort_key() {
+        let (sql, plan) = rewrite(
+            "SELECT id, name FROM tenant_items ORDER BY CASE name WHEN 'pay' THEN 0 ELSE 1 END, id",
+        );
+
+        assert_eq!(
+            sql,
+            "SELECT id, name, CASE name WHEN 'pay' THEN 0 ELSE 1 END AS __pgdog_order_col0 \
+             FROM tenant_items ORDER BY CASE name WHEN 'pay' THEN 0 ELSE 1 END, id"
+        );
+        assert_eq!(
+            plan.order_by_helpers,
+            [OrderByHelper {
+                sort_position: 0,
+                source: OrderBySource::Column("__pgdog_order_col0".into()),
+                alias: "__pgdog_order_col0".into(),
+                injected: true,
+            }]
+        );
+    }
+
+    #[test]
     fn projects_missing_sort_column() {
         let (sql, plan) = rewrite("SELECT id FROM products ORDER BY price");
 
@@ -298,6 +324,27 @@ mod tests {
     #[test]
     fn skips_sort_by_output_alias() {
         let (sql, plan) = rewrite("SELECT price AS item_price FROM products ORDER BY item_price");
+
+        assert!(!sql.contains("__pgdog_order_col"));
+        assert!(plan.is_noop());
+    }
+
+    #[test]
+    fn skips_sort_by_output_alias_in_star_select() {
+        for star in ["*", "persons.*"] {
+            let (sql, plan) = rewrite(&format!(
+                "SELECT {star}, length(email) AS score FROM persons ORDER BY score"
+            ));
+
+            assert!(!sql.contains("__pgdog_order_col"));
+            assert!(plan.is_noop());
+        }
+    }
+
+    #[test]
+    fn skips_sort_by_output_alias_shadowing_input_column() {
+        let (sql, plan) =
+            rewrite("SELECT price AS item_price, x AS price FROM products ORDER BY price");
 
         assert!(!sql.contains("__pgdog_order_col"));
         assert!(plan.is_noop());

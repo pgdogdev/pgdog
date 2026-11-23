@@ -8,7 +8,7 @@ use std::mem;
 use std::sync::Arc;
 
 use crate::{
-    frontend::router::{Ast, RoutingComment},
+    frontend::router::{Ast, RoutingComment, parser::comment::CommentSpans},
     net::{
         Error, Flush, Parse, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
@@ -35,6 +35,10 @@ pub(crate) struct ClientRequest {
     pub(in crate::frontend) cached: bool,
     /// Any routing comment that was present on the client's query
     pub(in crate::frontend) routing_comment: Option<Arc<RoutingComment>>,
+    /// Where the edge comments sit in the query text, recorded when the query
+    /// parser ran. Positions refer to the text as parsed, before any rewrite.
+    #[allow(dead_code)] // used by ee
+    pub(crate) comment_spans: CommentSpans,
     /// Last Parse we received.
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
@@ -65,6 +69,7 @@ impl ClientRequest {
             ast: None,
             cached: false,
             routing_comment: None,
+            comment_spans: CommentSpans::default(),
             last_parse: None,
             anonymous_client_params: None,
         }
@@ -101,6 +106,22 @@ impl ClientRequest {
         self.messages.clear();
         self.route = None;
         self.ast = None;
+    }
+
+    /// Discard messages before [`crate::net::Sync`] after an extended protocol error.
+    /// Return true if the entire request was discarded.
+    pub(crate) fn discard_until_sync(&mut self) -> bool {
+        let discard = self
+            .messages
+            .iter()
+            .position(|message| message.code() == 'S')
+            .unwrap_or(self.messages.len());
+        self.messages.drain(..discard);
+
+        // Don't replay Parse in a failed transaction.
+        self.last_parse = None;
+
+        self.messages.is_empty()
     }
 
     /// We received a complete request and we are ready to
@@ -219,12 +240,19 @@ impl ClientRequest {
         let mut messages = self.messages.clone();
         messages.retain(|m| m.code() != 'd');
 
+        self.with_messages(messages)
+    }
+
+    /// The same request, sending these messages instead.
+    pub(crate) fn with_messages(&self, messages: Vec<ProtocolMessage>) -> Self {
         Self {
             messages,
             route: self.route.clone(),
             ast: self.ast.clone(),
             cached: self.cached,
             routing_comment: self.routing_comment.clone(),
+            // Positions belong to the original text, not these messages.
+            comment_spans: CommentSpans::default(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
         }
@@ -411,6 +439,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             ast: None,
             cached: false,
             routing_comment: None,
+            comment_spans: CommentSpans::default(),
             last_parse: None,
             anonymous_client_params: None,
         }

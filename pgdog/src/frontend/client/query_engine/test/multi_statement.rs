@@ -16,7 +16,7 @@ fn assert_mixed_set_error(error: ErrorResponse) {
     );
 }
 
-async fn assert_connection_usable(client: &mut TestClient) {
+pub(super) async fn assert_connection_usable(client: &mut TestClient) {
     client.send_simple(Query::new("SELECT 1")).await;
     let messages = client.read_until('Z').await.unwrap();
     assert!(

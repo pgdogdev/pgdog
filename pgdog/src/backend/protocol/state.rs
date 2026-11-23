@@ -190,7 +190,10 @@ impl ProtocolState {
             }
             _ => (),
         };
-        let in_queue = self.queue.pop_front().ok_or(Error::ProtocolOutOfSync)?;
+        let in_queue = self
+            .queue
+            .pop_front()
+            .ok_or_else(|| Error::ProtocolOutOfSync)?;
         let action = match in_queue {
             // The queue is waiting for the server to send ReadyForQuery,
             // but it sent something else. That means the execution pipeline

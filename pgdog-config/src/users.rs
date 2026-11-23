@@ -7,8 +7,8 @@ use tracing::warn;
 
 use super::core::Config;
 use super::pooling::PoolerMode;
-use crate::RoleConfig;
 use crate::util::random_string;
+use crate::{AuthType, ReadWriteSplit, RoleConfig};
 use schemars::JsonSchema;
 
 /// Plugins are dynamically loaded at PgDog startup. These settings control which plugins are loaded.
@@ -51,10 +51,7 @@ impl Users {
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.passwords().is_empty() {
-                if !config.general.passthrough_auth()
-                    && user.identity.is_none()
-                    && !config.general.auth_type.external_token()
-                {
+                if user.requires_password(config) {
                     warn!(
                         r#"user "{}" (database "{}") doesn't have a password, while passthrough auth, external token, and mTLS auth are disabled"#,
                         user.name, user.database,
@@ -72,6 +69,7 @@ impl Users {
                         if min_pool_size > 0
                             && user.server_password.is_none()
                             && user.server_auth == ServerAuth::Password
+                            && !config.general.passthrough_auth()
                         {
                             warn!(
                                 r#"user "{}" (database "{}") does not have a password configured, PgDog cannot connect to the server to maintain "min_pool_size" of {}, setting it to 0"#,
@@ -163,17 +161,36 @@ impl Users {
     /// Remove user with the same name and database.
     ///
     /// Add new user in its place.
-    pub fn add_or_replace(&mut self, user: User) {
+    pub fn add_or_replace(&mut self, user: &User) {
         self.users
             .retain(|existing| !(existing.name == user.name && existing.database == user.database));
-        self.users.push(user);
+        self.users.push(user.clone());
     }
 
-    pub fn find(&self, user: &User) -> Option<User> {
+    pub fn find(&self, user: &PassthroughUser) -> Option<User> {
         self.users
             .iter()
             .find(|existing| existing.name == user.name && existing.database == user.database)
             .cloned()
+    }
+}
+
+/// User specified via passthrough authentication.
+#[derive(Debug, Clone)]
+pub struct PassthroughUser<'a> {
+    pub name: &'a str,
+    pub database: &'a str,
+    pub password: &'a str,
+}
+
+impl From<PassthroughUser<'_>> for User {
+    fn from(value: PassthroughUser) -> Self {
+        User {
+            name: value.name.to_string(),
+            password: Some(value.password.to_string()),
+            database: value.database.to_string(),
+            ..Default::default()
+        }
     }
 }
 
@@ -232,7 +249,7 @@ impl ServerAuth {
 }
 
 /// The kind of password configured on the user.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PasswordKind {
     Plain(String),
     Hashed(String),
@@ -423,9 +440,26 @@ pub struct User {
     ///
     #[serde(flatten, default)]
     pub role_config: RoleConfig,
+
+    /// Client auth type, overrides the same setting in [general].
+    pub auth_type: Option<AuthType>,
+
+    /// Read-write split algorithm to use for this user.
+    pub read_write_split: Option<ReadWriteSplit>,
 }
 
 impl User {
+    /// The user can't log in without a password: no passthrough auth,
+    /// external token or mTLS identity.
+    fn requires_password(&self, config: &Config) -> bool {
+        !config.general.passthrough_auth()
+            && self.identity.is_none()
+            && !self
+                .auth_type
+                .unwrap_or(config.general.auth_type)
+                .external_token()
+    }
+
     fn password(&self) -> &str {
         if let Some(ref s) = self.password {
             s.as_str()
@@ -640,7 +674,7 @@ password = "secret"
     fn test_add_or_replace_adds_new_user() {
         let mut users = Users::default();
         let user = User::new("alice", "pass", "db1");
-        users.add_or_replace(user.clone());
+        users.add_or_replace(&user);
 
         assert_eq!(users.users.len(), 1);
         assert_eq!(users.users[0], user);
@@ -649,8 +683,8 @@ password = "secret"
     #[test]
     fn test_add_or_replace_replaces_same_name_and_database() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "old_pass", "db1"));
-        users.add_or_replace(User::new("alice", "new_pass", "db1"));
+        users.add_or_replace(&User::new("alice", "old_pass", "db1"));
+        users.add_or_replace(&User::new("alice", "new_pass", "db1"));
 
         assert_eq!(users.users.len(), 1);
         assert_eq!(users.users[0].password(), "new_pass");
@@ -659,8 +693,8 @@ password = "secret"
     #[test]
     fn test_add_or_replace_keeps_different_database() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("alice", "pass2", "db2"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("alice", "pass2", "db2"));
 
         assert_eq!(users.users.len(), 2);
     }
@@ -668,8 +702,8 @@ password = "secret"
     #[test]
     fn test_add_or_replace_keeps_different_name() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("bob", "pass2", "db1"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("bob", "pass2", "db1"));
 
         assert_eq!(users.users.len(), 2);
     }
@@ -677,9 +711,9 @@ password = "secret"
     #[test]
     fn test_add_or_replace_multiple_replaces() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("alice", "pass2", "db1"));
-        users.add_or_replace(User::new("alice", "pass3", "db1"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("alice", "pass2", "db1"));
+        users.add_or_replace(&User::new("alice", "pass3", "db1"));
 
         assert_eq!(users.users.len(), 1);
         assert_eq!(users.users[0].password(), "pass3");
@@ -688,12 +722,12 @@ password = "secret"
     #[test]
     fn test_add_or_replace_preserves_ordering_of_other_users() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("bob", "pass2", "db1"));
-        users.add_or_replace(User::new("charlie", "pass3", "db1"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("bob", "pass2", "db1"));
+        users.add_or_replace(&User::new("charlie", "pass3", "db1"));
 
         // Replace bob — alice stays, charlie stays, new bob appended at end
-        users.add_or_replace(User::new("bob", "new_pass", "db1"));
+        users.add_or_replace(&User::new("bob", "new_pass", "db1"));
 
         assert_eq!(users.users.len(), 3);
         assert_eq!(users.users[0].name, "alice");
@@ -706,9 +740,13 @@ password = "secret"
     fn test_find_returns_matching_user() {
         let mut users = Users::default();
         let alice = User::new("alice", "pass1", "db1");
-        users.add_or_replace(alice.clone());
+        users.add_or_replace(&alice);
 
-        let needle = User::new("alice", "", "db1");
+        let needle = PassthroughUser {
+            name: "alice",
+            database: "db1",
+            password: "",
+        };
         let found = users.find(&needle).unwrap();
         assert_eq!(found, alice);
     }
@@ -716,21 +754,33 @@ password = "secret"
     #[test]
     fn test_find_returns_none_when_no_match() {
         let users = Users::default();
-        let needle = User::new("alice", "", "db1");
+        let needle = PassthroughUser {
+            name: "alice",
+            database: "db1",
+            password: "",
+        };
         assert!(users.find(&needle).is_none());
     }
 
     #[test]
     fn test_find_matches_on_name_and_database() {
         let mut users = Users::default();
-        users.add_or_replace(User::new("alice", "pass1", "db1"));
-        users.add_or_replace(User::new("alice", "pass2", "db2"));
+        users.add_or_replace(&User::new("alice", "pass1", "db1"));
+        users.add_or_replace(&User::new("alice", "pass2", "db2"));
 
-        let needle = User::new("alice", "", "db2");
+        let needle = PassthroughUser {
+            name: "alice",
+            database: "db2",
+            password: "",
+        };
         let found = users.find(&needle).unwrap();
         assert_eq!(found.password(), "pass2");
 
-        let needle = User::new("bob", "", "db1");
+        let needle = PassthroughUser {
+            name: "bob",
+            database: "db1",
+            password: "",
+        };
         assert!(users.find(&needle).is_none());
     }
 
@@ -880,6 +930,25 @@ vault_refresh_percent = 60
     fn test_vault_static_is_external_identity() {
         assert!(ServerAuth::VaultStatic.is_external_identity());
         assert!(ServerAuth::VaultDynamic.is_external_identity());
+    }
+
+    #[test]
+    fn test_requires_password_uses_user_auth_type() {
+        let mut config = crate::Config::default();
+        let user = |auth_type| User {
+            name: "alice".into(),
+            database: "db".into(),
+            auth_type,
+            ..Default::default()
+        };
+
+        config.general.auth_type = AuthType::Scram;
+        assert!(user(None).requires_password(&config));
+        assert!(!user(Some(AuthType::ExternalToken)).requires_password(&config));
+
+        config.general.auth_type = AuthType::ExternalToken;
+        assert!(!user(None).requires_password(&config));
+        assert!(user(Some(AuthType::Scram)).requires_password(&config));
     }
 
     #[test]

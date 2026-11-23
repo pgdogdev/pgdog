@@ -2,6 +2,7 @@
 
 use futures::future::try_join_all;
 use tokio::select;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -9,19 +10,21 @@ use crate::{
     backend::{PubSubClient, pool},
     config::PoolerMode,
     frontend::{
-        BufferedQuery, ClientRequest, Router,
+        BufferedQuery, ClientRequest, Router, SetParam,
         router::{CopyRow, Route, parser::Shard},
     },
-    net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage, Query},
+    net::{Bind, Message, Parameters, Protocol, ProtocolMessage, Query},
+    parameters::ADMIN_PARAMETERS,
 };
 
 use super::{
-    super::{Error, Server, pool::Guard},
+    super::{Error, pool::Guard},
     Address, Cluster, Request,
 };
 
 use std::{
     ops::{Deref, DerefMut},
+    sync::Arc,
     time::Duration,
 };
 
@@ -268,12 +271,9 @@ impl Connection {
     }
 
     /// Get server parameters.
-    pub(crate) async fn parameters(
-        &mut self,
-        request: &Request,
-    ) -> Result<Vec<ParameterStatus>, Error> {
+    pub(crate) async fn parameters(&mut self, request: &Request) -> Result<Arc<Parameters>, Error> {
         if matches!(self.binding, Binding::Admin(_)) {
-            return Ok(ParameterStatus::fake());
+            return Ok(ADMIN_PARAMETERS.clone());
         }
 
         match self.try_parameters(request).await {
@@ -289,20 +289,12 @@ impl Connection {
         }
     }
 
-    async fn try_parameters(&mut self, request: &Request) -> Result<Vec<ParameterStatus>, Error> {
+    async fn try_parameters(&mut self, request: &Request) -> Result<Arc<Parameters>, Error> {
         // Get params from the first database that answers.
         // Parameters are cached on the pool.
         for shard in self.cluster()?.shards() {
             if let Ok(params) = shard.params(request).await {
-                let mut result = vec![];
-
-                for param in params.iter() {
-                    if let Some(value) = param.1.as_str() {
-                        result.push(ParameterStatus::from((param.0.as_str(), value)));
-                    }
-                }
-
-                return Ok(result);
+                return Ok(params.clone());
             }
         }
         Err(Error::Pool(pool::Error::AllReplicasDown))
@@ -316,8 +308,10 @@ impl Connection {
     ///
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         select! {
-            notification = self.pub_sub.recv() => {
-                Ok(notification.ok_or(Error::ProtocolOutOfSync)?.message())
+            // If we're listening on a NOTIFY channel, wait for a message, and if
+            // one is available, then we return it here.
+            notification = self.pub_sub.recv(), if self.pub_sub.is_listening() => {
+                Ok(notification.ok_or_else(|| Error::ProtocolOutOfSync)?.message())
             }
 
             // This is cancel-safe.
@@ -448,6 +442,20 @@ impl Connection {
         }
     }
 
+    // Replaces the Binds from `bind` (above) with the Binds of `request`.
+    // The result formats of these Binds decide how we decode rows when we merge rows across shards.
+    // E.g., `multi_step::fetch_rows` calls this, since we fetch the rows of subqueries in binary even if the client requested text.
+    pub(crate) fn set_binds(&mut self, request: &ClientRequest) {
+        let binds = request.messages.iter().filter_map(|message| match message {
+            ProtocolMessage::Bind(bind) => Some(bind),
+            _ => None,
+        });
+
+        if let Binding::MultiShard(ref mut servers) = self.binding {
+            servers.set_binds(binds);
+        }
+    }
+
     /// Execute an internal query on all connected servers.
     pub(crate) async fn execute(
         &mut self,
@@ -456,9 +464,18 @@ impl Connection {
         self.binding.execute(query).await
     }
 
+    /// Record a successfully executed parser-classified statement.
+    pub(crate) fn statement_completed(&mut self, route: &Route) {
+        self.binding.statement_completed(route);
+    }
+
     /// We are done and can disconnect from this server.
     pub(crate) fn done(&self) -> bool {
         self.binding.done() && !self.binding.is_locked()
+    }
+
+    pub(crate) fn take_last_query_exec_time(&mut self) -> Option<Instant> {
+        self.binding.take_last_query_exec_time()
     }
 
     /// Lock this connection to the client, preventing it's
@@ -468,6 +485,16 @@ impl Connection {
         if lock {
             self.binding.dirty();
         }
+    }
+
+    /// Clean up held server connections when they go back to the pool.
+    pub(crate) fn mark_dirty(&mut self) {
+        self.binding.dirty();
+    }
+
+    /// Record a SET the server confirmed on every held server connection.
+    pub(crate) fn record_set(&mut self, param: &SetParam, in_transaction: bool) {
+        self.binding.record_set(param, in_transaction);
     }
 
     /// Check if any held server connection is currently locked to a client.
@@ -497,12 +524,7 @@ impl Connection {
             _ => return Ok(()),
         };
 
-        try_join_all(
-            servers
-                .iter()
-                .map(|server| Server::cancel(server.addr(), server.key().clone())),
-        )
-        .await?;
+        try_join_all(servers.iter().map(|server| server.cancel_query())).await?;
 
         Ok(())
     }
@@ -510,6 +532,10 @@ impl Connection {
     /// Token cancelled when an admin terminates this connection's `Cluster`.
     pub(crate) fn cancellation_token(&self) -> CancellationToken {
         self.cluster.query_cancellation_token()
+    }
+
+    pub(crate) fn cluster_reloads(&self) -> usize {
+        self.cluster.reloads()
     }
 
     /// Get cluster if any.

@@ -1,6 +1,6 @@
 use std::slice::{Iter, IterMut};
 
-use futures::future::join_all;
+use futures::future::{join_all, try_join_all};
 
 use crate::backend::Error;
 use crate::frontend::client::query_engine::{
@@ -10,11 +10,14 @@ use crate::frontend::{
     BufferedQuery, ClientRequest,
     router::{CopyRow, Route, parser::Shard},
 };
-use crate::net::{Bind, FrontendPid, Message, Parameters, ProtocolMessage};
+use crate::net::{Bind, FrontendPid, Message, ProtocolMessage};
+
+use crate::parameters::ParameterStore;
 
 use super::{
-    super::{Guard, LinkedServer},
+    super::{Guard, LinkedServer, buffer::having::HavingInputs},
     MultiShard,
+    describe::describe_portals,
 };
 
 /// Handle talking to multiple servers for cross-shard queries.
@@ -120,7 +123,7 @@ impl MultiBinding {
     pub(crate) async fn link_client(
         &mut self,
         client_id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
     ) -> Result<usize, Error> {
         let transaction_start_stmt = self.transaction_stmt.as_ref().map(|q| q.query());
 
@@ -147,11 +150,25 @@ impl MultiBinding {
         self.state.query_complete();
     }
 
+    pub(in crate::backend::pool::connection) fn take_having_inputs(
+        &mut self,
+    ) -> Option<HavingInputs> {
+        self.state.take_having_inputs()
+    }
+
     /// Handle a [`Bind`] message received from the client. In cross-shard
     /// pipelines, we need to make sure we track these to know which parameters
     /// to decode for a given statement.
     pub(in crate::backend::pool::connection) fn bind(&mut self, bind: &Bind) {
         self.state.push_bind(bind);
+    }
+
+    /// See `Connection::set_binds`.
+    pub(in crate::backend::pool::connection) fn set_binds<'a>(
+        &mut self,
+        binds: impl Iterator<Item = &'a Bind>,
+    ) {
+        self.state.set_binds(binds);
     }
 
     /// Indicates that the backend(s) have more messages for the client
@@ -172,6 +189,8 @@ impl MultiBinding {
             }
 
             let mut read = false;
+            let mut multi_shard_err = None;
+
             for server in &mut self.servers {
                 if !server.has_more_messages() {
                     continue;
@@ -180,9 +199,29 @@ impl MultiBinding {
                 let message = server.read().await?;
                 read = true;
 
-                if let Some(message) = self.state.handle_server_message(message)? {
-                    return Ok(Some(message));
+                match self.state.handle_server_message(message) {
+                    Ok(message) => {
+                        if let Some(message) = message {
+                            return Ok(Some(message));
+                        }
+                    }
+                    Err(err) => {
+                        if err.is_unsupported() {
+                            multi_shard_err = Some(err);
+                        } else {
+                            return Err(err.into());
+                        }
+                    }
                 }
+            }
+
+            // If we couldn't calculate some kind of cross-shard response,
+            // e.g., the aggregate the user requested is not supported,
+            // we drain the servers, abort the request, and return the error.
+            if let Some(err) = multi_shard_err.take() {
+                let futures = self.servers.iter_mut().map(|server| server.drain_pending());
+                try_join_all(futures).await?;
+                return Err(err.into());
             }
 
             if !read {
@@ -195,7 +234,21 @@ impl MultiBinding {
 
     /// Send client request to the shard(s) it should go to.
     pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
-        let mut shards_sent = self.servers.len();
+        let route = client_request.route();
+        let shards_sent = match route.shard() {
+            Shard::Direct(_) => 1,
+            Shard::Multi(shards) => shards.len(),
+            Shard::All => self.servers.len(),
+        };
+
+        // We decode the rows we merge, so we need their columns.
+        let described = MultiShard::buffers(shards_sent, route)
+            .then(|| describe_portals(client_request))
+            .flatten();
+        let request = described
+            .as_ref()
+            .map_or(client_request, |(request, _)| request);
+
         let mut futures = Vec::new();
 
         for server in self.servers.iter_mut() {
@@ -203,20 +256,14 @@ impl MultiBinding {
             // When only a subset of shards is connected (Shard::Multi binding),
             // positional indices don't match actual shard numbers.
             let shard = server.shard;
-            let send = match client_request.route().shard() {
-                Shard::Direct(s) => {
-                    shards_sent = 1;
-                    *s == shard
-                }
-                Shard::Multi(shards) => {
-                    shards_sent = shards.len();
-                    shards.contains(&shard)
-                }
+            let send = match route.shard() {
+                Shard::Direct(s) => *s == shard,
+                Shard::Multi(shards) => shards.contains(&shard),
                 Shard::All => true,
             };
 
             if send {
-                futures.push(server.send(client_request));
+                futures.push(server.send(request));
             }
         }
 
@@ -232,7 +279,10 @@ impl MultiBinding {
         if client_request.is_sync_only() {
             self.state.update_shards(shards_sent);
         } else {
-            self.state.update(shards_sent, client_request.route());
+            self.state.update(shards_sent, route);
+            if let Some((_, describes)) = described {
+                self.state.set_describes(describes);
+            }
         }
 
         Ok(())
@@ -347,6 +397,7 @@ pub(crate) mod test {
 
     use crate::frontend::router::parser::ShardWithPriority;
     use crate::net::{Parameter, Query};
+    use crate::parameters::Parameters;
 
     use super::super::super::linked_server::test::TestLinkedServer;
     use super::*;
@@ -427,6 +478,7 @@ pub(crate) mod test {
             "application_name".to_string(),
             "test_multi_binding".to_string(),
         ))]);
+        let params = ParameterStore::new(params);
         let pid = FrontendPid::new();
 
         assert_eq!(1, binding.link_client(pid, &params).await.unwrap());

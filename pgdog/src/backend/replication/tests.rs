@@ -14,7 +14,7 @@ use crate::{
     api::{
         MigrationError,
         copy_data::{CopyDataTask, TableDataSyncTask},
-        replication::{ReplicationClusterStop, ReplicationClusterTask},
+        replication::{ReplicationClusterStop, ReplicationClusterTask, ReplicationTask},
         resharding::ReshardTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
@@ -23,15 +23,17 @@ use crate::{
     },
     backend::{
         Cluster, ConnectReason, Error as BackendError, Server, ServerOptions, databases,
-        pool::{Address, Request},
+        pool::{Address, Guard, Request},
         schema::sync::SchemaSyncError,
         server::test::test_server,
     },
     config::{config, set},
     util::sync::WorkerPool,
 };
-use pgdog_stats::{ReplicationDirection, ReshardStatus, TaskStatus};
+use pgdog_stats::{ReplicationStatus, ReshardStatus, TaskDefinitionKind, TaskProgress, TaskStatus};
 
+mod copy_data;
+mod replication;
 mod validation;
 
 async fn setup_replication_test(
@@ -71,8 +73,7 @@ async fn setup_replication_test(
 
 fn start_replication(state: &ReshardingState) -> (TaskWaiter<(), Error>, ReplicationClusterStop) {
     let progress = ReplicationProgress::new(state.source.shards().len());
-    let (cluster, stop) =
-        ReplicationClusterTask::new(state.clone(), ReplicationDirection::Forward, progress);
+    let (cluster, stop) = ReplicationClusterTask::new(state.clone(), progress);
 
     (run_task(cluster), stop)
 }
@@ -89,7 +90,7 @@ async fn wait_for_slot(
     let target: Vec<String> = server
         .fetch_all("SELECT pg_current_wal_lsn()::text")
         .await?;
-    let target = target.first().ok_or(Error::MissingData)?;
+    let target = target.first().ok_or_else(|| Error::MissingData)?;
     let query = format!(
         "SELECT 1::bigint FROM pg_replication_slots \
          WHERE slot_name = '{slot_name}' \
@@ -148,6 +149,71 @@ async fn copy_table(
     )
     .await?;
     Ok(table)
+}
+
+fn subtree_progress(root: TaskId) -> Vec<(String, TaskProgress)> {
+    let mut states = vec![];
+    tasks_storage().for_each(|task| {
+        if task.root_id == root {
+            let state = task.state();
+            states.push((task.id, state.definition.name.to_string(), state.progress));
+        }
+    });
+    states.sort_by_key(|(id, _, _)| *id);
+    states
+        .into_iter()
+        .map(|(_, name, progress)| (name, progress))
+        .collect()
+}
+
+fn subtree_definitions(root: TaskId) -> Vec<TaskDefinitionKind> {
+    let mut definitions = vec![];
+    tasks_storage().for_each(|task| {
+        if task.root_id == root && task.id != root {
+            definitions.push((task.id, task.state().definition.kind.clone()));
+        }
+    });
+    definitions.sort_by_key(|(id, _)| *id);
+    definitions.into_iter().map(|(_, kind)| kind).collect()
+}
+
+fn progress_of(states: &[(String, TaskProgress)], name: &str) -> Vec<TaskProgress> {
+    states
+        .iter()
+        .filter(|(task, _)| task == name)
+        .map(|(_, progress)| progress.clone())
+        .collect()
+}
+
+async fn create_tables(
+    schema: &str,
+    destination: &str,
+    main_rows: u64,
+) -> Result<(Guard, Guard), Box<dyn std::error::Error>> {
+    let source = databases::databases().schema_owner(schema)?;
+    let dest = databases::databases().schema_owner(destination)?;
+    let mut source_server = source.primary(0, &Request::default()).await?;
+    source_server
+        .execute_checked(format!(
+            "CREATE SCHEMA {schema}; \
+             CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT); \
+             INSERT INTO {schema}.main \
+             SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 32)) \
+             FROM generate_series(1, {main_rows}) g; \
+             CREATE TABLE {schema}.small (id BIGINT PRIMARY KEY); \
+             INSERT INTO {schema}.small SELECT g FROM generate_series(1, 10) g; \
+             CREATE PUBLICATION {schema} FOR TABLE {schema}.main, {schema}.small"
+        ))
+        .await?;
+    let mut dest_server = dest.primary(0, &Request::default()).await?;
+    dest_server
+        .execute_checked(format!(
+            "CREATE SCHEMA {schema}; \
+             CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT); \
+             CREATE TABLE {schema}.small (id BIGINT PRIMARY KEY)"
+        ))
+        .await?;
+    Ok((source_server, dest_server))
 }
 
 async fn cleanup_replication_test(
@@ -326,16 +392,16 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
             state.sync_tables().await?;
             state.create_slots(&cancel).await?;
             let tables = state.tables();
-            let tables = tables.get(&0).ok_or(Error::MissingData)?;
+            let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
             let child_table = tables
                 .iter()
                 .find(|table| table.table.name == "children")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
             let parent_table = tables
                 .iter()
                 .find(|table| table.table.name == "parents")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
 
             (child_table, parent_table)
@@ -461,16 +527,16 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
             state.sync_tables().await?;
             state.create_slots(&cancel).await?;
             let tables = state.tables();
-            let tables = tables.get(&0).ok_or(Error::MissingData)?;
+            let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
             let child = tables
                 .iter()
                 .find(|table| table.table.name == "children")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
             let parent = tables
                 .iter()
                 .find(|table| table.table.name == "parents")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
 
             (child, parent)
@@ -583,16 +649,16 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
             state.sync_tables().await?;
             state.create_slots(&cancel).await?;
             let tables = state.tables();
-            let tables = tables.get(&0).ok_or(Error::MissingData)?;
+            let tables = tables.get(&0).ok_or_else(|| Error::MissingData)?;
             let child = tables
                 .iter()
                 .find(|table| table.table.name == "children")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
             let parent = tables
                 .iter()
                 .find(|table| table.table.name == "parents")
-                .ok_or(Error::MissingData)?
+                .ok_or_else(|| Error::MissingData)?
                 .clone();
 
             (child, parent)
@@ -759,26 +825,7 @@ async fn copy_data_cancelled_during_copy_removes_its_slots()
     let mut admin = test_server().await;
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
-        server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT); \
-                 INSERT INTO {schema}.main \
-                 SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 32)) \
-                 FROM generate_series(1, 200000) g; \
-                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
-            ))
-            .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
-        dest_server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT)"
-            ))
-            .await?;
+        let (mut server, _dest_server) = create_tables(schema, destination, 200_000).await?;
 
         let (task, _state) = copy_data_task(schema, destination).await?;
         let id = task.id();
@@ -815,29 +862,18 @@ async fn copy_data_cancelled_during_replication_removes_its_slots()
     let mut admin = test_server().await;
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
-        server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY); \
-                 INSERT INTO {schema}.main SELECT g FROM generate_series(1, 10) g; \
-                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
-            ))
-            .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
-        dest_server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY)"
-            ))
-            .await?;
+        let (mut server, mut dest_server) = create_tables(schema, destination, 10).await?;
 
         let (task, _state) = copy_data_task(schema, destination).await?;
         let id = task.id();
 
-        wait_for_reshard_status(id, ReshardStatus::Replication).await?;
+        wait_for_reshard_status(
+            id,
+            ReshardStatus::Replication {
+                stage: ReplicationStatus::Replicating,
+            },
+        )
+        .await?;
         wait_for_active_source_slot(&mut server, schema).await?;
 
         tasks_storage().cancel_task(id);
@@ -938,5 +974,154 @@ async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn 
         ),
         "post-data did not report the unique index error: {post_data:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tables_only_copies_and_replicates_one_table() -> Result<(), Box<dyn std::error::Error>> {
+    crate::logger();
+    let schema = "tables_only_e2e";
+    let destination = "tables_only_e2e_dest";
+    let original_config = config();
+    let mut admin = test_server().await;
+    let result = async {
+        setup_replication_test(&mut admin, schema, destination).await?;
+        let source = databases::databases().schema_owner(schema)?;
+        let dest = databases::databases().schema_owner(destination)?;
+        let mut server = source.primary(0, &Request::default()).await?;
+        server
+            .execute_checked(format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.main (id BIGSERIAL PRIMARY KEY, payload TEXT); \
+                 CREATE INDEX main_payload_idx ON {schema}.main (payload); \
+                 CREATE TABLE {schema}.other (id BIGINT PRIMARY KEY); \
+                 INSERT INTO {schema}.main (payload) SELECT 'row' FROM generate_series(1, 10); \
+                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
+            ))
+            .await?;
+        let mut dest_server = dest.primary(0, &Request::default()).await?;
+
+        let state = ReshardingState::builder()
+            .source(schema)
+            .destination(destination)
+            .publication(schema)
+            .maybe_replication_slot(Some(schema.into()))
+            .build()?;
+        let task = run_task(ReshardTask::builder().state(state).tables_only(true).build());
+        let id = task.id();
+
+        wait_for_reshard_status(
+            id,
+            ReshardStatus::Replication {
+                stage: ReplicationStatus::Replicating,
+            },
+        )
+        .await?;
+        wait_for_active_source_slot(&mut server, schema).await?;
+        let cutover_accepted = ReplicationTask::trigger_cutover(Some(id));
+
+        server
+            .execute_checked(format!(
+                "INSERT INTO {schema}.main (payload) SELECT 'live' FROM generate_series(1, 5)"
+            ))
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let rows: Vec<i64> = dest_server
+                    .fetch_all(format!("SELECT count(*) FROM {schema}.main"))
+                    .await?;
+                if rows == [15] {
+                    return Ok::<_, Box<dyn std::error::Error>>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+
+        tasks_storage().cancel_task(id);
+        let outcome = tokio::time::timeout(Duration::from_secs(90), task).await?;
+
+        let leftover_slots = source_slots(&mut server, schema).await?;
+        let source_rows: Vec<i64> = server
+            .fetch_all(format!("SELECT count(*) FROM {schema}.main"))
+            .await?;
+        let next_id: Vec<i64> = dest_server
+            .fetch_all(format!(
+                "INSERT INTO {schema}.main (payload) VALUES ('after') RETURNING id"
+            ))
+            .await?;
+        let other_on_dest: Vec<i64> = dest_server
+            .fetch_all(format!(
+                "SELECT count(*) FROM pg_tables WHERE schemaname = '{schema}' AND tablename = 'other'"
+            ))
+            .await?;
+        let index_on_dest: Vec<i64> = dest_server
+            .fetch_all(format!(
+                "SELECT count(*) FROM pg_indexes WHERE schemaname = '{schema}' AND indexname = 'main_payload_idx'"
+            ))
+            .await?;
+
+        Ok::<_, Box<dyn std::error::Error>>((
+            outcome.is_err(),
+            cutover_accepted,
+            leftover_slots,
+            source_rows,
+            next_id,
+            other_on_dest,
+            index_on_dest,
+        ))
+    }
+    .await;
+
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
+
+    let (
+        stopped,
+        cutover_accepted,
+        leftover_slots,
+        source_rows,
+        next_id,
+        other_on_dest,
+        index_on_dest,
+    ) = result?;
+    assert!(stopped, "a stopped copy reports as cancelled");
+    assert!(!cutover_accepted, "copying some tables must never cut over");
+    assert_eq!(leftover_slots, Vec::<String>::new());
+    assert_eq!(source_rows, [15], "the source table is left in place");
+    assert_eq!(next_id, [16], "the destination sequence follows the data");
+    assert_eq!(other_on_dest, [0], "only the moved table is copied");
+    assert_eq!(
+        index_on_dest,
+        [1],
+        "post-data schema sync adds the table's indexes"
+    );
+
+    Ok(())
+}
+
+fn replication_status(id: TaskId) -> Option<ReplicationStatus> {
+    let mut found = None;
+    tasks_storage().try_for_each(|task| {
+        if task.id != id {
+            return ControlFlow::Continue(());
+        }
+        if let TaskStatus::Replication(status) = task.state().status {
+            found = Some(status);
+        }
+        ControlFlow::Break(())
+    });
+    found
+}
+
+async fn wait_for_replication_status(
+    id: TaskId,
+    expected: ReplicationStatus,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while replication_status(id) != Some(expected) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
     Ok(())
 }

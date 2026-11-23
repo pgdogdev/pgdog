@@ -34,16 +34,15 @@ pub struct Address {
     pub database_name: String,
 }
 
-/// Direction of a replication task: the initial migration (`Forward`) or the
-/// post-cutover reverse stream that backs a rollback (`Reverse`). A `CUTOVER`
-/// on a `Reverse` task is therefore a rollback. Affects reported status only,
-/// not control flow.
+/// Direction of a resharding run: the initial migration (`Forward`) or the
+/// post-cutover reverse replication that backs a rollback (`Reverse`). A `CUTOVER`
+/// in the `Reverse` direction is therefore a rollback.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 #[display(rename_all = "snake_case")]
-pub enum ReplicationDirection {
+pub enum ReshardingDirection {
     #[default]
     Forward,
     Reverse,
@@ -54,19 +53,16 @@ pub enum ReplicationDirection {
     Debug, Clone, Copy, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
+#[display(rename_all = "snake_case")]
 pub enum ReplicationCutoverReason {
     /// Replication lag reached the configured threshold.
-    #[display("lag")]
     Lag,
     /// No transaction was applied for the configured delay.
-    #[display("last transaction")]
     LastTransaction,
     /// The configured wait expired before the other conditions were met.
-    #[display("timeout")]
     Timeout,
     /// A reason this build does not know.
     #[default]
-    #[display("unknown")]
     #[serde(other)]
     Unknown,
 }
@@ -81,7 +77,9 @@ pub struct ReplicationDefinition {
 }
 
 /// Stages of logical replication, reported as the task's status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ReplicationStatus {
     /// Streaming changes to catch the destination up.
@@ -107,6 +105,7 @@ pub enum ReplicationStatus {
     RollingBack,
     /// A stage this build does not know.
     #[display("")]
+    #[default]
     #[serde(other)]
     Other,
 }
@@ -115,10 +114,10 @@ pub enum ReplicationStatus {
 /// traffic over. `databases` always names the migration's original source and
 /// destination; `direction` says which of them the changes flow from.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("replication stream {databases} ({direction})")]
+#[display("{direction} replication {databases}")]
 pub struct ReplicationClusterDefinition {
     pub databases: Databases,
-    pub direction: ReplicationDirection,
+    pub direction: ReshardingDirection,
 }
 
 /// Stages of one replication cluster, reported as the subtask's status.
@@ -130,7 +129,7 @@ pub enum ReplicationClusterStatus {
     /// Streaming changes to catch the destination up.
     #[display("{direction} replicating, {progress}")]
     Replicating {
-        direction: ReplicationDirection,
+        direction: ReshardingDirection,
         progress: ReplicationProgress,
     },
     /// Stopped streaming so the parent task can cut traffic over.

@@ -21,7 +21,7 @@ impl<'a> Sequence<'a> {
     pub(crate) fn setval_from_column(&self, column: &Column<'a>) -> Result<String, Error> {
         let sequence_name = quote_literal(&self.table.to_string());
 
-        let table = column.table().ok_or(Error::ColumnNoTable)?;
+        let table = column.table().ok_or_else(|| Error::ColumnNoTable)?;
         let table_name = table.to_string();
 
         let column_name = format!("\"{}\"", escape_identifier(column.name));

@@ -164,6 +164,81 @@ async fn test_notify() {
     }
 }
 
+#[tokio::test]
+async fn test_notify_payload_with_quote() {
+    let test_id = Uuid::new_v4().simple().to_string();
+    let channel = format!("test_notify_quote_{test_id}");
+
+    let mut listener = PgListener::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    listener.listen(&channel).await.unwrap();
+
+    let mut notifier = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    notifier
+        .execute(format!("NOTIFY {channel}, 'it''s here'").as_str())
+        .await
+        .expect("NOTIFY with an escaped quote in the payload");
+
+    let notification = timeout(Duration::from_secs(10), listener.recv())
+        .await
+        .expect("notification within ten seconds")
+        .unwrap();
+    assert_eq!(notification.channel(), channel);
+    assert_eq!(notification.payload(), "it's here");
+}
+
+#[tokio::test]
+async fn test_unlisten_all_stops_notifications() {
+    let test_id = Uuid::new_v4().simple().to_string();
+    let channels = [
+        format!("unlisten_all_events_{test_id}"),
+        format!("unlisten_all_jobs_{test_id}"),
+    ];
+
+    let mut listener = PgListener::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    for channel in &channels {
+        listener.listen(channel).await.unwrap();
+    }
+
+    let mut notifier = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+
+    for channel in &channels {
+        notifier
+            .execute(format!("NOTIFY {channel}, 'before'").as_str())
+            .await
+            .unwrap();
+        let notification = timeout(Duration::from_secs(10), listener.recv())
+            .await
+            .expect("notification within ten seconds")
+            .unwrap();
+        assert_eq!(notification.channel(), channel);
+        assert_eq!(notification.payload(), "before");
+    }
+
+    // Sends UNLISTEN *.
+    listener.unlisten_all().await.unwrap();
+
+    for channel in &channels {
+        notifier
+            .execute(format!("NOTIFY {channel}, 'after'").as_str())
+            .await
+            .unwrap();
+    }
+
+    let received = timeout(Duration::from_millis(500), listener.try_recv()).await;
+    assert!(
+        received.is_err(),
+        "no notification should arrive after UNLISTEN *, got {received:?}"
+    );
+}
+
 #[derive(Debug)]
 struct ListenerStats {
     listeners: i64,

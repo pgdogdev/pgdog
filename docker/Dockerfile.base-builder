@@ -1,7 +1,31 @@
-FROM ubuntu:latest
+# Keep the same release as Dockerfile.base-runtime so glibc matches at runtime.
+FROM ubuntu:26.04
 
+# One RUN step, so the apt lists are removed in the same layer.
 RUN apt update && \
-    apt install -y build-essential cmake clang curl pkg-config libssl-dev git mold
+    # apt upgrade picks up security fixes released after the Ubuntu image was built.
+    apt upgrade -y && \
+    apt install -y --no-install-recommends \
+        # Rust build toolchain.
+        build-essential \
+        cmake \
+        clang \
+        curl \
+        ca-certificates \
+        pkg-config \
+        libssl-dev \
+        git \
+        mold \
+        # pg-internals runs PostgreSQL configure and generates bindings/catalogs.
+        libclang-dev \
+        libicu-dev \
+        libreadline-dev \
+        zlib1g-dev \
+        bison \
+        flex \
+        perl && \
+    # Remove the apt lists to make the image smaller.
+    rm -rf /var/lib/apt/lists/*
 
 # Install Rust.
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y

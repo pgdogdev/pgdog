@@ -23,6 +23,8 @@ enum StreamInner {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
     DevNull,
+    #[cfg(test)]
+    Memory(#[pin] BufStream<tokio::io::DuplexStream>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +58,8 @@ impl AsyncRead for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_read(cx, buf),
             StreamInnerProjection::Tls(stream) => stream.poll_read(cx, buf),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
+            #[cfg(test)]
+            StreamInnerProjection::Memory(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -71,6 +75,8 @@ impl AsyncWrite for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_write(cx, buf),
             StreamInnerProjection::Tls(stream) => stream.poll_write(cx, buf),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(buf.len())),
+            #[cfg(test)]
+            StreamInnerProjection::Memory(stream) => stream.poll_write(cx, buf),
         }
     }
 
@@ -83,6 +89,8 @@ impl AsyncWrite for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_flush(cx),
             StreamInnerProjection::Tls(stream) => stream.poll_flush(cx),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
+            #[cfg(test)]
+            StreamInnerProjection::Memory(stream) => stream.poll_flush(cx),
         }
     }
 
@@ -95,6 +103,8 @@ impl AsyncWrite for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_shutdown(cx),
             StreamInnerProjection::Tls(stream) => stream.poll_shutdown(cx),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
+            #[cfg(test)]
+            StreamInnerProjection::Memory(stream) => stream.poll_shutdown(cx),
         }
     }
 }
@@ -147,7 +157,20 @@ impl Stream {
         }
     }
 
-    /// Get the hostname identity (SAN dNSName, falling back to Subject CN)
+    #[cfg(test)]
+    pub(crate) fn memory(stream: tokio::io::DuplexStream) -> Self {
+        let capacity = 4096;
+        Self {
+            inner: StreamInner::Memory(BufStream::with_capacity(capacity, capacity, stream)),
+            io_in_progress: false,
+            capacity,
+            tls_identity: None,
+            tls_client_certificate: false,
+            tls_server_end_point: None,
+        }
+    }
+
+    /// Get the identity (SAN dNSName, then SAN URI, falling back to Subject CN)
     /// from the client's TLS certificate, if any.
     pub(crate) fn tls_identity(&self) -> Option<&str> {
         self.tls_identity.as_deref()
@@ -182,6 +205,8 @@ impl Stream {
             StreamInner::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
             StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
             StreamInner::DevNull => PeerAddr { addr: None },
+            #[cfg(test)]
+            StreamInner::Memory(_) => PeerAddr { addr: None },
         }
     }
 
@@ -191,6 +216,8 @@ impl Stream {
             StreamInner::Plain(plain) => plain.get_mut().peek(&mut buf).now_or_never(),
             StreamInner::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).now_or_never(),
             StreamInner::DevNull => return Liveness::Clean,
+            #[cfg(test)]
+            StreamInner::Memory(_) => return Liveness::Clean,
         };
 
         match peeked {
@@ -224,6 +251,8 @@ impl Stream {
                 StreamInner::Plain(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::Tls(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::DevNull => (),
+                #[cfg(test)]
+                StreamInner::Memory(stream) => eof(stream.write_all(&bytes).await)?,
             }
 
             #[cfg(debug_assertions)]

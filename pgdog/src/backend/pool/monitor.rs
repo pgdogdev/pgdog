@@ -340,7 +340,7 @@ impl Monitor {
                 let server = Box::new(conn);
                 let mut guard = self.pool.lock();
                 if guard.online {
-                    guard.put(server, now)?;
+                    guard.put(server, now);
                 }
                 Ok(true)
             }

@@ -109,6 +109,11 @@ AS $$
   SELECT COUNT(*) FROM core.users
 $$;
 
+CREATE AGGREGATE core.int_total(integer) (
+  SFUNC = int4_sum,
+  STYPE = bigint
+);
+
 CREATE TABLE core.timezone_source (
   id BIGINT PRIMARY KEY,
   summary JSONB

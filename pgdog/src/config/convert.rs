@@ -1,50 +1,27 @@
 use super::Error;
 use crate::net::{Parameters, Password};
 
-use super::User;
+use pgdog_config::users::PassthroughUser;
 
-pub(crate) fn user_from_params(params: &Parameters, password: &Password) -> Result<User, Error> {
+pub(crate) fn user_from_params<'a>(
+    params: &'a Parameters,
+    password: &'a Password,
+) -> Result<PassthroughUser<'a>, Error> {
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     let user = params
         .get("user")
-        .ok_or(Error::IncompleteStartup)?
+        .ok_or_else(|| Error::IncompleteStartup)?
         .as_str()
-        .ok_or(Error::IncompleteStartup)?;
+        .ok_or_else(|| Error::IncompleteStartup)?;
     let database = params.get_default("database", user);
-    let password = password.password().ok_or(Error::IncompleteStartup)?;
+    #[allow(clippy::unnecessary_lazy_evaluations)]
+    let password = password
+        .password()
+        .ok_or_else(|| Error::IncompleteStartup)?;
 
-    Ok(User {
-        name: user.to_owned(),
-        database: database.to_owned(),
-        password: Some(password.to_owned()),
-        ..Default::default()
+    Ok(PassthroughUser {
+        name: user,
+        database,
+        password,
     })
 }
-
-// impl User {
-//     pub(crate) fn from_params(params: &Parameters, password: &Password) -> Result<Self, Error> {
-//         let user = params
-//             .get("user")
-//             .ok_or(Error::IncompleteStartup)?
-//             .as_str()
-//             .ok_or(Error::IncompleteStartup)?;
-//         let database = params.get_default("database", user);
-//         let password = password.password().ok_or(Error::IncompleteStartup)?;
-
-//         Ok(Self {
-//             name: user.to_owned(),
-//             database: database.to_owned(),
-//             password: Some(password.to_owned()),
-//             ..Default::default()
-//         })
-//     }
-
-//     /// New user from user, password and database.
-//     pub(crate) fn new(user: &str, password: &str, database: &str) -> Self {
-//         Self {
-//             name: user.to_owned(),
-//             database: database.to_owned(),
-//             password: Some(password.to_owned()),
-//             ..Default::default()
-//         }
-//     }
-// }

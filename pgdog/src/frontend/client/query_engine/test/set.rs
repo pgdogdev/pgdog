@@ -1,10 +1,12 @@
 use crate::{
     backend::databases::reload_from_existing,
-    config::{config, load_test_sharded, set},
+    config::{config, load_test, load_test_sharded, set},
     expect_message,
+    frontend::client::TransactionType,
     net::{
-        BindComplete, CommandComplete, ErrorResponse, NoData, NoticeResponse, ParameterDescription,
-        ParseComplete, ReadyForQuery, parameter::ParameterValue,
+        BindComplete, CommandComplete, DataRow, ErrorResponse, NoData, NoticeResponse,
+        ParameterDescription, ParameterStatus, ParseComplete, ReadyForQuery,
+        parameter::ParameterValue,
     },
 };
 
@@ -32,6 +34,7 @@ async fn test_set() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -43,6 +46,106 @@ async fn test_set() {
     );
 
     assert!(!test_client.backend_locked());
+}
+
+#[tokio::test]
+async fn test_invalid_set_batch_and_config_preserve_parameters() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    for (query, completion) in [
+        (
+            "SET application_name = 'changed'; SET extra_float_digits = 4",
+            Some("SET"),
+        ),
+        ("SELECT set_config('extra_float_digits', '4', false)", None),
+    ] {
+        client.send_simple(Query::new(query)).await;
+        if let Some(completion) = completion {
+            assert_eq!(
+                expect_message!(client.read().await, CommandComplete).command(),
+                completion
+            );
+        }
+        assert_eq!(
+            expect_message!(client.read().await, ErrorResponse).code,
+            "22023"
+        );
+        assert_eq!(
+            expect_message!(client.read().await, ReadyForQuery).status,
+            'I'
+        );
+        assert_eq!(client.client().params.get("application_name"), None);
+        assert_eq!(client.client().params.get("extra_float_digits"), None);
+        assert!(!client.backend_connected());
+    }
+}
+
+#[tokio::test]
+async fn test_invalid_set_aborts_transaction() {
+    for begin in ["BEGIN", "BEGIN READ ONLY"] {
+        for extended in [false, true] {
+            let mut client = TestClient::new_sharded(Parameters::default()).await;
+            client.send_simple(Query::new(begin)).await;
+            client.read_until('Z').await.expect("transaction started");
+            let started = client
+                .client()
+                .transaction
+                .expect("active transaction")
+                .start_time();
+
+            let query = "SET LOCAL extra_float_digits = 4";
+            if extended {
+                client.send(Parse::named("invalid_set", query)).await;
+                client.send(Bind::new_statement("invalid_set")).await;
+                client.send(Execute::new()).await;
+                client.send(Sync).await;
+                client.try_process().await.expect("SET processed");
+                expect_message!(client.read().await, ParseComplete);
+                expect_message!(client.read().await, BindComplete);
+            } else {
+                client.send_simple(Query::new(query)).await;
+            }
+
+            assert_eq!(
+                expect_message!(client.read().await, ErrorResponse).code,
+                "22023"
+            );
+            assert_eq!(
+                expect_message!(client.read().await, ReadyForQuery).status,
+                'E'
+            );
+            let transaction = client.client().transaction.expect("failed transaction");
+            assert!(transaction.error());
+            assert_eq!(transaction.start_time(), started);
+            assert_eq!(
+                transaction.transaction_type(),
+                if begin == "BEGIN" {
+                    TransactionType::ErrorReadWrite
+                } else {
+                    TransactionType::ErrorReadOnly
+                }
+            );
+            assert_eq!(client.client().params.get("extra_float_digits"), None);
+
+            client.send_simple(Query::new("SELECT 1")).await;
+            assert_eq!(
+                expect_message!(client.read().await, ErrorResponse).code,
+                "25P02"
+            );
+            assert_eq!(
+                expect_message!(client.read().await, ReadyForQuery).status,
+                'E'
+            );
+            assert!(!client.backend_connected());
+
+            client.send_simple(Query::new("ROLLBACK")).await;
+            expect_message!(client.read().await, CommandComplete);
+            assert_eq!(
+                expect_message!(client.read().await, ReadyForQuery).status,
+                'I'
+            );
+            assert!(client.client().transaction.is_none());
+        }
+    }
 }
 
 #[tokio::test]
@@ -124,6 +227,7 @@ async fn test_set_statement_describe() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -144,6 +248,7 @@ async fn test_set_search_path() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -180,6 +285,7 @@ async fn test_set_inside_transaction() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'
@@ -227,6 +333,7 @@ async fn test_set_inside_transaction_rollback() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'
@@ -238,6 +345,8 @@ async fn test_set_inside_transaction_rollback() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "ROLLBACK"
     );
+    let status = expect_message!(test_client.read().await, ParameterStatus);
+    assert_eq!(status.name, "search_path");
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -262,6 +371,7 @@ async fn test_reset() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -281,6 +391,7 @@ async fn test_reset() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "RESET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -305,6 +416,7 @@ async fn test_reset_all() {
         .send_simple(Query::new("SET application_name TO 'test_reset_all'"))
         .await;
     expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ParameterStatus);
     expect_message!(test_client.read().await, ReadyForQuery);
 
     test_client
@@ -378,6 +490,7 @@ async fn test_reset_inside_transaction_commit() {
         .send_simple(Query::new("SET application_name TO 'before_reset'"))
         .await;
     expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ParameterStatus);
     expect_message!(test_client.read().await, ReadyForQuery);
 
     assert_eq!(
@@ -401,6 +514,7 @@ async fn test_reset_inside_transaction_commit() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "RESET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'
@@ -434,6 +548,7 @@ async fn test_reset_inside_transaction_rollback() {
         .send_simple(Query::new("SET application_name TO 'before_reset'"))
         .await;
     expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ParameterStatus);
     expect_message!(test_client.read().await, ReadyForQuery);
 
     assert_eq!(
@@ -457,6 +572,7 @@ async fn test_reset_inside_transaction_rollback() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "RESET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'
@@ -465,6 +581,9 @@ async fn test_reset_inside_transaction_rollback() {
     // Rollback
     test_client.send_simple(Query::new("ROLLBACK")).await;
     expect_message!(test_client.read().await, CommandComplete);
+    let status = expect_message!(test_client.read().await, ParameterStatus);
+    assert_eq!(status.name, "application_name");
+    assert_eq!(status.value.as_str(), Some("before_reset"));
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -863,5 +982,105 @@ async fn test_reset_all_keeps_transaction_rollback() {
     assert_eq!(
         client.client().params.get("search_path"),
         Some(&ParameterValue::String("runtime".into()))
+    );
+}
+
+#[tokio::test]
+async fn test_set_overrides_set_local_before_connect() {
+    for end in ["COMMIT", "ROLLBACK"] {
+        let mut client = TestClient::new_sharded(Parameters::default()).await;
+        for query in [
+            "SET application_name = 'session'",
+            "BEGIN",
+            "SET LOCAL application_name = 'local'",
+            "SET application_name = 'transaction'",
+        ] {
+            client.send_simple(Query::new(query)).await;
+            client.read_until('Z').await.expect("command completed");
+        }
+        assert_eq!(
+            client.client().params.get("application_name"),
+            Some(&ParameterValue::from("transaction"))
+        );
+
+        client
+            .send_simple(Query::new("/* pgdog_shard: 0 */ SHOW application_name"))
+            .await;
+        let messages = client.read_until('Z').await.expect("SHOW completed");
+        let row = messages
+            .iter()
+            .find(|message| message.code() == 'D')
+            .expect("SHOW returned a row");
+        assert_eq!(
+            expect_message!(row.clone(), DataRow)
+                .column(0)
+                .expect("application name"),
+            "transaction".as_bytes()
+        );
+
+        client.send_simple(Query::new(end)).await;
+        client.read_until('Z').await.expect("transaction ended");
+        assert_eq!(
+            client.client().params.get("application_name"),
+            Some(&ParameterValue::from(if end == "COMMIT" {
+                "transaction"
+            } else {
+                "session"
+            }))
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_reset_does_not_leak_transaction_params_to_next_client() {
+    load_test();
+    let mut config = (*config()).clone();
+    config.config.general.default_pool_size = 1;
+    config.config.general.min_pool_size = 0;
+    set(config).expect("configure a single-connection pool");
+    reload_from_existing().expect("reload test pool");
+
+    let mut first = TestClient::new(Parameters::default()).await;
+    for query in ["BEGIN", "SET statement_timeout = '12345ms'"] {
+        first.send_simple(Query::new(query)).await;
+        first.read_until('Z').await.expect("command completed");
+    }
+    assert!(
+        !first.backend_connected(),
+        "SET must be buffered before the first backend checkout"
+    );
+
+    // Checking out the backend copies the pending SET into its transaction cache.
+    let backend_pid = first.backend_pid().await;
+    for query in ["RESET lock_timeout", "COMMIT"] {
+        first.send_simple(Query::new(query)).await;
+        first.read_until('Z').await.expect("command completed");
+    }
+    assert!(
+        !first.backend_connected(),
+        "COMMIT must return the backend to the pool"
+    );
+
+    // Keep the first client alive: dropping a TestClient shuts down the pools.
+    let mut second = TestClient::new(Parameters::default()).await;
+    assert_eq!(
+        second.backend_pid().await,
+        backend_pid,
+        "the second client must reuse the same physical connection"
+    );
+    second
+        .send_simple(Query::new("SHOW statement_timeout"))
+        .await;
+    let messages = second.read_until('Z').await.expect("SHOW completed");
+    let row = messages
+        .iter()
+        .find(|message| message.code() == 'D')
+        .expect("SHOW returned a row");
+    assert_eq!(
+        expect_message!(row.clone(), DataRow)
+            .get_text(0)
+            .expect("statement_timeout value"),
+        "0",
+        "RESET of an unrelated parameter must not leak the first client's committed SET"
     );
 }

@@ -41,6 +41,7 @@ use multi_tenant::MultiTenantCheck;
 use pg_raw_parse::{Node, nodes};
 use plugins::PluginOutput;
 
+use crate::frontend::router::parser::rewrite::statement::insert::InsertSplitPlan;
 use tracing::{debug, trace};
 
 /// Query parser.
@@ -98,7 +99,7 @@ impl QueryParser {
 
             self.query(&mut context)?
         } else {
-            Command::default()
+            Command::Query(Route::write(context.shards_calculator.shard()))
         };
 
         match &mut command {
@@ -273,7 +274,10 @@ impl QueryParser {
             }
         }
 
-        let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
+        let statement = context
+            .router_context
+            .ast
+            .ok_or_else(|| Error::EmptyQuery)?;
         let routing_comment = context
             .router_context
             .comment
@@ -283,7 +287,7 @@ impl QueryParser {
             self.ensure_explain_recorder(stmt, context);
         }
 
-        // Parse hardcoded shard from a query comment.
+        // Parse hardcoded shard, role or LSN from a query comment.
         if context.router_needed || context.dry_run {
             let mut comment_shard_set = false;
             match &routing_comment.shard {
@@ -301,7 +305,7 @@ impl QueryParser {
                 Some(ShardOrLookup::Lookup(pending)) => {
                     match sharding::lookup::shard_for_pending(
                         pending,
-                        &context.sharding_schema,
+                        context.sharding_schema,
                         &context.router_context.resolved_lookups,
                     )? {
                         Some(shard) => {
@@ -392,9 +396,12 @@ impl QueryParser {
             Node::SelectStmt(stmt) => {
                 if context.is_canonicalizing_oids() && references_pg_type(stmt) {
                     // Shard 0 is considered the canonical source for now
-                    return Ok(Command::Query(Route::read(
-                        ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
-                    )));
+                    return Ok(Command::Query(
+                        Route::read(ShardWithPriority::new_override_canonical_schema_info(
+                            Shard::Direct(0),
+                        ))
+                        .dml(),
+                    ));
                 } else {
                     self.select(stmt, context)
                 }
@@ -442,10 +449,12 @@ impl QueryParser {
             }
 
             Node::UnlistenStmt(stmt) => {
-                // FIXME: UNLISTEN * is sent represented as None
-                return Ok(Command::Unlisten(
-                    stmt.conditionname().unwrap_or_default().to_owned(),
-                ));
+                // UNLISTEN * has no condition name.
+                let target = match stmt.conditionname() {
+                    Some(channel) => UnlistenTarget::Channel(channel.to_owned()),
+                    None => UnlistenTarget::All,
+                };
+                return Ok(Command::Unlisten(target));
             }
 
             Node::PrepareStmt(stmt) => self.prepare(stmt, context),
@@ -510,11 +519,9 @@ impl QueryParser {
             if shard.is_direct() {
                 route.set_shard(shard);
             }
-        }
 
-        // Set plugin-specified route, if available.
-        // Plugins override what we calculated above.
-        if let Command::Query(ref mut route) = command {
+            // Set plugin-specified route, if available.
+            // Plugins override what we calculated above.
             if let Some(read) = self.plugin_output.read {
                 route.set_read(read);
             }
@@ -524,6 +531,10 @@ impl QueryParser {
                     .shards_calculator
                     .push(ShardWithPriority::new_plugin(shard.clone()));
                 route.set_shard(context.shards_calculator.shard());
+            }
+
+            if let Some(lsn) = routing_comment.lsn {
+                route.lsn = Some(lsn.lsn);
             }
         }
 
@@ -551,7 +562,11 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !context.router_context.cached {
                 Cache::get().record_normalized(
-                    statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
+                    statement
+                        .ast
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| Error::EmptyQuery)?,
                     command.route(),
                 )?;
             }
@@ -583,30 +598,57 @@ impl QueryParser {
                 .shards_calculator
                 .push(ShardWithPriority::new_table(shard));
             if !stmt.is_from {
-                return Ok(Command::Query(Route::read(
-                    context.shards_calculator.shard(),
-                )));
+                return Ok(Command::Query(
+                    Route::read(context.shards_calculator.shard()).dml(),
+                ));
             } else {
-                return Ok(Command::Query(Route::write(
-                    context.shards_calculator.shard(),
-                )));
+                return Ok(Command::Query(
+                    Route::write(context.shards_calculator.shard()).dml(),
+                ));
             }
         }
 
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
         if !stmt.is_from {
-            context
-                .shards_calculator
-                .push(ShardWithPriority::new_table(Shard::All));
-            Ok(Command::Query(Route::read(
-                context.shards_calculator.shard(),
-            )))
+            let shard = match table {
+                Some(table) if Self::copy_reads_omnisharded(table, context) => {
+                    ShardWithPriority::new_rr_omni(Shard::Direct(
+                        context.router_context.sticky.omni_index % context.shards,
+                    ))
+                }
+                _ => ShardWithPriority::new_table(Shard::All),
+            };
+            context.shards_calculator.push(shard);
+            Ok(Command::Query(
+                Route::read(context.shards_calculator.shard()).dml(),
+            ))
         } else {
             Ok(Command::Copy {
                 copy: Box::new(parser),
-                route: Route::write(ShardWithPriority::new_override_copy()),
+                route: Route::write(ShardWithPriority::new_override_copy()).dml(),
             })
         }
+    }
+
+    fn copy_reads_omnisharded(table: Table<'_>, context: &QueryParserContext) -> bool {
+        let sharded_tables = context.sharding_schema.tables();
+        if sharded_tables.omnishards().contains_key(table.name) {
+            return true;
+        }
+
+        let db_schema = context.router_context.schema;
+        let user = context.router_context.cluster.user();
+        let search_path = context.router_context.parameter_hints.search_path;
+
+        let Some(relation) = db_schema.table(table, user, search_path) else {
+            return false;
+        };
+        let table = Table {
+            schema: Some(relation.schema()),
+            ..table
+        };
+
+        !sharded_tables.is_table_sharded(table, db_schema, user, search_path)
     }
 
     /// Handle INSERT statement.
@@ -622,18 +664,29 @@ impl QueryParser {
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let schema_lookup = SchemaLookupContext {
-            db_schema: &context.router_context.schema,
+            db_schema: context.router_context.schema,
             user: context.router_context.cluster.user(),
             search_path: context.router_context.parameter_hints.search_path,
         };
+
+        let insert_rewritten = context.router_context.ast.is_some_and(|ast| {
+            !ast.rewrite_plan.subqueries.is_empty()
+                || matches!(
+                    ast.rewrite_plan.insert_split,
+                    Some(InsertSplitPlan::Unnest(_))
+                )
+        });
+
         let mut parser =
-            StatementParser::new(stmt, context.router_context.bind, &context.sharding_schema)
+            StatementParser::new(stmt, context.router_context.bind, context.sharding_schema)
                 .with_schema_lookup(schema_lookup)
-                .with_explain(self.recorder_mut().is_some());
+                .with_explain(self.recorder_mut().is_some())
+                .with_insert_rewritten(insert_rewritten);
+
         parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
-            &context.router_context.schema,
+            context.router_context.schema,
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
@@ -667,7 +720,7 @@ impl QueryParser {
         }
 
         Ok(Command::Query(
-            Route::write(shard).with_omnisharded(omnisharded),
+            Route::write(shard).with_omnisharded(omnisharded).dml(),
         ))
     }
 }

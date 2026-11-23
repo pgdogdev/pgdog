@@ -62,6 +62,7 @@ impl Command for Replicate {
             .build()?;
 
         let schema_sync = SchemaSyncTask::builder()
+            .publication_tables_only(false)
             .databases(state.databases())
             .publication(self.publication.clone());
 

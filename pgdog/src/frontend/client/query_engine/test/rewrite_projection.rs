@@ -5,7 +5,7 @@ use crate::frontend::router::parser::rewrite::statement::projection;
 use crate::frontend::router::parser::route::{Route, Shard, ShardWithPriority};
 use crate::frontend::{
     PreparedStatements,
-    router::parser::{Limit, OrderBy},
+    router::parser::{Limit, Nulls, OrderBy},
 };
 use pgdog_vector::Vector;
 use std::sync::Arc;
@@ -55,7 +55,7 @@ async fn direct_aggregate_keeps_base_sql() {
         _ => panic!("expected Query"),
     };
     assert_eq!(query.query(), sql);
-    assert!(client_request.route().projection_rewrite_plan.is_noop());
+    assert!(client_request.route().projection_rewrite_plan.is_none());
 }
 
 #[tokio::test]
@@ -89,10 +89,85 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
         client_request
             .route()
             .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
             .aggregate_helpers
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn cross_shard_having_rewrites_and_replaces_route_aggregate() {
+    let sql = "SELECT customer_id, COUNT(*) AS orders \
+               FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2";
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+
+    let engine = QueryEngine::from_client(&client).unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::All));
+
+    projection::finalize_after_route(
+        client_request,
+        &Schema::default(),
+        result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
+
+    let query = match &client_request.messages[0] {
+        ProtocolMessage::Query(query) => query,
+        _ => panic!("expected Query"),
+    };
+    assert!(query.query().contains("__pgdog_having_0"));
+    assert_eq!(
+        client_request.route().aggregate().targets().len(),
+        2,
+        "both the selected and hidden COUNT must be merged"
+    );
+    assert!(
+        client_request
+            .route()
+            .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
+            .having
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn direct_having_keeps_native_postgres_semantics() {
+    let sql = "SELECT customer_id, COUNT(*) AS orders \
+               FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2";
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+
+    let engine = QueryEngine::from_client(&client).unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::Direct(0)));
+
+    projection::finalize_after_route(
+        client_request,
+        &Schema::default(),
+        result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
+
+    let query = match &client_request.messages[0] {
+        ProtocolMessage::Query(query) => query,
+        _ => panic!("expected Query"),
+    };
+    assert_eq!(query.query(), sql);
+    assert!(client_request.route().projection_rewrite_plan.is_none());
 }
 
 #[tokio::test]
@@ -229,7 +304,7 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
         .unwrap();
     client_request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
+        vec![OrderBy::AscColumn("price".into(), Nulls::Default)],
         Default::default(),
         Limit::default(),
         None,
@@ -249,15 +324,56 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
     assert!(query.query().contains("price AS __pgdog_order_col0"));
     assert_eq!(
         client_request.route().order_by(),
-        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
+        &[OrderBy::AscColumn(
+            "__pgdog_order_col0".into(),
+            Nulls::Default
+        )]
     );
     assert_eq!(
         client_request
             .route()
             .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
             .order_by_helpers
             .len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn cross_shard_order_by_helper_keeps_nulls_placement() {
+    let sql = "SELECT id FROM products ORDER BY price DESC NULLS LAST";
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+
+    let engine = QueryEngine::from_client(&client).unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![OrderBy::DescColumn("price".into(), Nulls::Last)],
+        Default::default(),
+        Limit::default(),
+        None,
+    ));
+
+    projection::finalize_after_route(
+        client_request,
+        &Schema::default(),
+        result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
+
+    assert_eq!(
+        client_request.route().order_by(),
+        &[OrderBy::DescColumn(
+            "__pgdog_order_col0".into(),
+            Nulls::Last
+        )]
     );
 }
 
@@ -269,7 +385,7 @@ fn cached_projection_does_not_depend_on_first_route_order() {
     first.ast = Some(ast.clone());
     first.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
+        vec![OrderBy::AscColumn("price".into(), Nulls::Default)],
         Default::default(),
         Limit::default(),
         None,
@@ -284,7 +400,10 @@ fn cached_projection_does_not_depend_on_first_route_order() {
     assert!(first_query.query().contains("__pgdog_order_col1"));
     assert_eq!(
         first.route().order_by(),
-        &[OrderBy::AscColumn("__pgdog_order_col1".into())]
+        &[OrderBy::AscColumn(
+            "__pgdog_order_col1".into(),
+            Nulls::Default
+        )]
     );
 
     let mut second = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
@@ -293,7 +412,7 @@ fn cached_projection_does_not_depend_on_first_route_order() {
         ShardWithPriority::new_table(Shard::All),
         vec![
             OrderBy::AscVectorL2Column("embedding".into(), Vector::from(&[1.0, 2.0, 3.0][..])),
-            OrderBy::AscColumn("price".into()),
+            OrderBy::AscColumn("price".into(), Nulls::Default),
         ],
         Default::default(),
         Limit::default(),
@@ -304,8 +423,8 @@ fn cached_projection_does_not_depend_on_first_route_order() {
     assert_eq!(
         second.route().order_by(),
         &[
-            OrderBy::AscColumn("__pgdog_order_col0".into()),
-            OrderBy::AscColumn("__pgdog_order_col1".into())
+            OrderBy::AscColumn("__pgdog_order_col0".into(), Nulls::Default),
+            OrderBy::AscColumn("__pgdog_order_col1".into(), Nulls::Default)
         ]
     );
 }
@@ -317,7 +436,7 @@ fn aliased_projected_sort_column_remaps_route() {
     request.ast = Some(Arc::new(Ast::parse(sql).unwrap()));
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
+        vec![OrderBy::AscColumn("price".into(), Nulls::Default)],
         Default::default(),
         Limit::default(),
         None,
@@ -332,9 +451,17 @@ fn aliased_projected_sort_column_remaps_route() {
     assert!(!query.query().contains("__pgdog_order_col"));
     assert_eq!(
         request.route().order_by(),
-        &[OrderBy::AscColumn("item_price".into())]
+        &[OrderBy::AscColumn("item_price".into(), Nulls::Default)]
     );
-    assert!(!request.route().projection_rewrite_plan.order_by_helpers[0].injected);
+    assert!(
+        !request
+            .route()
+            .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
+            .order_by_helpers[0]
+            .injected
+    );
 }
 
 #[test]
@@ -344,7 +471,7 @@ fn duplicate_sort_column_names_use_injected_helper() {
     request.ast = Some(Arc::new(Ast::parse(sql).unwrap()));
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
+        vec![OrderBy::AscColumn("price".into(), Nulls::Default)],
         Default::default(),
         Limit::default(),
         None,
@@ -359,7 +486,10 @@ fn duplicate_sort_column_names_use_injected_helper() {
     assert!(query.query().contains("b.price AS __pgdog_order_col0"));
     assert_eq!(
         request.route().order_by(),
-        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
+        &[OrderBy::AscColumn(
+            "__pgdog_order_col0".into(),
+            Nulls::Default
+        )]
     );
 }
 
@@ -371,8 +501,8 @@ fn helper_replaces_the_matching_duplicate_order_by_position() {
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
         vec![
-            OrderBy::AscColumn("price".into()),
-            OrderBy::AscColumn("price".into()),
+            OrderBy::AscColumn("price".into(), Nulls::Default),
+            OrderBy::AscColumn("price".into(), Nulls::Default),
         ],
         Default::default(),
         Limit::default(),
@@ -384,8 +514,8 @@ fn helper_replaces_the_matching_duplicate_order_by_position() {
     assert_eq!(
         request.route().order_by(),
         &[
-            OrderBy::AscColumn("price".into()),
-            OrderBy::AscColumn("__pgdog_order_col1".into())
+            OrderBy::AscColumn("price".into(), Nulls::Default),
+            OrderBy::AscColumn("__pgdog_order_col1".into(), Nulls::Default)
         ]
     );
 }
@@ -405,7 +535,7 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
         .unwrap();
     client_request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("created_at".into())],
+        vec![OrderBy::AscColumn("created_at".into(), Nulls::Default)],
         Default::default(),
         Limit::default(),
         None,
@@ -435,16 +565,17 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     let route = client_request.route();
     assert_eq!(
         route.order_by(),
-        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
+        &[OrderBy::AscColumn(
+            "__pgdog_order_col0".into(),
+            Nulls::Default
+        )]
     );
-    assert_eq!(
-        route.projection_rewrite_plan.aggregate_helpers[0].alias,
-        "__pgdog_count_col0"
-    );
-    assert_eq!(
-        route.projection_rewrite_plan.order_by_helpers[0].alias,
-        "__pgdog_order_col0"
-    );
+    let plan = route
+        .projection_rewrite_plan
+        .as_deref()
+        .expect("projection rewrite plan");
+    assert_eq!(plan.aggregate_helpers[0].alias, "__pgdog_count_col0");
+    assert_eq!(plan.order_by_helpers[0].alias, "__pgdog_order_col0");
     assert_eq!(
         route.limit(),
         &Limit {

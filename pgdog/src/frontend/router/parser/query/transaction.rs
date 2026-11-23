@@ -16,7 +16,6 @@ impl QueryParser {
         stmt: &nodes::TransactionStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let extended = !context.query()?.simple();
         let mut rollback_savepoint = false;
 
         if context.rw_conservative() && !context.read_only {
@@ -32,22 +31,19 @@ impl QueryParser {
         match stmt.kind {
             TRANS_STMT_COMMIT => {
                 return Ok(Command::CommitTransaction {
-                    extended,
                     route: route.transaction_control(),
                 });
             }
             TRANS_STMT_ROLLBACK => {
                 return Ok(Command::RollbackTransaction {
-                    extended,
                     route: route.transaction_control(),
                 });
             }
             TRANS_STMT_BEGIN | TRANS_STMT_START => {
                 let transaction_type = Self::transaction_type(stmt.options()).unwrap_or_default();
                 return Ok(Command::StartTransaction {
-                    query: context.query()?.clone(),
+                    query: Box::new(context.query()?.clone()),
                     transaction_type,
-                    extended,
                     route: route
                         .with_read(transaction_type == TransactionType::ReadOnly)
                         .transaction_control(),

@@ -68,11 +68,18 @@ fn infinity_addition() {
         ("Infinity", "NaN", "NaN"),
         ("-Infinity", "NaN", "NaN"),
     ] {
-        assert_eq!(numeric(left) + numeric(right), numeric(expected));
-        assert_eq!(numeric(right) + numeric(left), numeric(expected));
-        let mut sum = numeric(left);
-        sum += numeric(right);
-        assert_eq!(sum, numeric(expected));
+        assert_eq!(
+            numeric(left)
+                .checked_add(numeric(right))
+                .expect("infinity addition is defined"),
+            numeric(expected)
+        );
+        assert_eq!(
+            numeric(right)
+                .checked_add(numeric(left))
+                .expect("infinity addition is defined"),
+            numeric(expected)
+        );
     }
 }
 
@@ -87,7 +94,12 @@ fn infinity_multiplication() {
         ("-Infinity", "0", "NaN"),
     ] {
         let multiplier = Decimal::from_str(multiplier).expect("finite decimal multiplier");
-        assert_eq!(numeric(input) * multiplier, numeric(expected));
+        assert_eq!(
+            numeric(input)
+                .checked_mul(multiplier)
+                .expect("infinity multiplication is defined"),
+            numeric(expected)
+        );
     }
 }
 

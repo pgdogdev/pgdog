@@ -4,6 +4,7 @@ use tracing::trace;
 use crate::backend::Error as BackendError;
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
+use crate::frontend::router::parser::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::rewrite::statement::projection;
 use crate::frontend::router::sharding::lookup;
@@ -91,10 +92,15 @@ impl QueryEngine {
             }
         };
 
+        if self.router.skip(cluster, client_request, &context.sticky) {
+            client_request.route = Some(self.router.command().route().clone());
+            return Ok(true);
+        }
+
         let router_context = RouterContext::new(
             client_request,
             cluster,
-            context.params,
+            &*context.params,
             context.transaction,
             context.sticky,
         )?;
@@ -115,7 +121,7 @@ impl QueryEngine {
                         let router_context = RouterContext::new(
                             client_request,
                             cluster,
-                            context.params,
+                            &*context.params,
                             context.transaction,
                             context.sticky,
                         )?
@@ -153,12 +159,30 @@ impl QueryEngine {
                 let command = self.router.command();
                 client_request.route = Some(command.route().clone());
                 trace!("routing {:#?} to {:#?}", client_request.messages, command,);
-
-                projection::finalize_after_route(
+                match projection::finalize_after_route(
                     client_request,
                     &cluster.schema(),
                     rewrite_result.and_then(RewriteResult::offset_plan),
-                )?;
+                ) {
+                    Ok(()) => {}
+                    Err(
+                        err @ (RewriteError::UnsupportedHaving(_)
+                        | RewriteError::UnsupportedGroupBy(_)
+                        | RewriteError::OrderByExpressionUnsupported),
+                    ) => {
+                        if let Some(transaction) = context.transaction.as_mut() {
+                            transaction.set_error();
+                        }
+                        self.error_response(
+                            context,
+                            client_request,
+                            ErrorResponse::unsupported(&err),
+                        )
+                        .await?;
+                        return Ok(false);
+                    }
+                    Err(rewrite_error) => return Err(rewrite_error.into()),
+                }
 
                 if let Some(rewrite_result) = rewrite_result {
                     rewrite_result.apply_after_route(client_request)?;
@@ -175,6 +199,15 @@ impl QueryEngine {
 
                 return Ok(false);
             }
+            Err(RouterError::Parser(err @ ParserError::InsertSelectWithoutShardingKey)) => {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                self.error_response(context, client_request, ErrorResponse::unsupported(&err))
+                    .await?;
+
+                return Ok(false);
+            }
             Err(RouterError::Parser(ParserError::UnmappedShardKey(shard_key))) => {
                 self.error_response(
                     context,
@@ -184,6 +217,17 @@ impl QueryEngine {
                     ),
                 )
                 .await?;
+
+                return Ok(false);
+            }
+            Err(RouterError::Parser(ParserError::Rewrite(
+                err @ (RewriteError::UnsupportedHaving(_) | RewriteError::UnsupportedGroupBy(_)),
+            ))) => {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                self.error_response(context, client_request, ErrorResponse::unsupported(&err))
+                    .await?;
 
                 return Ok(false);
             }

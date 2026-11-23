@@ -547,7 +547,11 @@ fn make_sharding_schema(
         users_path: PathBuf::new(),
         ..Default::default()
     });
-    databases.cluster(("user", "db")).unwrap().sharding_schema()
+    databases
+        .cluster(("user", "db"))
+        .unwrap()
+        .sharding_schema()
+        .clone()
 }
 
 fn route(schema: &ShardingSchema, table_name: &str, value: i64) -> Shard {

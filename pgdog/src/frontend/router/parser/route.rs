@@ -1,11 +1,20 @@
-use std::{fmt::Display, ops::Deref};
+use std::{fmt::Display, ops::Deref, sync::Arc};
 
 use super::{
-    Aggregate, DistinctBy, Limit, OrderBy, StatementType, explain_trace::ExplainTrace,
-    rewrite::statement::projection::ProjectionRewritePlan, statement::AdvisoryLocks,
+    Aggregate, DistinctBy, Limit, OrderBy, StatementType, advisory_lock::AdvisoryLocks,
+    explain_trace::ExplainTrace, rewrite::statement::projection::ProjectionRewritePlan,
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
+
+/// Table changes identified by the query parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum TableChange {
+    #[default]
+    None,
+    Created,
+    Dropped(u32),
+}
 
 /// The shard destination for a query.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
@@ -110,11 +119,11 @@ pub(crate) struct Route {
     advisory_locks: AdvisoryLocks,
     /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
-    /// Temporary columns projected for cross-shard result processing.
-    pub(crate) projection_rewrite_plan: ProjectionRewritePlan,
+    /// Shared metadata for temporary cross-shard projections, absent on the common path.
+    pub(crate) projection_rewrite_plan: Option<Arc<ProjectionRewritePlan>>,
     /// Our query explain plan. We attach
     /// this to the `EXPLAIN` output.
-    explain: Option<ExplainTrace>,
+    explain: Option<Box<ExplainTrace>>,
     /// This query is a `ROLLBACK SAVEPOINT` command.
     /// Nasty one.
     rollback_savepoint: bool,
@@ -134,8 +143,11 @@ pub(crate) struct Route {
     /// the query doesn't execute while any are unresolved.
     pending_lookups: Vec<PendingLookup>,
     /// The temporary table being created/dropped if present
-    pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
-    stmt_type: StatementType,
+    pub(in crate::frontend) temp_table_change: Option<Box<TempTableChange>>,
+    stmt_type: Option<StatementType>,
+    table_change: TableChange,
+    /// Minimum replica LSN in its 64-bit representation.
+    pub(crate) lsn: Option<u64>,
 }
 
 impl Display for Route {
@@ -165,6 +177,7 @@ impl Route {
             aggregate,
             limit,
             distinct,
+            stmt_type: Some(StatementType::Dml),
             ..Default::default()
         }
     }
@@ -259,7 +272,10 @@ impl Route {
     }
 
     pub(crate) fn aggregate(&self) -> &Aggregate {
-        &self.aggregate
+        self.projection_rewrite_plan
+            .as_deref()
+            .and_then(ProjectionRewritePlan::aggregate)
+            .unwrap_or(&self.aggregate)
     }
 
     /// Set shard on this route, along with reasoning
@@ -356,15 +372,15 @@ impl Route {
 
     #[cfg(test)]
     pub(crate) fn explain(&self) -> Option<&ExplainTrace> {
-        self.explain.as_ref()
+        self.explain.as_deref()
     }
 
     pub(crate) fn set_explain(&mut self, trace: ExplainTrace) {
-        self.explain = Some(trace);
+        self.explain = Some(Box::new(trace));
     }
 
     pub(crate) fn take_explain(&mut self) -> Option<ExplainTrace> {
-        self.explain.take()
+        self.explain.take().map(|trace| *trace)
     }
 
     pub(crate) fn with_rollback_savepoint(mut self, rollback: bool) -> Self {
@@ -394,27 +410,48 @@ impl Route {
     }
 
     pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {
-        self.temp_table_change = temp_table;
+        self.temp_table_change = temp_table.map(Box::new);
         self
     }
 
     pub(super) fn ddl(mut self) -> Self {
-        self.stmt_type = StatementType::Ddl;
+        self.stmt_type = Some(StatementType::Ddl);
         self
     }
 
+    pub(super) fn dml(mut self) -> Self {
+        self.stmt_type = Some(StatementType::Dml);
+        self
+    }
+
+    pub(crate) fn statement_type(&self) -> Option<StatementType> {
+        self.stmt_type
+    }
+
+    pub(super) fn with_table_change(mut self, table_change: TableChange) -> Self {
+        self.table_change = table_change;
+        self
+    }
+
+    pub(crate) fn table_change(&self) -> TableChange {
+        self.table_change
+    }
+
     pub(super) fn transaction_control(mut self) -> Self {
-        self.stmt_type = StatementType::TransactionControl;
+        self.stmt_type = Some(StatementType::TransactionControl);
         self
     }
 
     pub(super) fn session_control(mut self) -> Self {
-        self.stmt_type = StatementType::SessionControl;
+        self.stmt_type = Some(StatementType::SessionControl);
         self
     }
 
     pub(crate) fn needs_backend(&self) -> bool {
-        matches!(self.stmt_type, StatementType::Dml | StatementType::Ddl) || self.rollback_savepoint
+        matches!(
+            self.stmt_type,
+            None | Some(StatementType::Dml | StatementType::Ddl)
+        ) || self.rollback_savepoint
     }
 }
 
@@ -667,6 +704,7 @@ impl ShardsWithPriority {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::frontend::router::parser::Nulls;
 
     #[test]
     fn test_shard_ord() {
@@ -722,7 +760,7 @@ mod test {
     fn test_should_buffer_order_by() {
         let route = Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![OrderBy::Asc(0)],
+            vec![OrderBy::Asc(0, Nulls::Default)],
             Default::default(),
             Limit::default(),
             None,

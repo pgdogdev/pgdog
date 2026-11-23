@@ -11,6 +11,7 @@ pgdog-postgres-types = { path = "../pgdog-postgres-types" }
 bytes.workspace = true
 indexmap.workspace = true
 schemars.workspace = true
+pgdog-util.workspace = true
 derive_more = { workspace = true, features = ["error", "from_str"] }
 
 [dev-dependencies]

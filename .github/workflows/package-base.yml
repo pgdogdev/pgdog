@@ -1,5 +1,10 @@
 name: package-base
 on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/package-base.yml"
+      - "docker/Dockerfile.base-*"
   workflow_dispatch:
   schedule:
     # Weekly: Mondays at 06:00 UTC.

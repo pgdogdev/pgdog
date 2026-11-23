@@ -53,10 +53,11 @@ impl Taken {
     /// tracked — a double-checkin or a checkin for a backend that never went
     /// through [`Self::take`].
     pub(super) fn check_in(&mut self, backend: BackendPid) -> Result<(), Error> {
+        #[allow(clippy::unnecessary_lazy_evaluations)]
         let frontend = self
             .backend_to_frontend
             .remove(&backend)
-            .ok_or(Error::UntrackedConnCheckin(backend))?;
+            .ok_or_else(|| Error::UntrackedConnCheckin(backend))?;
         // Drop the frontend's cancel entry only when it still names this
         // backend. The deferred check-in from a prior `Server::drop` may fire
         // after the frontend has already taken a newer backend; in that case

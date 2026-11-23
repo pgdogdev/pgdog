@@ -4,13 +4,14 @@ use std::fmt::Debug;
 use std::time::Instant;
 
 use once_cell::sync::OnceCell;
-use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tracing::warn;
 
 use super::super::{Error, Route, StatementRewrite, StatementRewriteContext};
 use super::Stats;
 use crate::frontend::router::parser::cache::AstQuery;
+use crate::frontend::router::parser::comment::CommentSpans;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::router::parser::rewrite::statement::projection::PostRouteRewrite;
 use crate::frontend::{PreparedStatements, RoutingComment};
@@ -20,6 +21,8 @@ use crate::frontend::{PreparedStatements, RoutingComment};
 pub(crate) struct ClientQuery {
     pub(crate) cached: bool,
     pub(in crate::frontend) comment: Arc<RoutingComment>,
+    /// Where the edge comments sit in this query's text.
+    pub(crate) comment_spans: CommentSpans,
     pub(crate) ast: Arc<Ast>,
 }
 
@@ -28,8 +31,14 @@ pub(crate) struct ClientQuery {
 pub(crate) struct Ast {
     /// Cached AST.
     pub(crate) ast: Owned<StmtList>,
+
     /// AST stats.
-    pub(crate) stats: Mutex<Stats>,
+    pub(crate) stats: Stats,
+    pub(crate) hits: AtomicUsize,
+    pub(crate) direct: AtomicUsize,
+    pub(crate) multi: AtomicUsize,
+    pub(crate) used: AtomicBool,
+
     /// Rewrite plan.
     pub(crate) rewrite_plan: RewritePlan,
     /// Lazily generated cross-shard SQL and response metadata. This is derived
@@ -46,7 +55,11 @@ impl Ast {
         stats.memory_allocated = ast.memory_allocated();
         Self {
             ast,
-            stats: Mutex::new(stats),
+            hits: AtomicUsize::new(stats.hits),
+            direct: AtomicUsize::default(),
+            multi: AtomicUsize::default(),
+            used: AtomicBool::default(),
+            stats,
             rewrite_plan: RewritePlan::default(),
             post_route_rewrite: OnceCell::new(),
             query_without_comment: "".into(),
@@ -69,8 +82,8 @@ impl Ast {
             extended: query.original_query.extended(),
             prepared: query.original_query.prepared(),
             prepared_statements,
-            schema: &ctx.sharding_schema,
-            db_schema: &ctx.db_schema,
+            schema: ctx.sharding_schema,
+            db_schema: ctx.db_schema,
             user: ctx.user,
             search_path: ctx.search_path,
             timezone: ctx.timezone,
@@ -102,7 +115,11 @@ impl Ast {
         }
 
         Ok(Self {
-            stats: Mutex::new(stats),
+            hits: AtomicUsize::new(stats.hits),
+            direct: AtomicUsize::default(),
+            multi: AtomicUsize::default(),
+            used: AtomicBool::default(),
+            stats,
             ast,
             rewrite_plan,
             post_route_rewrite: OnceCell::new(),
@@ -118,12 +135,27 @@ impl Ast {
     /// Update stats for this statement, given the route
     /// calculated by the query parser.
     pub(crate) fn update_stats(&self, route: &Route) {
-        let mut guard = self.stats.lock();
-
         if route.is_cross_shard() {
-            guard.multi += 1;
+            self.multi.fetch_add(1, Ordering::Relaxed);
         } else {
-            guard.direct += 1;
+            self.direct.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn record_hit(&self) {
+        self.hits.fetch_add(1, Ordering::Relaxed);
+
+        if !self.used.load(Ordering::Relaxed) {
+            self.used.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn stats(&self) -> Stats {
+        Stats {
+            hits: self.hits.load(Ordering::Relaxed),
+            direct: self.direct.load(Ordering::Relaxed),
+            multi: self.multi.load(Ordering::Relaxed),
+            ..self.stats
         }
     }
 

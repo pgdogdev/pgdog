@@ -25,10 +25,6 @@ LEFT JOIN (
         pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
     WHERE
         con.contype = 'p'
-        -- information_schema.table_constraints excludes SELECT-only non-owners, as required by the SQL standard.
-        AND (pg_catalog.pg_has_role(cl.relowner, 'USAGE')
-             OR pg_catalog.has_table_privilege(cl.oid, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
-             OR pg_catalog.has_any_column_privilege(cl.oid, 'INSERT, UPDATE, REFERENCES'))
 ) pk ON c.table_schema = pk.table_schema
     AND c.table_name = pk.table_name
     AND c.column_name = pk.column_name

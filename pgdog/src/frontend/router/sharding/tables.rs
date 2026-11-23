@@ -1,3 +1,4 @@
+use pg_raw_parse::{Node, nodes};
 use pgdog_config::{DataType, Hasher, LookupResult};
 use pgdog_vector::Vector;
 
@@ -13,6 +14,7 @@ use super::Mapping;
 pub(crate) struct ShardedTable {
     pub(crate) database: String,
     pub(crate) name: Option<String>,
+    pub(crate) prefix: bool,
     pub(crate) schema: Option<String>,
     pub(crate) column: String,
     pub(crate) primary: bool,
@@ -23,6 +25,27 @@ pub(crate) struct ShardedTable {
     pub(crate) mapping: Option<Mapping>,
     pub(crate) lookup_query: Option<String>,
     pub(crate) lookup_result: LookupResult,
+}
+
+impl ShardedTable {
+    // Returns true if the INSERT sends the sharding key column (as opposed to relying on DEFAULT)
+    pub(crate) fn insert_sends_key_column(&self, insert: &nodes::InsertStmt) -> bool {
+        insert.cols().is_empty()
+            || insert.cols().into_iter().any(|column| {
+                matches!(column, Node::ResTarget(target) if target.name() == Some(self.column.as_str()))
+            })
+    }
+
+    /// Whether `table` matches this table's configured name (or prefix).
+    pub(crate) fn name_matches(&self, table: &str) -> bool {
+        self.name.as_deref().is_some_and(|name| {
+            if self.prefix {
+                table.starts_with(name)
+            } else {
+                table == name
+            }
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -43,20 +66,14 @@ impl<'a> Tables<'a> {
     pub(crate) fn sharded(&'a self, table: Table) -> Option<&'a ShardedTable> {
         let tables = self.schema.tables().tables();
 
-        tables
-            .iter()
-            .filter(|table| table.name.is_some())
-            .find(|t| t.name.as_deref() == Some(table.name))
+        tables.iter().find(|t| t.name_matches(table.name))
     }
 
     pub(crate) fn key(&'a self, table: Table, columns: &'a [Column]) -> Option<Key<'a>> {
         let tables = self.schema.tables().tables();
 
         // Check tables with name first.
-        let sharded = tables
-            .iter()
-            .filter(|table| table.name.is_some())
-            .find(|t| t.name.as_deref() == Some(table.name));
+        let sharded = tables.iter().find(|t| t.name_matches(table.name));
 
         if let Some(sharded) = sharded
             && let Some(position) = columns.iter().position(|col| col.name == sharded.column)

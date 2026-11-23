@@ -1,7 +1,5 @@
-use crate::{
-    frontend::BufferedQuery,
-    net::{FrontendPid, Parameters},
-};
+use crate::parameters::ParameterStore;
+use crate::{frontend::BufferedQuery, net::FrontendPid};
 use std::ops::{Deref, DerefMut};
 
 use super::*;
@@ -41,7 +39,7 @@ impl DirectBinding {
     pub(super) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
     ) -> Result<usize, Error> {
         let start_transaction = self.transaction_stmt.as_ref().map(|q| q.query());
 
@@ -110,7 +108,7 @@ pub(crate) mod test {
             .unwrap();
 
         binding
-            .link_client(FrontendPid::new(), &Parameters::default())
+            .link_client(FrontendPid::new(), &ParameterStore::default())
             .await
             .unwrap();
 

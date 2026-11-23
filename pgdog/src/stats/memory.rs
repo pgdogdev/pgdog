@@ -72,7 +72,9 @@ impl<V: MemoryUsage> MemoryUsage for HashSet<V> {
     }
 }
 
-impl<K: MemoryUsage + Hash + Eq, V: MemoryUsage + Eq> MemoryUsage for LruCache<K, V> {
+impl<K: MemoryUsage + Hash + Eq, V: MemoryUsage + Eq, S: std::hash::BuildHasher> MemoryUsage
+    for LruCache<K, V, S>
+{
     fn memory_usage(&self) -> usize {
         self.iter()
             .map(|(k, v)| k.memory_usage() + v.memory_usage())

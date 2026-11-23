@@ -11,6 +11,8 @@ use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 pub(crate) mod aggregate;
 pub(crate) mod auto_id;
 pub(crate) mod error;
+pub(crate) mod group_by;
+mod having;
 pub(crate) mod insert;
 pub(crate) mod insert_split_plan;
 pub(crate) mod nextval;
@@ -20,11 +22,11 @@ pub(crate) mod order_by;
 pub(crate) mod plan;
 pub(crate) mod projection;
 pub(crate) mod simple_prepared;
+pub(crate) mod subquery;
 pub(crate) mod unique_id;
 pub(crate) mod update;
 
 pub(crate) use error::Error;
-pub(crate) use insert::InsertSplit;
 use pgdog_config::RewriteMode;
 //use pgdog_config::RewriteMode;
 pub(crate) use insert_split_plan::InsertSplitRewriteResult;
@@ -195,13 +197,19 @@ impl<'a> StatementRewrite<'a> {
 
         if nd_function_rewrite {
             match stmt.stmt_mut() {
-                NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_) => {
+                NodeMut::InsertStmt(_)
+                | NodeMut::SelectStmt(_)
+                | NodeMut::UpdateStmt(_)
+                | NodeMut::DeleteStmt(_) => {
                     self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut plan.bind_params)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
                     if matches!(
                         prepare.query_mut(),
-                        NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_)
+                        NodeMut::InsertStmt(_)
+                            | NodeMut::SelectStmt(_)
+                            | NodeMut::UpdateStmt(_)
+                            | NodeMut::DeleteStmt(_)
                     ) {
                         self.rewrite_nd_functions(prepare.query_mut(), mem, &mut plan.bind_params)?;
                     }
@@ -224,6 +232,11 @@ impl<'a> StatementRewrite<'a> {
 
         if let Node::InsertStmt(insert) = stmt.stmt() {
             self.split_insert(insert, &mut plan)?;
+        }
+
+        // Handle planning subqueries
+        if config().config.rewrite.subqueries == RewriteMode::Rewrite {
+            plan.subqueries = self.plan_subquery(stmt.stmt())?;
         }
 
         if let Node::UpdateStmt(stmt) = stmt.stmt() {

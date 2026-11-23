@@ -20,6 +20,12 @@ pub(crate) enum DiscardTarget {
     Temp,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UnlistenTarget {
+    Channel(String),
+    All,
+}
+
 /// Query parser result.
 #[derive(Debug, Clone)]
 pub(crate) enum Command {
@@ -29,17 +35,14 @@ pub(crate) enum Command {
         route: Route,
     },
     StartTransaction {
-        query: BufferedQuery,
+        query: Box<BufferedQuery>,
         transaction_type: TransactionType,
-        extended: bool,
         route: Route,
     },
     CommitTransaction {
-        extended: bool,
         route: Route,
     },
     RollbackTransaction {
-        extended: bool,
         route: Route,
     },
     Set {
@@ -67,7 +70,7 @@ pub(crate) enum Command {
         payload: String,
         shard: Shard,
     },
-    Unlisten(String),
+    Unlisten(UnlistenTarget),
     UniqueId,
 }
 

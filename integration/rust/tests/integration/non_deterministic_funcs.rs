@@ -40,6 +40,8 @@ async fn two_conns_transaction_time_reuse_insert() {
 
     let mut transaction = single_sharded_list_pool.begin().await.unwrap();
 
+    transaction.execute("TRUNCATE sharded").await.unwrap();
+
     {
         // Both use DEFAULT now() into timestamptz
         // 1 is mapped to Shard 0
@@ -123,6 +125,55 @@ async fn transaction_time_update_statement_rewrites() {
 
     assert!(transaction_start_time == row_tt_simple_protocol_time);
     assert!(transaction_start_time == row_tt_extended_protocol_time);
+
+    transaction.rollback().await.unwrap();
+}
+
+/// Verify that now() / CURRENT_TIMESTAMP in a DELETE statement are re-written to the transaction start time.
+#[tokio::test]
+async fn transaction_time_delete_statement_rewrites() {
+    let conn = connections_sqlx().await;
+    let conn = conn.get(1).unwrap();
+
+    conn.execute("TRUNCATE sharded").await.unwrap();
+
+    let mut transaction = conn.begin().await.unwrap();
+
+    let transaction_start_time: DateTime<Utc> = {
+        let transaction_start_time_row: PgRow = transaction
+            .fetch_one("INSERT INTO sharded(id) VALUES (1) RETURNING *")
+            .await
+            .unwrap();
+
+        transaction
+            .execute("INSERT INTO sharded(id) VALUES (2)")
+            .await
+            .unwrap();
+
+        transaction_start_time_row.get::<_, &str>("created_at")
+    };
+
+    let (row_tt_extended_protocol_time, row_tt_simple_protocol_time) = {
+        let row_tt_extended_protocol: PgRow = transaction
+            .fetch_one("DELETE FROM sharded WHERE id = 1 AND created_at = NOW() RETURNING *")
+            .await
+            .unwrap();
+
+        let row_tt_simple_protocol: PgRow = sqlx::raw_sql(
+            "DELETE FROM sharded WHERE id = 2 AND created_at = CURRENT_TIMESTAMP RETURNING *",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+
+        (
+            row_tt_extended_protocol.get::<DateTime<Utc>, &str>("created_at"),
+            row_tt_simple_protocol.get::<DateTime<Utc>, &str>("created_at"),
+        )
+    };
+
+    assert!(transaction_start_time == row_tt_simple_protocol_time);
+    assert!(transaction_start_time == row_tt_extended_protocol_time);
 }
 
 /// Ensure that SELECT now() and CURRENT_TIMESTAMP return the correct type, are consistent
@@ -175,6 +226,8 @@ async fn transaction_time_usage_in_select_query() {
     let conn = conn.get(1).unwrap();
 
     let mut transaction = conn.begin().await.unwrap();
+
+    transaction.execute("TRUNCATE sharded").await.unwrap();
 
     // 'created_at' col has default now()
     sqlx::query("INSERT INTO sharded (id) VALUES (1)")

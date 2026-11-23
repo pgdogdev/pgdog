@@ -1,7 +1,8 @@
 # Instead of running downloads in every single one of our 30 jobs, this builds an image
 # we can re-use across all of our jobs, saving us roughly 60 secs end-to-end (and 10-15 mins of runner mins in aggregate)
 
-FROM ubuntu:24.04
+# Keep the same Ubuntu release as the base images. Bump the pgdog-ci tag in the workflows when this changes.
+FROM ubuntu:26.04
 
 ARG GO_VERSION=1.26.8
 ARG NODE_VERSION=24.21.0
@@ -26,6 +27,8 @@ RUN <<EOF
 packages=(
     ca-certificates curl sudo git gnupg zstd unzip xz-utils
     build-essential clang pkg-config libssl-dev libpq-dev libyaml-dev
+    # pg_internals runs PostgreSQL configure, Perl generators, and libclang.
+    bison flex perl libclang-dev libicu-dev libreadline-dev
     libgmp-dev libffi-dev libncurses-dev zlib1g-dev
     lsof psmisc procps iproute2 openssl
     python3 python3-dev python3-pip python3-venv python3-virtualenv
@@ -67,6 +70,16 @@ rm -rf /var/lib/apt/lists/*
 EOF
 
 RUN <<EOF
+apt-get update
+apt-get install -y --no-install-recommends postgresql-server-dev-18 libkrb5-dev
+cd /tmp
+git clone --depth 1 --branch 2.4.0 https://github.com/percona/pg_stat_monitor
+make -C pg_stat_monitor install
+echo "shared_preload_libraries = 'pg_stat_monitor'" > /etc/postgresql/18/main/conf.d/pg_stat_monitor.conf
+rm -rf pg_stat_monitor /var/lib/apt/lists/*
+EOF
+
+RUN <<EOF
 arch="$(dpkg --print-architecture)"
 curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" | tar xzf - -C /usr/local
 mkdir /usr/local/node
@@ -78,9 +91,9 @@ done
 EOF
 
 RUN <<EOF
-otp_path="ubuntu-24.04"
+otp_path="ubuntu-26.04"
 if [[ "$(dpkg --print-architecture)" == "arm64" ]]; then
-    otp_path="arm64/ubuntu-24.04"
+    otp_path="arm64/ubuntu-26.04"
 fi
 mkdir -p /usr/local/otp
 curl -fsSL "https://builds.hex.pm/builds/otp/${otp_path}/OTP-${OTP_VERSION}.tar.gz" | tar xzf - -C /usr/local/otp --strip-components=1

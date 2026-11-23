@@ -14,8 +14,8 @@ USERS_CONFIG="${SCRIPT_DIR}/users.toml"
 PGDOG_PORT=${PGDOG_PORT:-6440}
 export PGPASSWORD=pgdog
 
-# Replication retry is fixed 500ms x 8 attempts (resharding_replication_retry_* in pgdog.toml),
-# a ~4s budget per failure; a CI shard restart completes well within it. 120s covers the COPY of
+# Replication retry is fixed 1000ms x 20 attempts (resharding_replication_retry_* in pgdog.toml),
+# a ~20s budget per failure, so a slow shard restart (stop, start, crash recovery) fits. 120s covers the COPY of
 # ~100k rows + replication catch-up with headroom on slow CI.
 REPLICATION_TIMEOUT=120
 
@@ -26,7 +26,7 @@ cleanup() {
         kill "${PGDOG_PID}" 2>/dev/null || true
         wait "${PGDOG_PID}" 2>/dev/null || true
     fi
-    cd "${COMPOSE_DIR}" && docker compose down 2>/dev/null || true
+    cd "${COMPOSE_DIR}" && docker compose down -v 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -106,14 +106,14 @@ echo "[retry_test] pgdog admin is ready."
 # Start the copy; returns immediately, work runs in background.
 admin_psql -c "COPY_DATA source destination pgdog"
 
-# A temporary replication slot on the source means copying is active; kill now to inject a mid-copy failure.
+# An active COPY FROM STDIN on shard_1 means copying is active; kill now to inject a mid-copy failure.
 echo "[retry_test] Waiting for COPY_DATA to start copying..."
 WAIT_ATTEMPTS=0
-until src_psql -tAc "SELECT 1 FROM pg_replication_slots WHERE temporary = true LIMIT 1" 2>/dev/null | grep -q 1; do
+until shard1_psql -tAc "SELECT 1 FROM pg_stat_activity WHERE state = 'active' AND query ILIKE 'COPY %FROM STDIN%' LIMIT 1" 2>/dev/null | grep -q 1; do
     WAIT_ATTEMPTS=$((WAIT_ATTEMPTS + 1))
     if [ "${WAIT_ATTEMPTS}" -ge 200 ]; then
         dump_state
-        echo "[retry_test] FAIL: COPY_DATA never created a replication slot after $((WAIT_ATTEMPTS / 20))s"
+        echo "[retry_test] FAIL: COPY_DATA never started a COPY on shard_1 after $((WAIT_ATTEMPTS / 20))s"
         exit 1
     fi
     if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
@@ -307,5 +307,5 @@ kill "${PGDOG_PID}" 2>/dev/null || true
 wait "${PGDOG_PID}" 2>/dev/null || true
 PGDOG_PID=""
 
-docker compose down
+docker compose down -v
 popd

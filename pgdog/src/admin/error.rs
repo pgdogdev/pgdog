@@ -7,6 +7,9 @@ pub(crate) enum Error {
     #[error("syntax error in admin command")]
     Syntax,
 
+    #[error("invalid option \"{0}\"")]
+    InvalidOption(String),
+
     #[error("empty request")]
     Empty,
 

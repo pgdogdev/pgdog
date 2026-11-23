@@ -40,6 +40,15 @@ impl<'a> Table<'a> {
     pub(crate) fn schema(&self) -> Option<Schema<'a>> {
         self.schema.map(|s| s.into())
     }
+
+    /// Attempt to figure out if the table is a part of `pg_catalog`.
+    /// WARN: that may give false positives
+    pub(crate) fn is_pg_catalog(&self) -> bool {
+        match self.schema {
+            Some(schema) => schema == "pg_catalog",
+            None => self.name.starts_with("pg_"),
+        }
+    }
 }
 
 impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {
@@ -74,11 +83,11 @@ impl<'a> TryFrom<&'a CastNodeList<nodes::String>> for Table<'a> {
         let name = list
             .next()
             .and_then(nodes::String::sval)
-            .ok_or(Error::TableDecode)?;
+            .ok_or_else(|| Error::TableDecode)?;
         match (list.next(), list.next()) {
             (schema, None) => {
                 let schema = schema
-                    .map(|s| s.sval().ok_or(Error::TableDecode))
+                    .map(|s| s.sval().ok_or_else(|| Error::TableDecode))
                     .transpose()?;
                 Ok(Self {
                     schema,
@@ -102,12 +111,12 @@ impl<'a> TryFrom<&'a NodeList> for Table<'a> {
             Some(Node::RangeVar(rv)) if value.len() == 1 => return Ok(Self::from(rv)),
             _ => None,
         }
-        .ok_or(Error::TableDecode)?;
+        .ok_or_else(|| Error::TableDecode)?;
 
         match (list.next(), list.next()) {
             (schema, None) => {
                 let schema = schema
-                    .map(|s| s.as_str().ok_or(Error::TableDecode))
+                    .map(|s| s.as_str().ok_or_else(|| Error::TableDecode))
                     .transpose()?;
                 Ok(Self {
                     schema,

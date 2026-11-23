@@ -21,8 +21,5 @@ pgdog-postgres-types.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-[build-dependencies]
-bindgen = "0.71.0"
-
 [features]
 default = []

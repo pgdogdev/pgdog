@@ -94,7 +94,6 @@ impl Describe {
         self.kind() == 'P'
     }
 
-    #[cfg(test)]
     pub(crate) fn new_portal(name: &str) -> Describe {
         let mut payload = Payload::named('D');
         payload.put_u8(b'P');

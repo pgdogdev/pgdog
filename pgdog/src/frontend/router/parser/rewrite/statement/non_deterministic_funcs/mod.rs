@@ -350,14 +350,18 @@ impl StatementRewrite<'_> {
 
             // Replaces all non-deterministic function calls (ParamRef or String)
             nd_rewrite.transform_func_calls_in_insert(stmt, &insert_context)?;
-        } else if matches!(stmt, NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_)) {
+        } else if matches!(
+            stmt,
+            NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_) | NodeMut::DeleteStmt(_)
+        ) {
             // Still rewrite other kind of statements that use ND functions that
             // are reliant on transaction start time
 
             let statement_type = match stmt {
                 NodeMut::SelectStmt(_) => StatementType::Select,
                 NodeMut::UpdateStmt(_) => StatementType::Update,
-                _ => panic!("only select and update covered"),
+                NodeMut::DeleteStmt(_) => StatementType::Delete,
+                _ => panic!("only select, update and delete covered"),
             };
 
             let mut nd_rewrite = NDRewrite {
@@ -375,7 +379,8 @@ impl StatementRewrite<'_> {
             match stmt {
                 NodeMut::SelectStmt(select_stmt) => transform_tt.transform_select_stmt(select_stmt),
                 NodeMut::UpdateStmt(update_stmt) => transform_tt.transform_update_stmt(update_stmt),
-                _ => panic!("only select and update covered"),
+                NodeMut::DeleteStmt(delete_stmt) => transform_tt.transform_delete_stmt(delete_stmt),
+                _ => panic!("only select, update and delete covered"),
             }
 
             return transform_tt.outer_error.map(Err).unwrap_or(Ok(()));
@@ -434,6 +439,7 @@ enum StatementType {
     Insert,
     Select,
     Update,
+    Delete,
 }
 
 /// Extra context necessary for re-writing INSERT statements, where we need
@@ -466,7 +472,9 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                 .uncast();
 
             match self.statement_type {
-                StatementType::Insert | StatementType::Update => constant_text_node,
+                StatementType::Insert | StatementType::Update | StatementType::Delete => {
+                    constant_text_node
+                }
                 StatementType::Select => self
                     .mem
                     .make_type_cast(

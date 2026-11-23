@@ -19,7 +19,7 @@ use crate::util::{safe_interval, safe_sleep, safe_timeout};
 use pgdog_stats::LsnStats as StatsLsnStats;
 pub(crate) use pgdog_stats::replication::ReplicaLag;
 
-static AURORA_DETECTION_QUERY: &str = "SELECT aurora_version()";
+static AURORA_DETECTION_QUERY: &str = "SELECT to_regproc('aurora_version') IS NOT NULL";
 
 static LSN_QUERY: &str = "
 WITH recovery AS MATERIALIZED (
@@ -45,9 +45,9 @@ SELECT
     lsn - '0/0'::pg_lsn AS offset_bytes,
     CASE
         WHEN replica THEN
-            COALESCE(pg_last_xact_replay_timestamp(), now())
+            COALESCE(pg_last_xact_replay_timestamp() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
         ELSE
-            now()
+            now() AT TIME ZONE 'UTC'
     END AS timestamp,
     CASE
         WHEN replica THEN
@@ -64,8 +64,8 @@ SELECT
     '0/0'::pg_lsn AS lsn,
     0::bigint AS offset_bytes,
     now() AS timestamp,
-    (pg_control_checkpoint()).timeline_id AS timeline
-";
+    1::integer
+"; // Timeline doesn't matter on Aurora I don't think. We don't use it anyway.
 
 /// LSN information.
 #[derive(Debug, Clone, Copy, Default)]
@@ -151,15 +151,17 @@ impl LsnMonitor {
     async fn detect_aurora(&self, conn: &mut Server) -> Option<bool> {
         match safe_timeout(
             self.pool.config().lsn_check_timeout,
-            conn.fetch_all::<DataRow>(AURORA_DETECTION_QUERY),
+            conn.fetch_all::<bool>(AURORA_DETECTION_QUERY),
         )
         .await
         {
-            Ok(Ok(_)) => {
-                debug!("aurora detected [{}]", self.pool.addr());
-                Some(true)
+            Ok(Ok(rows)) => {
+                let is_aurora = rows[0]; // SAFETY: Aurora detection query will return one row and one column.
+                if is_aurora {
+                    debug!("aurora detected [{}]", self.pool.addr());
+                }
+                Some(is_aurora)
             }
-            Ok(Err(crate::backend::Error::ExecutionError(_))) => Some(false),
             Ok(Err(err)) => {
                 error!(
                     "lsn monitor aurora detection error: {} [{}]",
@@ -289,6 +291,19 @@ mod test {
     use pgdog_stats::Lsn;
     use tokio::time::timeout;
 
+    #[test]
+    fn test_lsn_stats_unsigned_offset() {
+        let mut row = DataRow::new();
+        row.add(true);
+        row.add("FFFFFFFF/FFFFFFFF");
+        row.add("18446744073709551615");
+        row.add("2026-07-01 13:33:10.000000+00");
+        row.add(1i64);
+        let stats = LsnStats::from_row(row, false);
+        assert_eq!(stats.lsn.lsn, u64::MAX);
+        assert_eq!(stats.offset_bytes, u64::MAX);
+    }
+
     // A launched pool against the local Postgres. The default `lsn_check_delay`
     // is `MAX_DURATION`, so the background LSN monitor spawned by `launch()`
     // stays asleep and never competes with the `run_check` calls below.
@@ -314,6 +329,11 @@ mod test {
         assert!(!stats.aurora, "local Postgres is not Aurora");
         assert!(stats.lsn.lsn > 0, "primary LSN should advance past 0");
         assert!(stats.offset_bytes > 0, "offset bytes should be positive");
+        assert_eq!(
+            stats.timestamp.offset,
+            Some(0),
+            "timestamp should be in UTC"
+        );
 
         monitor.pool.shutdown();
     }

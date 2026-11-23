@@ -8,23 +8,26 @@ test = true
 
 [dependencies]
 tokio-postgres = {version = "0.7.13", features = ["with-uuid-1"]}
-postgres-native-tls = "0.5"
 native-tls = "0.2"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal", "chrono", "json", "rust_decimal", "uuid"]}
-tokio = { version = "1", features = ["full"]}
+tokio.workspace = true
 futures-util.workspace = true
 uuid.workspace = true
-serial_test = "3"
 chrono = "0.4"
 parking_lot.workspace = true
-reqwest.workspace = true
 serde_json.workspace = true
-ordered-float = "4.2"
-tokio-rustls = "0.26"
 libc = "0.2"
-rand = "0.9"
 bytes.workspace = true
 rust_decimal = { version = "1.42.0", features = ["macros"] }
+
+[dev-dependencies]
+postgres-native-tls = "0.5"
+serial_test = "3"
+reqwest.workspace = true
+rand = "0.9"
 chrono-tz = "0.10.4"
 pgdog-stats = { path = "../../pgdog-stats" }
-itertools = "0.15"
+pg_stream = "0.2.1"
+pgdog-regress = { git = "https://github.com/pgdogdev/regress.git", rev = "22032787eeaef9bf97aaa3216735a7369f1f9125" }
+anyhow = "1.0.104"
+tokio-rustls = "0.26"

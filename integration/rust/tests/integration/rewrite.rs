@@ -140,6 +140,56 @@ async fn split_inserts_rewrite_moves_rows_across_shards() {
 }
 
 #[tokio::test]
+async fn omnisharded_sharding_key_update_in_transaction() {
+    let admin = admin_sqlx().await;
+    // The integration config uses "ignore"; exercise the production default.
+    admin.execute("SET rewrite_enabled TO false").await.unwrap();
+    admin
+        .execute("SET rewrite_shard_key_updates TO error")
+        .await
+        .unwrap();
+    // The suite enables default-value rewrites independently of rewrite_enabled.
+    admin
+        .execute("SET rewrite_omni_non_deterministic_functions TO ignore")
+        .await
+        .unwrap();
+
+    let pool = connections_sqlx().await.swap_remove(1);
+    let mut txn = pool.begin().await.unwrap();
+    txn.execute("CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)")
+        .await
+        .unwrap();
+    txn.execute("ALTER TABLE sharded_omni ADD COLUMN IF NOT EXISTS customer_id BIGINT")
+        .await
+        .unwrap();
+    txn.execute("DELETE FROM sharded_omni").await.unwrap();
+    txn.execute("INSERT INTO sharded_omni (id, customer_id, value) VALUES (1, 5, 'a')")
+        .await
+        .unwrap();
+
+    // customer_id has a nameless sharding rule, but sharded_omni is explicitly
+    // omnisharded. Reassigning the column must not trigger row movement (#1735).
+    let result = txn
+        .execute("UPDATE sharded_omni SET customer_id = 5, value = 'b' WHERE id = 1")
+        .await
+        .expect("omnisharded update should succeed with default rewrite settings");
+    assert_eq!(result.rows_affected(), 1);
+
+    for shard in [0, 1] {
+        let rows: Vec<(i64, i64, String)> = sqlx::query_as(&format!(
+            "/* pgdog_shard: {shard} */ SELECT id, customer_id, value FROM sharded_omni"
+        ))
+        .fetch_all(&mut *txn)
+        .await
+        .unwrap();
+        assert_eq!(rows, vec![(1, 5, "b".into())], "shard {shard}");
+    }
+
+    txn.rollback().await.unwrap();
+    admin.execute("RELOAD").await.unwrap();
+}
+
+#[tokio::test]
 async fn update_moves_row_between_shards() {
     let admin = admin_sqlx().await;
     let _guard = RewriteConfigGuard::enable(admin.clone()).await;
