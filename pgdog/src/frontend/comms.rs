@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn test_verify_cancel_correct_secret() {
         let comms = Comms::default();
-        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new());
+        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new()).unwrap();
         comms.connect(key.clone(), addr(), &Parameters::default());
         assert!(comms.verify_cancel(&key));
     }
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn test_verify_cancel_wrong_secret() {
         let comms = Comms::default();
-        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new());
+        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new()).unwrap();
         comms.connect(key.clone(), addr(), &Parameters::default());
 
         // Same pid, different secret.
@@ -216,17 +216,16 @@ mod tests {
     fn test_verify_cancel_unknown_pid() {
         let comms = Comms::default();
         // Nothing registered — any key must be rejected.
-        assert!(!comms.verify_cancel(&BackendKeyData::new_frontend(
-            ProtocolVersion::V3_0,
-            FrontendPid::new()
-        )));
+        assert!(!comms.verify_cancel(
+            &BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new()).unwrap()
+        ));
     }
 
     #[test]
     fn test_verify_cancel_after_disconnect() {
         let comms = Comms::default();
         let id = FrontendPid::new();
-        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
+        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id).unwrap();
         comms.connect(key.clone(), addr(), &Parameters::default());
         assert!(comms.verify_cancel(&key));
 

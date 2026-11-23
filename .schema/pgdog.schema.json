@@ -53,6 +53,7 @@
         "dns_ttl": null,
         "dry_run": false,
         "expanded_explain": false,
+        "fips": "auto",
         "healthcheck_interval": 30000,
         "healthcheck_port": null,
         "healthcheck_timeout": 5000,
@@ -678,6 +679,26 @@
         "nanos"
       ]
     },
+    "FipsMode": {
+      "description": "FIPS 140-3 enforcement mode.",
+      "oneOf": [
+        {
+          "description": "Enforce on `fips` builds; warn on a FIPS host otherwise (default).",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Always enforce; refuse to start if FIPS mode is unavailable.",
+          "type": "string",
+          "const": "required"
+        },
+        {
+          "description": "Never enforce, even on a FIPS-enabled host.",
+          "type": "string",
+          "const": "disabled"
+        }
+      ]
+    },
     "FlexibleType": {
       "description": "A sharding key value that can be an integer, UUID, or string.",
       "anyOf": [
@@ -889,6 +910,11 @@
           "description": "Enable expanded (`\\x`) output for `EXPLAIN` results returned by PgDog's built-in query plan aggregation.",
           "type": "boolean",
           "default": false
+        },
+        "fips": {
+          "description": "FIPS 140-3 enforcement: when enforced, refuse to start or apply a\nconfiguration unless PgDog runs the validated AWS-LC FIPS module, and\nreject non-FIPS TLS configurations, MD5 authentication and cross-account\nRDS IAM (`server_iam_assume_role`).\n\n**Note:** `auto` enforces only on builds with `--features fips`; set\n`required` for deployments that must be FIPS-compliant. An unrecognized\n`PGDOG_FIPS` value is treated as `required`.\n\n_Default:_ `auto`",
+          "$ref": "#/$defs/FipsMode",
+          "default": "auto"
         },
         "healthcheck_interval": {
           "description": "Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval>",

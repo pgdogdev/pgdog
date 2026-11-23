@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("parse error: {0}")]
     ParseError(String),
+
+    #[error("{0}")]
+    Fips(String),
 }
 
 impl Error {

@@ -209,10 +209,12 @@ impl Client {
             }
 
             AuthType::Scram => {
+                // Built before the challenge so an RNG failure doesn't strand
+                // a client mid-handshake.
+                let scram = Server::new(passwords)?;
                 let challenge = scram_challenge(stream.tls_server_end_point());
                 stream.send_flush(&challenge).await?;
 
-                let scram = Server::new(passwords);
                 let res = scram.handle(stream).await;
                 if matches!(res, Ok(true)) {
                     AuthResult::Ok
@@ -289,7 +291,7 @@ impl Client {
             .unwrap_or(config.config.general.auth_type);
         let passthrough = config.config.general.passthrough_auth();
         let id = FrontendPid::new();
-        let key = BackendKeyData::new_frontend(protocol_version, id);
+        let key = BackendKeyData::new_frontend(protocol_version, id)?;
         let comms = ClientComms::new(id);
         let log_connections = config.config.general.log_connections;
         // Without a client CA, no certificate is ever requested, so requiring one
@@ -490,7 +492,7 @@ impl Client {
         }
 
         let id = FrontendPid::new();
-        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
+        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id).unwrap();
         let mut prepared_statements = PreparedStatements::new();
         prepared_statements.level = config().config.general.prepared_statements;
 

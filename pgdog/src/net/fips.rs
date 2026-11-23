@@ -1,0 +1,554 @@
+//! FIPS 140-3 enforcement.
+//!
+//! PgDog's cryptography comes from AWS-LC (through `aws-lc-rs` and Rustls).
+//! Built with the `fips` feature, that is the validated AWS-LC FIPS module.
+//! This module decides whether FIPS is enforced for the process, refuses to
+//! run when it is enforced but unavailable, and checks that the TLS
+//! configurations PgDog builds actually use it.
+//!
+//! PgDog does not link OpenSSL, so OpenSSL's own FIPS configuration does not
+//! affect it. The host-wide signal is the kernel flag
+//! `/proc/sys/crypto/fips_enabled`, which FIPS-enabled distributions set. It
+//! only produces a warning: deployments that must be FIPS-compliant set
+//! `fips = "required"`.
+
+use std::path::Path;
+
+use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+use once_cell::sync::Lazy;
+use tracing::{info, warn};
+
+use crate::config::{AuthType, Config, ConfigAndUsers, FipsMode, ServerAuth, TlsVerifyMode};
+
+use super::Error;
+
+/// Kernel flag set by FIPS-enabled Linux distributions.
+const KERNEL_FIPS_FLAG: &str = "/proc/sys/crypto/fips_enabled";
+
+static HOST_FIPS: Lazy<bool> = Lazy::new(|| host_fips_enabled(Path::new(KERNEL_FIPS_FLAG)));
+
+/// Whether FIPS 140-3 is enforced for this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Enforcement {
+    Enforced,
+    NotEnforced,
+}
+
+impl Enforcement {
+    /// Resolve the configured mode against how PgDog was built.
+    pub(crate) fn resolve(mode: FipsMode) -> Self {
+        let enforced = match mode {
+            FipsMode::Disabled => false,
+            FipsMode::Required => true,
+            FipsMode::Auto => cfg!(feature = "fips"),
+        };
+
+        if enforced {
+            Self::Enforced
+        } else {
+            Self::NotEnforced
+        }
+    }
+
+    pub(crate) fn enforced(self) -> bool {
+        self == Self::Enforced
+    }
+
+    /// Reject a TLS configuration Rustls doesn't consider FIPS-compliant
+    /// (`ClientConfig::fips()` / `ServerConfig::fips()`).
+    pub(crate) fn check_tls(self, config_is_fips: bool, what: &str) -> Result<(), Error> {
+        if self.enforced() && !config_is_fips {
+            return Err(Error::Fips(format!(
+                "{what} TLS configuration is not FIPS-compliant"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Reject non-approved algorithms used for authentication.
+    pub(crate) fn check_auth(self, auth_type: AuthType) -> Result<(), Error> {
+        if self.enforced() && auth_type.md5() {
+            return Err(Error::Fips(
+                "MD5 authentication is not FIPS-approved".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Reject a user whose own `auth_type` (users.toml), which overrides
+    /// `[general]`, is non-approved.
+    pub(crate) fn check_user_auth(
+        self,
+        auth_type: Option<AuthType>,
+        user: &str,
+        database: &str,
+    ) -> Result<(), Error> {
+        if self.enforced() && auth_type.is_some_and(|auth_type| auth_type.md5()) {
+            return Err(Error::Fips(format!(
+                "user \"{user}\" (database \"{database}\") sets auth_type = \"md5\"; MD5 authentication is not FIPS-approved"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Reject cross-account RDS IAM (`server_iam_assume_role`): the AWS SDK
+    /// signs the STS AssumeRole request with RustCrypto, not AWS-LC.
+    pub(crate) fn check_iam_assume_role(
+        self,
+        role: Option<&str>,
+        user: &str,
+        database: &str,
+    ) -> Result<(), Error> {
+        if self.enforced() && role.is_some_and(|role| !role.is_empty()) {
+            return Err(Error::Fips(format!(
+                "user \"{user}\" (database \"{database}\") sets server_iam_assume_role, but the AWS SDK signs the STS AssumeRole request with non-FIPS cryptography"
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+/// `true` if the kernel flag at `path` reports FIPS mode.
+fn host_fips_enabled(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|flag| flag.trim() == "1")
+}
+
+/// The crypto module is running in FIPS mode.
+fn module_status() -> Result<(), Error> {
+    if !cfg!(feature = "fips") {
+        return Err(Error::Fips(
+            "PgDog was built without the `fips` feature; rebuild with `--features fips` or set `fips = \"disabled\"`".to_string(),
+        ));
+    }
+
+    aws_lc_rs::try_fips_mode()
+        .map_err(|err| Error::Fips(format!("AWS-LC is not in FIPS mode: {err}")))
+}
+
+/// Startup and reload gate.
+///
+/// Fails when FIPS is enforced but the crypto module isn't in FIPS mode, or
+/// the configuration uses a non-approved algorithm. Deployment settings that
+/// weaken a FIPS deployment without using non-approved crypto are logged.
+pub(crate) fn check(config_and_users: &ConfigAndUsers) -> Result<Enforcement, Error> {
+    let config = &config_and_users.config;
+    let mode = config.general.fips;
+    let enforcement = Enforcement::resolve(mode);
+
+    if !enforcement.enforced() {
+        if let Some(warning) = host_warning(mode, *HOST_FIPS) {
+            warn!("{warning}");
+        }
+        return Ok(enforcement);
+    }
+
+    module_status()?;
+    enforcement.check_auth(config.general.auth_type)?;
+    for user in &config_and_users.users.users {
+        enforcement.check_user_auth(user.auth_type, &user.name, &user.database)?;
+        // The assume-role is ignored for other server auth types.
+        if user.server_auth == ServerAuth::RdsIam {
+            enforcement.check_iam_assume_role(
+                user.server_iam_assume_role.as_deref(),
+                &user.name,
+                &user.database,
+            )?;
+        }
+    }
+
+    for finding in audit(config) {
+        warn!("FIPS: {finding}");
+    }
+
+    info!("🔒 FIPS 140-3 mode enforced (fips = \"{mode}\")");
+
+    Ok(enforcement)
+}
+
+/// Warning for a FIPS host running without enforcement.
+fn host_warning(mode: FipsMode, host_fips: bool) -> Option<String> {
+    if !host_fips {
+        return None;
+    }
+
+    Some(match mode {
+        FipsMode::Disabled => {
+            "host is in FIPS mode but FIPS enforcement is disabled (fips = \"disabled\")".into()
+        }
+        _ => "host is in FIPS mode but PgDog was built without the `fips` feature and is not using validated cryptography; set fips = \"required\" to refuse to start instead".into(),
+    })
+}
+
+/// Settings that weaken a FIPS deployment without using non-approved crypto.
+fn audit(config: &Config) -> Vec<String> {
+    let general = &config.general;
+    let mut findings = vec![];
+
+    if general.tls().is_none() {
+        findings.push("client TLS is not configured (tls_certificate, tls_private_key)".into());
+    } else if !general.tls_client_required {
+        findings.push("clients may connect without TLS (tls_client_required = false)".into());
+    }
+
+    if general.passthrough_auth() {
+        findings.push("passthrough authentication is enabled".into());
+    }
+
+    if general.tls_verify != TlsVerifyMode::VerifyFull {
+        findings.push(format!(
+            "server TLS is not verify_full (tls_verify = \"{}\")",
+            general.tls_verify
+        ));
+    }
+
+    for database in &config.databases {
+        let verify = database.tls.tls_verify.unwrap_or(general.tls_verify);
+        if database.tls.tls_verify.is_some() && verify != TlsVerifyMode::VerifyFull {
+            findings.push(format!(
+                "server TLS for database \"{}\" ({}) is not verify_full (tls_verify = \"{}\")",
+                database.name, database.host, verify
+            ));
+        }
+    }
+
+    findings
+}
+
+/// Fill `dest` from AWS-LC's system RNG, the module's approved DRBG in FIPS
+/// builds. Use for secrets only; other randomness can come from `rand`.
+pub(crate) fn fill_random(dest: &mut [u8]) -> Result<(), Error> {
+    SystemRandom::new().fill(dest).map_err(|_| Error::Rng)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+    use crate::config::{Database, General};
+    use pgdog_config::PassthroughAuth;
+
+    #[test]
+    fn test_resolve_explicit_modes() {
+        assert_eq!(
+            Enforcement::resolve(FipsMode::Required),
+            Enforcement::Enforced
+        );
+        assert_eq!(
+            Enforcement::resolve(FipsMode::Disabled),
+            Enforcement::NotEnforced
+        );
+    }
+
+    #[test]
+    fn test_resolve_auto_follows_build() {
+        let expected = if cfg!(feature = "fips") {
+            Enforcement::Enforced
+        } else {
+            Enforcement::NotEnforced
+        };
+        assert_eq!(Enforcement::resolve(FipsMode::Auto), expected);
+    }
+
+    #[test]
+    fn test_host_warning() {
+        // A FIPS host only warns; it never enforces on its own.
+        for mode in [FipsMode::Auto, FipsMode::Disabled, FipsMode::Required] {
+            assert!(host_warning(mode, false).is_none());
+        }
+
+        let auto = host_warning(FipsMode::Auto, true).unwrap();
+        assert!(auto.contains("set fips = \"required\""), "{auto}");
+
+        let disabled = host_warning(FipsMode::Disabled, true).unwrap();
+        assert!(disabled.contains("fips = \"disabled\""), "{disabled}");
+    }
+
+    #[test]
+    fn test_host_fips_flag() {
+        let flag = |contents: &str| {
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            file.write_all(contents.as_bytes()).unwrap();
+            host_fips_enabled(file.path())
+        };
+
+        assert!(flag("1\n"));
+        assert!(!flag("0\n"));
+        assert!(!flag(""));
+        assert!(!host_fips_enabled(Path::new("/nonexistent/fips_enabled")));
+    }
+
+    #[test]
+    fn test_check_tls() {
+        assert!(Enforcement::Enforced.check_tls(true, "server").is_ok());
+        assert!(Enforcement::NotEnforced.check_tls(false, "server").is_ok());
+
+        let err = Enforcement::Enforced
+            .check_tls(false, "server")
+            .unwrap_err();
+        assert!(matches!(err, Error::Fips(_)));
+        assert!(err.to_string().contains("server TLS configuration"));
+    }
+
+    #[test]
+    fn test_check_auth_rejects_md5_when_enforced() {
+        assert!(Enforcement::Enforced.check_auth(AuthType::Md5).is_err());
+        assert!(Enforcement::NotEnforced.check_auth(AuthType::Md5).is_ok());
+
+        for auth_type in [
+            AuthType::Scram,
+            AuthType::Trust,
+            AuthType::Plain,
+            AuthType::ExternalToken,
+        ] {
+            assert!(Enforcement::Enforced.check_auth(auth_type).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_check_disabled_never_fails() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Disabled;
+        config.config.general.auth_type = AuthType::Md5;
+        config
+            .users
+            .users
+            .push(assume_role_user(ServerAuth::RdsIam));
+
+        assert_eq!(check(&config).unwrap(), Enforcement::NotEnforced);
+    }
+
+    #[test]
+    fn test_check_required_matches_module_status() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+
+        let result = check(&config);
+        if cfg!(feature = "fips") {
+            assert_eq!(result.unwrap(), Enforcement::Enforced);
+        } else {
+            // The kill switch: a non-FIPS build refuses to run.
+            let err = result.unwrap_err();
+            assert!(err.to_string().contains("without the `fips` feature"));
+        }
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn test_check_required_rejects_md5() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config.config.general.auth_type = AuthType::Md5;
+
+        let err = check(&config).unwrap_err();
+        assert!(err.to_string().contains("MD5"));
+    }
+
+    #[test]
+    fn test_check_user_auth() {
+        let err = Enforcement::Enforced
+            .check_user_auth(Some(AuthType::Md5), "app", "prod")
+            .unwrap_err();
+        assert!(matches!(err, Error::Fips(_)));
+        assert!(
+            err.to_string().contains("\"app\" (database \"prod\")"),
+            "{err}"
+        );
+
+        assert!(
+            Enforcement::NotEnforced
+                .check_user_auth(Some(AuthType::Md5), "app", "prod")
+                .is_ok()
+        );
+        for auth_type in [
+            None,
+            Some(AuthType::Scram),
+            Some(AuthType::Plain),
+            Some(AuthType::Trust),
+        ] {
+            assert!(
+                Enforcement::Enforced
+                    .check_user_auth(auth_type, "app", "prod")
+                    .is_ok()
+            );
+        }
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn test_check_required_rejects_user_md5() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config.config.general.auth_type = AuthType::Scram;
+        config.users.users.push(crate::config::User {
+            name: "app".into(),
+            database: "prod".into(),
+            auth_type: Some(AuthType::Md5),
+            ..Default::default()
+        });
+
+        let err = check(&config).unwrap_err();
+        assert!(err.to_string().contains("\"app\""), "{err}");
+        assert!(err.to_string().contains("MD5"), "{err}");
+
+        // A user can still pick an approved auth type over [general]'s.
+        config.users.users[0].auth_type = Some(AuthType::Scram);
+        assert_eq!(check(&config).unwrap(), Enforcement::Enforced);
+    }
+
+    fn assume_role_user(server_auth: ServerAuth) -> crate::config::User {
+        crate::config::User {
+            name: "app".into(),
+            database: "prod".into(),
+            server_auth,
+            server_iam_assume_role: Some("arn:aws:iam::111122223333:role/pgdog".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_check_iam_assume_role() {
+        let role = Some("arn:aws:iam::111122223333:role/pgdog");
+
+        let err = Enforcement::Enforced
+            .check_iam_assume_role(role, "app", "prod")
+            .unwrap_err();
+        assert!(matches!(err, Error::Fips(_)));
+        assert!(
+            err.to_string().contains("\"app\" (database \"prod\")"),
+            "{err}"
+        );
+
+        assert!(
+            Enforcement::NotEnforced
+                .check_iam_assume_role(role, "app", "prod")
+                .is_ok()
+        );
+        for role in [None, Some("")] {
+            assert!(
+                Enforcement::Enforced
+                    .check_iam_assume_role(role, "app", "prod")
+                    .is_ok()
+            );
+        }
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn test_check_required_rejects_iam_assume_role() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config
+            .users
+            .users
+            .push(assume_role_user(ServerAuth::RdsIam));
+
+        let err = check(&config).unwrap_err();
+        assert!(err.to_string().contains("server_iam_assume_role"), "{err}");
+
+        // Ignored (and allowed) unless the user signs in with RDS IAM.
+        config.users.users = vec![assume_role_user(ServerAuth::Password)];
+        assert_eq!(check(&config).unwrap(), Enforcement::Enforced);
+    }
+
+    #[test]
+    fn test_config_set_refuses_failing_config() {
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+
+        // Fails on every build: non-FIPS builds can't satisfy `required`, and
+        // FIPS builds refuse MD5.
+        let mut config = crate::config::ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config.config.general.auth_type = AuthType::Md5;
+
+        let err = crate::config::set(config).unwrap_err();
+        assert!(err.to_string().starts_with("FIPS:"), "{err}");
+        assert!(!crate::config::config().config.general.auth_type.md5());
+        assert_ne!(
+            crate::config::config().config.general.fips,
+            FipsMode::Required
+        );
+    }
+
+    #[test]
+    fn test_audit_compliant_deployment() {
+        let config = Config {
+            general: General {
+                tls_certificate: Some("cert.pem".into()),
+                tls_private_key: Some("key.pem".into()),
+                tls_client_required: true,
+                tls_client_ca_certificate: Some("ca.pem".into()),
+                tls_verify: TlsVerifyMode::VerifyFull,
+                passthrough_auth: PassthroughAuth::Disabled,
+                ..Default::default()
+            },
+            databases: vec![Database {
+                name: "prod".into(),
+                host: "db.example.com".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(audit(&config).is_empty(), "{:?}", audit(&config));
+    }
+
+    #[test]
+    fn test_audit_reports_weak_settings() {
+        let mut database = Database {
+            name: "replica".into(),
+            host: "replica.example.com".into(),
+            ..Default::default()
+        };
+        database.tls.tls_verify = Some(TlsVerifyMode::Prefer);
+
+        let config = Config {
+            general: General {
+                tls_verify: TlsVerifyMode::VerifyCa,
+                passthrough_auth: PassthroughAuth::EnabledPlain,
+                ..Default::default()
+            },
+            databases: vec![database],
+            ..Default::default()
+        };
+
+        let findings = audit(&config);
+        assert_eq!(findings.len(), 4, "{findings:?}");
+        assert!(findings[0].contains("client TLS is not configured"));
+        assert!(findings[1].contains("passthrough"));
+        assert!(findings[2].contains("server TLS is not verify_full"));
+        assert!(findings[3].contains("\"replica\""));
+    }
+
+    #[test]
+    fn test_audit_requires_client_tls() {
+        let config = Config {
+            general: General {
+                tls_certificate: Some("cert.pem".into()),
+                tls_private_key: Some("key.pem".into()),
+                tls_client_required: false,
+                tls_verify: TlsVerifyMode::VerifyFull,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let findings = audit(&config);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].contains("tls_client_required"));
+    }
+
+    #[test]
+    fn test_fill_random() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        fill_random(&mut a).unwrap();
+        fill_random(&mut b).unwrap();
+        assert_ne!(a, [0u8; 32]);
+        assert_ne!(a, b);
+    }
+}

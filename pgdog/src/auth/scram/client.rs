@@ -65,6 +65,12 @@ impl<'a> Client<'a> {
         };
         Ok(())
     }
+
+    /// The server's final message was verified, so the server proved it
+    /// knows the password too.
+    pub(crate) fn complete(&self) -> bool {
+        self.state.is_none()
+    }
 }
 
 #[cfg(test)]

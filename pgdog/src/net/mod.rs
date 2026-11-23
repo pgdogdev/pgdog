@@ -1,6 +1,7 @@
 pub(crate) mod decoder;
 pub(crate) mod discovery;
 pub(crate) mod error;
+pub(crate) mod fips;
 pub(crate) mod messages;
 pub(crate) mod parameter;
 pub(crate) mod protocol_message;

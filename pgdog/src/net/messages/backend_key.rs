@@ -11,8 +11,8 @@ use bytes::Buf;
 use smallvec::SmallVec;
 
 use super::frontend_pid::FrontendPid;
+use crate::net::fips;
 
-use rand::Rng;
 const LEGACY_SECRET_LEN: usize = std::mem::size_of::<i32>();
 const EXTENDED_SECRET_LEN: usize = 32;
 const MAX_SECRET_LEN: usize = 256;
@@ -32,7 +32,10 @@ impl SecretKey {
         }
     }
 
-    pub(crate) fn random(len: usize) -> Self {
+    /// Random secret from AWS-LC's system RNG (the approved DRBG in FIPS
+    /// builds). Cancel secrets authenticate cancel requests, so they are
+    /// security-relevant and an RNG failure is an error, not a fallback.
+    pub(crate) fn random(len: usize) -> Result<Self, crate::net::Error> {
         assert!(
             (1..=MAX_SECRET_LEN).contains(&len),
             "cancel secret must be between 1 and {MAX_SECRET_LEN} bytes"
@@ -40,8 +43,8 @@ impl SecretKey {
 
         let mut bytes = SmallVec::with_capacity(len);
         bytes.resize(len, 0);
-        rand::rng().fill(bytes.as_mut_slice());
-        Self { bytes }
+        fips::fill_random(bytes.as_mut_slice())?;
+        Ok(Self { bytes })
     }
 
     pub(crate) fn from_slice(secret: &[u8]) -> Result<Self, crate::net::Error> {
@@ -88,26 +91,26 @@ impl BackendKeyData {
     pub(crate) fn new_frontend(
         protocol_version: ProtocolVersion,
         frontend_key: FrontendPid,
-    ) -> Self {
+    ) -> Result<Self, crate::net::Error> {
         let secret_len = if protocol_version.supports_extended_cancel_key() {
             EXTENDED_SECRET_LEN
         } else {
             LEGACY_SECRET_LEN
         };
 
-        Self {
+        Ok(Self {
             pid: frontend_key.pid(),
-            secret: SecretKey::random(secret_len),
-        }
+            secret: SecretKey::random(secret_len)?,
+        })
     }
 
     /// Fallback for servers that don't send a `K` message (RDS-proxy etc.).
     /// `pid = 0` sentinel; cancel is a no-op for these connections.
-    pub(crate) fn random_legacy() -> Self {
-        Self {
+    pub(crate) fn random_legacy() -> Result<Self, crate::net::Error> {
+        Ok(Self {
             pid: 0,
-            secret: SecretKey::random(LEGACY_SECRET_LEN),
-        }
+            secret: SecretKey::random(LEGACY_SECRET_LEN)?,
+        })
     }
 
     #[cfg(test)]
@@ -176,7 +179,7 @@ mod tests {
     fn test_backend_key_roundtrip_extended() {
         let key = BackendKeyData {
             pid: 7,
-            secret: SecretKey::random(32),
+            secret: SecretKey::random(32).unwrap(),
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
@@ -187,7 +190,7 @@ mod tests {
     fn test_backend_key_roundtrip_max_secret_len() {
         let key = BackendKeyData {
             pid: 9,
-            secret: SecretKey::random(256),
+            secret: SecretKey::random(256).unwrap(),
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
@@ -198,6 +201,7 @@ mod tests {
     fn test_new_client_uses_protocol_specific_secret_length() {
         assert_eq!(
             BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new())
+                .unwrap()
                 .secret
                 .bytes
                 .len(),
@@ -205,10 +209,27 @@ mod tests {
         );
         assert_eq!(
             BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new())
+                .unwrap()
                 .secret
                 .bytes
                 .len(),
             32
         );
+    }
+
+    #[test]
+    fn test_random_secrets_are_distinct() {
+        let a = SecretKey::random(32).unwrap();
+        let b = SecretKey::random(32).unwrap();
+        assert_ne!(a, b);
+        assert!(!a.constant_time_eq(&b));
+        assert_ne!(a.as_slice(), &[0u8; 32]);
+    }
+
+    #[test]
+    fn test_random_legacy_secret() {
+        let key = BackendKeyData::random_legacy().unwrap();
+        assert_eq!(key.pid, 0);
+        assert_eq!(key.secret.bytes.len(), 4);
     }
 }

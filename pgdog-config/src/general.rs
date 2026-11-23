@@ -18,7 +18,7 @@ use crate::{
 
 use super::auth::{AuthType, PassthroughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
-use super::networking::TlsVerifyMode;
+use super::networking::{FipsMode, TlsVerifyMode};
 use super::pooling::{PoolerMode, PreparedStatementsLevel};
 
 /// Format to use for PgDog application logs.
@@ -295,6 +295,19 @@ pub struct General {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate>
     pub tls_client_ca_certificate: Option<PathBuf>,
+
+    /// FIPS 140-3 enforcement: when enforced, refuse to start or apply a
+    /// configuration unless PgDog runs the validated AWS-LC FIPS module, and
+    /// reject non-FIPS TLS configurations, MD5 authentication and cross-account
+    /// RDS IAM (`server_iam_assume_role`).
+    ///
+    /// **Note:** `auto` enforces only on builds with `--features fips`; set
+    /// `required` for deployments that must be FIPS-compliant. An unrecognized
+    /// `PGDOG_FIPS` value is treated as `required`.
+    ///
+    /// _Default:_ `auto`
+    #[serde(default = "General::fips")]
+    pub fips: FipsMode,
 
     /// How long to wait for active clients to finish transactions when shutting down.
     ///
@@ -1041,6 +1054,7 @@ impl Default for General {
             cutover_timeout_action: Self::cutover_timeout_action(),
             unique_id_function: Self::unique_id_function(),
             auth_token_cache_size: Self::auth_token_cache_size(),
+            fips: Self::fips(),
         }
     }
 }
@@ -1598,6 +1612,14 @@ impl General {
         Self::env_or_default("PGDOG_PASSTHROUGH_AUTH_DEBOUNCE_DELAY", 1_000)
     }
 
+    /// An unrecognized `PGDOG_FIPS` fails closed: a typo must not silently
+    /// turn enforcement off.
+    fn fips() -> FipsMode {
+        env::var("PGDOG_FIPS")
+            .map(|value| value.parse().unwrap_or(FipsMode::Required))
+            .unwrap_or_default()
+    }
+
     fn auth_token_cache_size() -> u64 {
         Self::env_or_default("PGDOG_AUTH_TOKEN_CACHE_SIZE", 1_000)
     }
@@ -1737,6 +1759,23 @@ mod tests {
 
         let general: General = toml::from_str("sharding_lookup_cache_size = 1048576").unwrap();
         assert_eq!(general.sharding_lookup_cache_size, 1048576);
+    }
+
+    #[test]
+    fn test_fips_mode() {
+        for (value, mode) in [
+            ("auto", FipsMode::Auto),
+            ("required", FipsMode::Required),
+            ("disabled", FipsMode::Disabled),
+        ] {
+            let general: General = toml::from_str(&format!("fips = \"{value}\"")).unwrap();
+            assert_eq!(general.fips, mode);
+            assert_eq!(value.parse::<FipsMode>().unwrap(), mode);
+            assert_eq!(mode.to_string(), value);
+        }
+
+        assert!(toml::from_str::<General>("fips = \"maybe\"").is_err());
+        assert!("maybe".parse::<FipsMode>().is_err());
     }
 
     #[test]

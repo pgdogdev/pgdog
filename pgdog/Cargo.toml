@@ -11,7 +11,14 @@ readme = "README.md"
 default-run = "pgdog"
 
 [features]
-fips = ["tokio-rustls/fips"]
+# FIPS 140-3: Rustls and PgDog's direct AWS-LC use both go through the
+# validated AWS-LC FIPS module.
+fips = [
+    "tokio-rustls/fips",
+    "aws-lc-rs/fips",
+    # RDS IAM tokens are signed with AWS-LC (backend/auth/sigv4.rs).
+    "dep:aws-credential-types",
+]
 bench = ["foldhash"]
 
 [dependencies]
@@ -72,6 +79,7 @@ moka = { version = "0.12", features = ["sync"] }
 derive_builder = "0.20.2"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-rds = { version = "1", default-features = false }
+aws-credential-types = { version = "1", optional = true }
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }
@@ -100,6 +108,8 @@ tikv-jemalloc-ctl = "0.7"
 cc = "1"
 
 [dev-dependencies]
+aws-credential-types = "1"
+aws-smithy-async = "1"
 tempfile = "3.23.0"
 stats_alloc = "0.1.10"
 brunch = "0.5"

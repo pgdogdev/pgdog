@@ -9,6 +9,15 @@ COPY .git /build/.git
 WORKDIR /build
 
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
+# The AWS-LC FIPS module (FEATURES=fips) needs Go to build.
+RUN if [[ " ${FEATURES//,/ } " == *" fips "* ]]; then \
+        apt-get update && \
+        apt-get install -y --no-install-recommends golang-go && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+# FEATURES are pgdog's; the plugin has none of them. The AWS-LC FIPS
+# module's delocate step rejects GCC 15 output (Ubuntu 26.04), so FIPS
+# builds use clang.
 RUN source ~/.cargo/env && \
     cargo_features=(); \
     if [ -n "${FEATURES}" ]; then \
@@ -18,10 +27,13 @@ RUN source ~/.cargo/env && \
     if [ -f pgo.profdata ]; then \
         pgo_args=(--config "target.'cfg(all())'.rustflags=['-Cprofile-use=/build/pgo.profdata']"); \
     fi && \
+    if [[ " ${FEATURES//,/ } " == *" fips "* ]]; then \
+        export CC=clang CXX=clang++; \
+    fi && \
     cd pgdog && \
     cargo build --release "${cargo_features[@]}" "${pgo_args[@]}" && \
     cd .. && \
-    cargo build --release -p pgdog-primary-only-tables "${cargo_features[@]}"
+    cargo build --release -p pgdog-primary-only-tables
 
 FROM ${RUNTIME_BASE}
 ENV RUST_LOG=info

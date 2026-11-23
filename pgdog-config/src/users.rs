@@ -355,6 +355,9 @@ pub struct User {
     /// generating the RDS IAM auth token. Enables cross-account RDS IAM: the token
     /// is signed with the assumed role's credentials instead of PgDog's own
     /// ambient identity. Only used when `server_auth = "rds_iam"`.
+    ///
+    /// **Note:** Refused when FIPS is enforced (`fips` in `pgdog.toml`): the AWS
+    /// SDK signs the STS AssumeRole request with non-FIPS cryptography.
     pub server_iam_assume_role: Option<String>,
     /// Vault path used to fetch backend (server-side) database credentials,
     /// e.g. `database/creds/my-role` for `server_auth = "vault_dynamic"` or

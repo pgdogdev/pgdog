@@ -89,6 +89,12 @@ pub(crate) enum Error {
     /// declaring less than that can't be framed, and the peer is out of sync.
     #[error("malformed message: declared length {0} is below the minimum of 4 bytes")]
     MalformedMessageLength(i32),
+
+    #[error("secure random number generator failed")]
+    Rng,
+
+    #[error("FIPS: {0}")]
+    Fips(String),
 }
 
 impl Error {
