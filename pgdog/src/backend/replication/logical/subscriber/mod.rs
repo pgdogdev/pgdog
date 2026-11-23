@@ -1,11 +1,12 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     backend::{
-        ConnectReason, Error as BackendError, Server, ServerOptions,
-        pool::{Address, Pool, Shard},
+        ConnectReason, Error as BackendError, Oids, Server, ServerOptions,
+        pool::{Address, Error as PoolError, Pool, Shard},
     },
-    config::Role,
+    config::{Role, config},
+    util::safe_timeout,
 };
 
 use super::Error;
@@ -34,14 +35,33 @@ fn primary(shard: &Shard) -> Result<Pool, Error> {
         .ok_or_else(|| Error::NoPrimary)
 }
 
+pub(crate) async fn connect_resharding(
+    address: &Address,
+    options: ServerOptions,
+    oids: Arc<Oids>,
+) -> Result<Server, Error> {
+    let limit = Duration::from_millis(config().config.general.connect_timeout);
+    let server = safe_timeout(
+        limit,
+        Box::pin(Server::connect(
+            address,
+            options,
+            ConnectReason::Resharding,
+            oids,
+        )),
+    )
+    .await
+    .map_err(|_| BackendError::Pool(PoolError::ConnectTimeout))??;
+    Ok(server)
+}
+
 pub(super) async fn connect_primary(shard: &Shard) -> Result<Server, Error> {
     let primary = primary(shard)?;
-    let mut server = Box::pin(Server::connect(
+    let mut server = connect_resharding(
         primary.addr(),
         ServerOptions::new_resharding(primary.config()),
-        ConnectReason::Resharding,
         Arc::clone(primary.oids()),
-    ))
+    )
     .await?;
 
     // This can't be set via startup parameters on some of the cloud providers due to error
@@ -65,11 +85,5 @@ pub(super) async fn connect_primary(shard: &Shard) -> Result<Server, Error> {
 }
 
 pub(crate) async fn connect_address(address: &Address) -> Result<Server, Error> {
-    Ok(Box::pin(Server::connect(
-        address,
-        ServerOptions::default(),
-        ConnectReason::Resharding,
-        Default::default(),
-    ))
-    .await?)
+    connect_resharding(address, ServerOptions::default(), Default::default()).await
 }

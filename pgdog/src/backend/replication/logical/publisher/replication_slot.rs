@@ -14,9 +14,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, trace, warn};
 
 use super::super::Error;
+use super::super::subscriber::{connect_address, connect_resharding};
 use crate::config::config;
 use crate::{
-    backend::{ConnectReason, Server, ServerOptions, pool::Address},
+    backend::{Server, ServerOptions, pool::Address},
     frontend::client::query_engine::two_pc,
     net::{
         CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes,
@@ -519,13 +520,12 @@ impl ReplicationSlotInner {
 }
 
 async fn connect_replication(address: &Address) -> Result<Server, Error> {
-    Ok(Box::pin(Server::connect(
+    connect_resharding(
         address,
         ServerOptions::new_replication(),
-        ConnectReason::Resharding,
         Default::default(),
-    ))
-    .await?)
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -569,15 +569,7 @@ impl ReplicationSlotStream {
         address: &Address,
     ) -> Result<&'a mut Server, Error> {
         if meta_server.is_none() {
-            *meta_server = Some(
-                Server::connect(
-                    address,
-                    ServerOptions::default(),
-                    ConnectReason::Resharding,
-                    Default::default(),
-                )
-                .await?,
-            );
+            *meta_server = Some(connect_address(address).await?);
         }
         Ok(meta_server
             .as_mut()
