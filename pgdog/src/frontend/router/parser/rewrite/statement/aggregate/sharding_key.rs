@@ -13,25 +13,18 @@ use crate::backend::schema::Schema;
 use crate::frontend::router::parser::rewrite::statement::projection::Positions;
 use crate::frontend::router::parser::{AggregateFunction, Column, Function, Table};
 
-/// SELECT list positions of `DISTINCT` `count`, `sum` and `avg` whose shard
-/// results merge like the plain aggregate's. Either:
+/// SELECT list positions of `count`, `sum` and `avg` over `DISTINCT key`,
+/// where `key` is the sharding key.
 ///
-/// - the argument is the sharding key. No two shards hold the same key, so
-///   each shard aggregates keys no other shard has, with or without
-///   `GROUP BY`; or
-/// - `GROUP BY` includes the sharding key. Each group is on one shard, which
-///   returns its final result, whatever the argument is.
+/// No two shards hold the same key, so each shard aggregates keys no other
+/// shard has and the results merge like the plain aggregate's, with or
+/// without `GROUP BY`.
 ///
 /// Variance and standard deviation are left out: their helper sums
-/// `DISTINCT x * x`, and two values can share a square.
-pub(crate) fn disjoint_distinct(
-    select: &nodes::SelectStmt,
-    schema: &Schema,
-    tables: &ShardedTables,
-) -> Positions {
-    // Both are resolved on the first DISTINCT aggregate; most queries have none.
+/// `DISTINCT key * key`, and two keys can share a square.
+pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTables) -> Positions {
+    // Resolved on the first DISTINCT aggregate; most queries have none.
     let mut key = None;
-    let mut grouped = None;
 
     select
         .target_list()
@@ -57,22 +50,37 @@ pub(crate) fn disjoint_distinct(
             ) {
                 return false;
             }
-            let Some(key) = key
-                .get_or_insert_with(|| ShardingKey::new(select, tables))
-                .as_ref()
-            else {
+            let Ok(argument) = call.args().iter().exactly_one() else {
                 return false;
             };
 
-            *grouped.get_or_insert_with(|| key.groups_stay_on_one_shard(select, schema))
-                || call
-                    .args()
-                    .iter()
-                    .exactly_one()
-                    .is_ok_and(|argument| key.matches(argument))
+            key.get_or_insert_with(|| ShardingKey::new(select, tables))
+                .as_ref()
+                .is_some_and(|key| key.matches(argument))
         })
         .map(|(position, _)| position)
         .collect()
+}
+
+/// Whether every group of the SELECT is on one shard: `GROUP BY` includes the
+/// sharding key and the key can't be `NULL`.
+///
+/// Each shard then returns complete groups, with nothing left to merge:
+/// aggregates and `HAVING` are final as the shard computed them.
+///
+/// Rows with a `NULL` key are written to every shard, so their group would
+/// come back from all of them.
+pub(crate) fn groups_stay_on_one_shard(
+    select: &nodes::SelectStmt,
+    schema: &Schema,
+    tables: &ShardedTables,
+) -> bool {
+    // Most queries have no GROUP BY and never look at FROM.
+    !select.group_clause().is_empty()
+        && ShardingKey::new(select, tables).is_some_and(|key| {
+            key.group_by_key(select)
+                .is_some_and(|column| key.is_not_null(column, schema))
+        })
 }
 
 /// Answers whether an expression is the sharding key of the queried table.
@@ -142,16 +150,6 @@ impl<'a> ShardingKey<'a> {
                 .and_then(|target| self.key_column(target.val())),
             item => self.key_column(item),
         })
-    }
-
-    /// Whether every group is on one shard: `GROUP BY` includes the sharding
-    /// key and the key can't be `NULL`.
-    ///
-    /// Rows with a `NULL` key are written to every shard, so their group
-    /// would come back from all of them.
-    fn groups_stay_on_one_shard(&self, select: &nodes::SelectStmt, schema: &Schema) -> bool {
-        self.group_by_key(select)
-            .is_some_and(|column| self.is_not_null(column, schema))
     }
 
     /// Whether the table declares `column` as `NOT NULL`. A table missing
@@ -278,7 +276,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                disjoint_distinct(&select(sql), &Schema::default(), &tables),
+                disjoint_distinct(&select(sql), &tables),
                 Positions::from_iter(expected),
                 "{sql}"
             );
@@ -313,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_distinct_aggregates_grouped_by_not_null_key() {
+    fn groups_stay_on_one_shard_when_grouped_by_not_null_key() {
         let tables = orders_by_user();
         let not_null = orders_schema(&[("public", false)]);
         let nullable = orders_schema(&[("public", true)]);
@@ -324,62 +322,77 @@ mod tests {
             (
                 "SELECT user_id, count(DISTINCT product_id) FROM orders GROUP BY user_id",
                 &not_null,
-                vec![1],
+                true,
             ),
             (
-                "SELECT user_id, status, sum(DISTINCT amount), avg(DISTINCT amount), count(*) \
-                 FROM orders GROUP BY 1, 2",
+                "SELECT user_id, status, string_agg(note, ',') FROM orders GROUP BY 1, 2",
                 &not_null,
-                vec![2, 3],
+                true,
             ),
             (
-                "SELECT count(DISTINCT product_id) FROM public.orders GROUP BY user_id",
+                "SELECT count(*) FROM orders o GROUP BY status, o.user_id HAVING count(*) > 1",
+                &not_null,
+                true,
+            ),
+            (
+                "SELECT count(*) FROM public.orders GROUP BY user_id",
                 &mixed,
-                vec![0],
+                true,
             ),
             // Other groups span shards.
             (
-                "SELECT status, count(DISTINCT product_id) FROM orders GROUP BY status",
+                "SELECT status, count(*) FROM orders GROUP BY status",
                 &not_null,
-                vec![],
+                false,
             ),
             (
-                "SELECT variance(DISTINCT amount) FROM orders GROUP BY user_id",
+                "SELECT count(DISTINCT user_id) FROM orders",
                 &not_null,
-                vec![],
+                false,
+            ),
+            (
+                "SELECT count(*) FROM orders GROUP BY user_id % 2",
+                &not_null,
+                false,
+            ),
+            // The grand total group spans shards.
+            (
+                "SELECT count(*) FROM orders GROUP BY ROLLUP (user_id)",
+                &not_null,
+                false,
+            ),
+            (
+                "SELECT count(*) FROM orders JOIN users ON users.id = orders.user_id \
+                 GROUP BY orders.user_id",
+                &not_null,
+                false,
             ),
             // Rows with a NULL key are on every shard, and so is their group.
             (
-                "SELECT count(DISTINCT product_id) FROM orders GROUP BY user_id",
+                "SELECT count(*) FROM orders GROUP BY user_id",
                 &nullable,
-                vec![],
+                false,
             ),
             (
-                "SELECT count(DISTINCT product_id) FROM orders GROUP BY user_id",
+                "SELECT count(*) FROM orders GROUP BY user_id",
                 &mixed,
-                vec![],
+                false,
             ),
             (
-                "SELECT count(DISTINCT product_id) FROM archive.orders GROUP BY user_id",
+                "SELECT count(*) FROM archive.orders GROUP BY user_id",
                 &mixed,
-                vec![],
+                false,
             ),
             // The schema isn't loaded.
             (
-                "SELECT count(DISTINCT product_id) FROM orders GROUP BY user_id",
+                "SELECT count(*) FROM orders GROUP BY user_id",
                 &Schema::default(),
-                vec![],
-            ),
-            // The key is still found by its own name, nullable or not.
-            (
-                "SELECT count(DISTINCT user_id) FROM orders GROUP BY status",
-                &nullable,
-                vec![0],
+                false,
             ),
         ] {
             assert_eq!(
-                disjoint_distinct(&select(sql), schema, &tables),
-                Positions::from_iter(expected),
+                groups_stay_on_one_shard(&select(sql), schema, &tables),
+                expected,
                 "{sql}"
             );
         }
