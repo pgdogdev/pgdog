@@ -10,7 +10,8 @@ use crate::TlsVerifyMode;
 #[derive(
     Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, PartialOrd, Eq, Ord, Hash,
 )]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+#[schemars(deny_unknown_fields)]
 pub struct ServerTls {
     /// Overrides the `tls_verify` setting for connections to this database.
     /// Useful when servers in the same cluster require different TLS settings,

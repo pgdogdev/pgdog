@@ -17,7 +17,7 @@ use schemars::JsonSchema;
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/plugins/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Plugin {
     /// Name of the plugin to load. This is used by PgDog to look up the shared library object in `LD_LIBRARY_PATH`. For example, if your plugin name is `router`, PgDog will look for `librouter.so` on Linux, `librouter.dll` on Windows, and `librouter.dylib` on Mac OS.
     ///
@@ -35,7 +35,7 @@ pub struct Plugin {
 ///
 /// <https://docs.pgdog.dev/configuration/users.toml/users/>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Users {
     /// Admin database configuration.
     pub admin: Option<Admin>,
@@ -288,7 +288,7 @@ impl Display for PasswordKind {
 #[derive(
     Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd, JsonSchema,
 )]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct User {
     /// User identity used for mTLS.
     pub identity: Option<String>,
@@ -513,7 +513,7 @@ impl User {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/admin/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Admin {
     /// Admin database name.
     ///

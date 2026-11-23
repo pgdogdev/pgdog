@@ -15,7 +15,8 @@ use pgdog_vector::Vector;
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+#[schemars(deny_unknown_fields)]
 pub struct ShardedTableConfig {
     /// The name of the database in `[[databases]]` section in which the table is located.
     ///
@@ -226,8 +227,9 @@ pub enum DataType {
 ///
 /// **Deprecated**: use a `[[sharded_tables.mapping]]` rule on the corresponding `[[sharded_tables]]` entry instead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 // TODO: try to remove this in the near future
+#[schemars(deny_unknown_fields)]
 pub struct ShardedMappingDeprecated {
     /// Database name from the `[[databases]]` section.
     pub database: String,
@@ -284,7 +286,7 @@ impl<'a> Equivalent<ShardedMappingKey> for ShardedMappingKeyRef<'a> {
 ///
 /// **Deprecated**: use a `[[sharded_tables.mapping]]` rule instead.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default, Hash, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum ShardedMappingKindDeprecated {
     /// Match an explicit set of values (default).
     #[default]
@@ -460,7 +462,7 @@ impl<'a> From<&'a FlexibleType> for FlexibleTypeRef<'a> {
     PartialOrd,
     Ord,
 )]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum QueryParserLevel {
     /// Always enable the query parser.
     On,
@@ -477,7 +479,7 @@ pub enum QueryParserLevel {
 
 /// Underlying parser implementation used to analyze SQL queries.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum QueryParserEngine {
     /// Use the protobuf parse tree from `pg_query`.
     PgQueryProtobuf,
@@ -490,7 +492,7 @@ pub enum QueryParserEngine {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#system_catalogs>
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum SystemCatalogsBehavior {
     /// Send catalog queries to all shards and merge the results.
     Omnisharded,
@@ -519,7 +521,7 @@ impl FromStr for SystemCatalogsBehavior {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format>
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum CopyFormat {
     /// PostgreSQL text format; required for `INTEGER` → `BIGINT` primary key migrations.
     Text,
@@ -543,7 +545,7 @@ impl Display for CopyFormat {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#lookup_result>
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum LookupResult {
     /// The returned value is hashed to pick a shard (default).
     #[default]
@@ -565,7 +567,7 @@ impl Display for LookupResult {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema>
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum LoadSchema {
     /// Always load the schema at startup.
     On,
@@ -590,7 +592,7 @@ impl FromStr for LoadSchema {
 
 /// Action to take when the cutover timeout is reached during online resharding.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum CutoverTimeoutAction {
     /// Abort the cutover and leave the old configuration in place (default).
     #[default]
@@ -611,7 +613,7 @@ impl FromStr for CutoverTimeoutAction {
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum UniqueIdFunction {
     /// Standard 64-bit function using the entire 64-bit range.
     #[default]
@@ -647,7 +649,8 @@ impl Display for UniqueIdFunction {
 
 /// Per-database query parser configuration.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+#[schemars(deny_unknown_fields)]
 pub struct QueryParser {
     /// Database name.
     pub database: String,

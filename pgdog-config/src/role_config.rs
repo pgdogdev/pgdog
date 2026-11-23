@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(
     Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, PartialOrd, Eq, Ord,
 )]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
+#[schemars(deny_unknown_fields)]
 pub struct RoleConfig {
     /// Maximum pool size for the primary database in the cluster.
     pub pool_size_primary: Option<usize>,

@@ -23,7 +23,7 @@ use super::pooling::{PoolerMode, PreparedStatementsLevel};
 
 /// Format to use for PgDog application logs.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum LogFormat {
     /// Human-readable text logs (default).
     #[default]
@@ -61,7 +61,7 @@ impl FromStr for LogFormat {
 #[derive(
     Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema, FromStr,
 )]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 pub enum QuerySizeLimitAction {
     /// Log a warning with a sample of the query (default).
     #[default]
@@ -75,7 +75,7 @@ pub enum QuerySizeLimitAction {
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/>
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct General {
     /// The IP address of the local network interface PgDog will bind to listen for connections.
     ///

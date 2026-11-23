@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/memory/>
 #[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Memory {
     /// Size of the network read buffer in bytes. This buffer is used for reading data from client and server connections.
     ///

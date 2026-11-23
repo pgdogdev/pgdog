@@ -135,7 +135,7 @@ impl Default for Replication {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/mirroring/>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Mirroring {
     /// Name of the source database to mirror traffic from. This should be a `name` configured in the [`databases`](https://docs.pgdog.dev/configuration/pgdog.toml/databases/) section of `pgdog.toml`.
     ///
@@ -163,7 +163,7 @@ pub struct Mirroring {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, Copy)]
-#[serde(deny_unknown_fields, rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum MirroringLevel {
     /// Replicate all statements.
     #[default]

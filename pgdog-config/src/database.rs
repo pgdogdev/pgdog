@@ -132,7 +132,7 @@ impl Display for ReadWriteSplit {
 #[derive(
     Serialize, Deserialize, Debug, Clone, Default, PartialEq, Ord, PartialOrd, Eq, JsonSchema,
 )]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Database {
     /// Name of your database. Clients that connect to PgDog will need to use this name to refer to the database. For multiple entries that are part of the same cluster, use the same value.
     ///

@@ -207,7 +207,7 @@ impl Default for ConfigAndUsers {
 
 /// Configuration.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Config {
     /// General settings are relevant to the operations of the pooler itself, or apply to all database pools.
     ///
@@ -1891,7 +1891,10 @@ unknown_database = "x"
         assert_eq!(config.general.port, 6433);
         assert_eq!(config.qos.backoff.write_backoff_delay, Some(10));
         assert_eq!(config.databases[0].name, "prod");
-        assert_eq!(config.databases[0].tls.tls_verify, Some(TlsVerifyMode::Disabled));
+        assert_eq!(
+            config.databases[0].tls.tls_verify,
+            Some(TlsVerifyMode::Disabled)
+        );
 
         let source = r#"
 [[users]]

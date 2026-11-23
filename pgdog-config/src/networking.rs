@@ -46,9 +46,8 @@ impl FromStr for TlsVerifyMode {
 /// **Note:** Not all networks support or play well with TCP keep-alives. If you see an increased number of dropped connections after enabling these settings, you may have to disable them.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/>
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-#[derive(JsonSchema)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct Tcp {
     /// Enable TCP keep-alive probing on idle client and server connections.
     ///

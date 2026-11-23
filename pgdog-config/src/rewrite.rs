@@ -59,7 +59,7 @@ impl FromStr for RewriteMode {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Rewrite {
     /// Enables/disables the query rewrite engine.
     ///
