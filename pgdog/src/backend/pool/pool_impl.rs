@@ -360,6 +360,13 @@ impl Pool {
         self.addr().compatible(other.addr())
     }
 
+    /// Disconnect idle servers and stop replenishing the pool to its minimum size.
+    pub(crate) fn dump_idle(&self) -> usize {
+        let mut guard = self.lock();
+        guard.min_disabled = true;
+        guard.dump_idle()
+    }
+
     /// Pause pool, closing all open connections.
     pub(crate) fn pause(&self) {
         let mut guard = self.lock();

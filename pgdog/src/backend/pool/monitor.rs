@@ -510,6 +510,21 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_dump_idle_stops_minimum_replenishment() {
+        let pool = pool();
+        drop(pool.get(&Request::default()).await.unwrap());
+        assert_eq!(pool.dump_idle(), 1);
+        assert!(!pool.lock().should_create().yes());
+
+        // Complete a refill requested before the drain.
+        let monitor = Monitor { pool: pool.clone() };
+        assert!(monitor.replenish(ConnectReason::BelowMin).await.unwrap());
+        assert_eq!(pool.lock().idle(), 0);
+
+        let _connection = pool.get(&Request::default()).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_replenish_only_when_pool_is_online() {
         crate::logger();
 
