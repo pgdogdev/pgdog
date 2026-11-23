@@ -75,7 +75,7 @@ async fn fk_validation_setup(
     set(test_config)?;
 
     let source = databases::databases().schema_owner(schema)?;
-    let mut server = source.primary(0, &Request::default()).await?;
+    let mut server = source.primary(0, &LbRequest::default()).await?;
     server
         .execute_checked(format!(
             "CREATE SCHEMA {schema}; \
@@ -120,7 +120,7 @@ async fn fk_validation_setup(
 
     let child = copy_table(&source, &dest, &child, server.addr()).await?;
     if orphan {
-        let mut destination_server = dest.primary(0, &Request::default()).await?;
+        let mut destination_server = dest.primary(0, &LbRequest::default()).await?;
         destination_server
             .execute_checked(format!("INSERT INTO {schema}.children VALUES (42, 1, 999)"))
             .await?;
@@ -231,7 +231,7 @@ async fn test_replication_fk_inconsistent_validation() -> TestResult {
             );
 
             let schema = &fixture.schema;
-            let mut server = fixture.dest.primary(0, &Request::default()).await?;
+            let mut server = fixture.dest.primary(0, &LbRequest::default()).await?;
             let parents: Vec<i64> = server
                 .fetch_all(format!("SELECT id FROM {schema}.parents ORDER BY id"))
                 .await?;
@@ -361,7 +361,7 @@ async fn post_data_validation_during_replication_gates_cutover() -> TestResult {
         PostDataValidationStage::DuringReplication,
         false,
         async |fixture| {
-            let mut lock = fixture.dest.primary(0, &Request::default()).await?;
+            let mut lock = fixture.dest.primary(0, &LbRequest::default()).await?;
             lock.execute_checked(format!(
                 "BEGIN; LOCK TABLE {}.children IN SHARE UPDATE EXCLUSIVE MODE",
                 fixture.schema

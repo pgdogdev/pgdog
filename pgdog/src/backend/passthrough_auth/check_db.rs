@@ -11,7 +11,7 @@ use tokio::sync::OnceCell;
 use tracing::error;
 
 use crate::backend::Cluster;
-use crate::backend::pool::Request;
+use crate::backend::pool::LbRequest;
 use crate::backend::schema::SchemaCache;
 
 use crate::config::config;
@@ -151,7 +151,7 @@ async fn check_password(user: &User, config: &Config) -> Result<bool, Error> {
             .iter()
             .next()
             .expect("cluster to have at least one shard")
-            .primary_or_replica(&Request::default()),
+            .primary_or_replica(&LbRequest::default()),
     )
     .await
     {

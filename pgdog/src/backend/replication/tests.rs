@@ -23,7 +23,7 @@ use crate::{
     },
     backend::{
         Cluster, ConnectReason, Error as BackendError, Server, ServerOptions, databases,
-        pool::{Address, Guard, Request},
+        pool::{Address, Guard, LbRequest},
         schema::sync::SchemaSyncError,
         server::test::test_server,
     },
@@ -113,7 +113,7 @@ async fn replicate_until_caught_up(
     state: &ReshardingState,
     slot_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut server = state.source.primary(0, &Request::default()).await?;
+    let mut server = state.source.primary(0, &LbRequest::default()).await?;
     let (task, stop) = start_replication(state);
 
     let caught_up = wait_for_slot(&mut server, &format!("{slot_name}_0")).await;
@@ -192,7 +192,7 @@ async fn create_tables(
 ) -> Result<(Guard, Guard), Box<dyn std::error::Error>> {
     let source = databases::databases().schema_owner(schema)?;
     let dest = databases::databases().schema_owner(destination)?;
-    let mut source_server = source.primary(0, &Request::default()).await?;
+    let mut source_server = source.primary(0, &LbRequest::default()).await?;
     source_server
         .execute_checked(format!(
             "CREATE SCHEMA {schema}; \
@@ -205,7 +205,7 @@ async fn create_tables(
              CREATE PUBLICATION {schema} FOR TABLE {schema}.main, {schema}.small"
         ))
         .await?;
-    let mut dest_server = dest.primary(0, &Request::default()).await?;
+    let mut dest_server = dest.primary(0, &LbRequest::default()).await?;
     dest_server
         .execute_checked(format!(
             "CREATE SCHEMA {schema}; \
@@ -278,7 +278,7 @@ async fn wait_for_replication_finishes_with_unrelated_writes()
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
         let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
+        let mut server = source.primary(0, &LbRequest::default()).await?;
         server
             .execute_checked(format!(
                 "CREATE SCHEMA {schema}; \
@@ -287,7 +287,7 @@ async fn wait_for_replication_finishes_with_unrelated_writes()
                  CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
             ))
             .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
+        let mut dest_server = dest.primary(0, &LbRequest::default()).await?;
         dest_server
             .execute_checked(format!(
                 "CREATE SCHEMA {schema}; \
@@ -354,7 +354,7 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
     let result = async {
         setup_replication_test(&mut admin, &schema, &destination).await?;
         let source = databases::databases().schema_owner(&schema)?;
-        let mut source_server = source.primary(0, &Request::default()).await?;
+        let mut source_server = source.primary(0, &LbRequest::default()).await?;
 
         // create the tables tied by fk and put some data there
         source_server
@@ -454,7 +454,7 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
 
     let validation = async {
         let dest = result?;
-        let mut server = dest.primary(0, &Request::default()).await?;
+        let mut server = dest.primary(0, &LbRequest::default()).await?;
         let parents: Vec<i64> = server
             .fetch_all(format!("SELECT id FROM {parent} ORDER BY id"))
             .await?;
@@ -491,7 +491,7 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
-        let mut server = source.primary(0, &Request::default()).await?;
+        let mut server = source.primary(0, &LbRequest::default()).await?;
 
         // create the tables tied by fk and put some data there
         server
@@ -569,7 +569,7 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
     // check that both tables have the copied rows and the fk still points to the parent
     let validation = async {
         let dest = result?;
-        let mut server = dest.primary(0, &Request::default()).await?;
+        let mut server = dest.primary(0, &LbRequest::default()).await?;
         let parents: Vec<String> = server
             .fetch_all(format!(
                 "SELECT id || ':' || tenant_id FROM {schema}.parents ORDER BY id"
@@ -604,7 +604,7 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
-        let mut server = source.primary(0, &Request::default()).await?;
+        let mut server = source.primary(0, &LbRequest::default()).await?;
         // create valid source data with a trigger instead of a foreign key
         server
             .execute_checked(format!(
@@ -688,7 +688,7 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
     let validation = async {
         let dest = result?;
         // check the copied parent and the child's reference
-        let mut server = dest.primary(0, &Request::default()).await?;
+        let mut server = dest.primary(0, &LbRequest::default()).await?;
         let parents: Vec<i64> = server
             .fetch_all(format!("SELECT id FROM {schema}.parents ORDER BY id"))
             .await?;
@@ -911,7 +911,7 @@ async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn 
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
-        let mut server = source.primary(0, &Request::default()).await?;
+        let mut server = source.primary(0, &LbRequest::default()).await?;
         server
             .execute_checked(format!(
                 "CREATE SCHEMA {schema}; \
@@ -934,7 +934,7 @@ async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn 
         run_task(schema_sync.clone().phase(SchemaSyncPhase::Pre).build()).await?;
 
         let source = databases::databases().schema_owner(schema)?;
-        let mut server = source.primary(0, &Request::default()).await?;
+        let mut server = source.primary(0, &LbRequest::default()).await?;
         server
             .execute_checked(format!(
                 "DROP INDEX {schema}.items_val_idx; \
@@ -955,7 +955,7 @@ async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn 
         let post_data = run_task(schema_sync.phase(SchemaSyncPhase::Post).build()).await;
         state.drop_slots().await?;
 
-        let mut server = state.destination.primary(0, &Request::default()).await?;
+        let mut server = state.destination.primary(0, &LbRequest::default()).await?;
         let rows: Vec<i64> = server
             .fetch_all(format!("SELECT id FROM {schema}.items ORDER BY id"))
             .await?;
@@ -988,7 +988,7 @@ async fn tables_only_copies_and_replicates_one_table() -> Result<(), Box<dyn std
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
         let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
+        let mut server = source.primary(0, &LbRequest::default()).await?;
         server
             .execute_checked(format!(
                 "CREATE SCHEMA {schema}; \
@@ -999,7 +999,7 @@ async fn tables_only_copies_and_replicates_one_table() -> Result<(), Box<dyn std
                  CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
             ))
             .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
+        let mut dest_server = dest.primary(0, &LbRequest::default()).await?;
 
         let state = ReshardingState::builder()
             .source(schema)

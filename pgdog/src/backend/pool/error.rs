@@ -42,6 +42,9 @@ pub(crate) enum Error {
     #[error("all replicas down")]
     AllReplicasDown,
 
+    #[error("no replica with provided label")]
+    NoReplicaWithLabel,
+
     #[error("pub/sub disabled")]
     PubSubDisabled,
 

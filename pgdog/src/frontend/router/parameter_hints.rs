@@ -96,6 +96,15 @@ impl ParameterHints<'_> {
         Ok(())
     }
 
+    /// Get a custom backend label from the role parameter.
+    pub(crate) fn compute_label(&self) -> Option<&str> {
+        let value = self.pgdog_role?.as_str()?;
+        if matches!(value, "" | "primary" | "replica") || value.chars().any(char::is_whitespace) {
+            return None;
+        }
+        Some(value)
+    }
+
     /// Compute role from parameter value.
     pub(crate) fn compute_role(&self) -> Option<Role> {
         let role = match self.pgdog_role {

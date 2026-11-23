@@ -24,7 +24,11 @@ impl<'a> MultiShardUpgrade<'a> {
     }
 
     /// Change the binding by connecting to required shards to serve the request.
-    pub(crate) async fn upgrade(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    pub(crate) async fn upgrade(
+        &mut self,
+        request: &LbRequest<'_>,
+        route: &Route,
+    ) -> Result<(), Error> {
         // Don't switch to a replica or to a primary
         // between shard connection upgrades.
         let is_read = match self.connection.binding {

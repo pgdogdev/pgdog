@@ -19,7 +19,7 @@ use crate::auth::{AUTH_TOKEN_CACHE, AuthResult, md5, scram::Server};
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
     databases,
-    pool::{Connection, Request},
+    pool::{Connection, LbRequest},
 };
 use crate::backend::{maintenance_mode, passthrough_auth};
 use crate::config::convert::user_from_params;
@@ -398,7 +398,7 @@ impl Client {
 
         // Get connection parameters. These will be most likely cached,
         // unless the pool was just created.
-        let server_params = match conn.parameters(&Request::unrouted(id)).await {
+        let server_params = match conn.parameters(&LbRequest::unrouted(id)).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {

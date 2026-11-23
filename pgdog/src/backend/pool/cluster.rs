@@ -30,7 +30,7 @@ use crate::{
 
 use super::{
     Address, CanonicalOids, ClusterFailoverSignalWatcher, ClusterMetrics, Config, Error, Guard,
-    Request, Shard, ShardConfig,
+    LbRequest, Shard, ShardConfig,
 };
 use crate::config::LoadBalancingStrategy;
 use launch::Readiness;
@@ -456,7 +456,11 @@ impl Cluster {
     }
 
     /// Get a connection to a primary of the given shard.
-    pub(crate) async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary(
+        &self,
+        shard: usize,
+        request: &LbRequest<'_>,
+    ) -> Result<Guard, Error> {
         #[allow(clippy::unnecessary_lazy_evaluations)]
         let shard = self
             .shards
@@ -466,7 +470,11 @@ impl Cluster {
     }
 
     /// Get a connection to a replica of the given shard.
-    pub(crate) async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn replica(
+        &self,
+        shard: usize,
+        request: &LbRequest<'_>,
+    ) -> Result<Guard, Error> {
         #[allow(clippy::unnecessary_lazy_evaluations)]
         let shard = self
             .shards
@@ -777,7 +785,7 @@ impl Cluster {
             .shards
             .get(round_robin::next(self.shards.len().max(1)))
             .ok_or_else(|| crate::backend::pool::Error::NoDatabases)?;
-        let mut server = shard.primary_or_replica(&Request::default()).await?;
+        let mut server = shard.primary_or_replica(&LbRequest::default()).await?;
 
         server
             .fetch_all(ServerRequest::parameterized(query, params))
