@@ -143,6 +143,20 @@ pub(crate) fn expires_at() -> SystemTime {
     SystemTime::now() + Duration::from_secs(900)
 }
 
+/// The `host:port` an RDS IAM token was signed for.
+///
+/// A token is a presigned URL without its scheme, e.g.
+/// `mydb.abc.us-east-1.rds.amazonaws.com:5432/?Action=connect&DBUser=...`,
+/// and RDS accepts it only on that endpoint.
+pub(crate) fn token_endpoint(token: &str) -> Option<(&str, u16)> {
+    let (endpoint, _) = token.split_once('/')?;
+    let (host, port) = endpoint.rsplit_once(':')?;
+    if host.is_empty() {
+        return None;
+    }
+    Some((host, port.parse().ok()?))
+}
+
 #[cfg(test)]
 mod tests {
     use pgdog_config::Role;
@@ -150,6 +164,20 @@ mod tests {
     use super::*;
     use crate::config::ServerAuth;
     use crate::test_utils::set_env_var;
+
+    #[test]
+    fn test_token_endpoint() {
+        assert_eq!(
+            token_endpoint(
+                "mydb.abc.us-east-1.rds.amazonaws.com:5432/?Action=connect&DBUser=app&X-Amz-Expires=900"
+            ),
+            Some(("mydb.abc.us-east-1.rds.amazonaws.com", 5432))
+        );
+        assert_eq!(token_endpoint("not a token"), None);
+        assert_eq!(token_endpoint(":5432/?Action=connect"), None);
+        assert_eq!(token_endpoint("host:notaport/?Action=connect"), None);
+        assert_eq!(token_endpoint("eyJhbGciOiJSUzI1NiJ9.e30.sig"), None);
+    }
 
     fn make_addr() -> Address {
         Address {
