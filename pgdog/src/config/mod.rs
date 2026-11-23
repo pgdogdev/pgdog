@@ -552,19 +552,19 @@ hasher = "sha1"
 
 #[cfg(test)]
 mod strict_parse_tests {
+    use pgdog_config::core::parse_toml;
+
     use super::*;
 
     const CONFIG: &str = r#"
 [general]
 port = 6433
 
-[qos]
-write_backoff_delay = 10
-
 [[databases]]
 name = "prod"
 host = "127.0.0.1"
 tls_verify = "disabled"
+pool_size_primary = 5
 "#;
 
     const USERS: &str = r#"
@@ -576,41 +576,62 @@ pool_size_primary = 5
 "#;
 
     #[test]
-    fn strict_accepts_known_flattened_fields() {
-        let config = from_toml_strict(CONFIG, USERS).unwrap();
-        assert_eq!(config.config.qos.backoff.write_backoff_delay, Some(10));
+    fn known_flattened_fields_report_nothing() {
+        let usual: Config = toml::from_str(CONFIG).unwrap();
+        let strict = parse_toml::<Config>(CONFIG).unwrap();
+        assert_eq!(strict.value, usual);
         assert_eq!(
-            config.config.databases[0].tls.tls_verify,
+            strict.value.databases[0].tls.tls_verify,
             Some(TlsVerifyMode::Disabled)
         );
-        assert_eq!(config.users.users[0].role_config.pool_size_primary, Some(5));
+        assert_eq!(
+            strict.value.databases[0].role_config.pool_size_primary,
+            Some(5)
+        );
+        assert!(strict.unknown_fields.is_empty());
+
+        let usual: Users = toml::from_str(USERS).unwrap();
+        let strict = parse_toml::<Users>(USERS).unwrap();
+        assert_eq!(strict.value, usual);
+        assert_eq!(strict.value.users[0].role_config.pool_size_primary, Some(5));
+        assert!(strict.unknown_fields.is_empty());
     }
 
     #[test]
-    fn strict_rejects_unknown_config_fields() {
+    fn unknown_config_fields_are_reported() {
         let cases = [
-            ("unknown_top_level", format!("unknown_top_level = 1\n{CONFIG}")),
-            ("unknown_section", format!("{CONFIG}\n[unknown_section]\nkey = 1\n")),
             (
-                "unknown_general",
+                "unknown_top_level",
+                format!("unknown_top_level = 1\n{CONFIG}"),
+            ),
+            (
+                "unknown_section",
+                format!("{CONFIG}\n[unknown_section]\nkey = 1\n"),
+            ),
+            (
+                "general.unknown_general",
                 CONFIG.replace("port = 6433", "port = 6433\nunknown_general = 1"),
             ),
             (
-                "unknown_qos",
-                CONFIG.replace("write_backoff_delay = 10", "write_backoff_delay = 10\nunknown_qos = 1"),
+                "databases.0.unknown_database",
+                format!("{CONFIG}unknown_database = 1\n"),
             ),
-            ("unknown_database", format!("{CONFIG}unknown_database = 1\n")),
         ];
 
-        for (key, config) in cases {
-            let err = from_toml_strict(&config, USERS).expect_err(key);
-            assert!(err.to_string().contains(key), "{key}: {err}");
+        for (path, config) in cases {
+            let usual: Config = toml::from_str(&config).unwrap();
+            let strict = parse_toml::<Config>(&config).unwrap();
+            assert_eq!(strict.value, usual, "{path}");
+            assert_eq!(strict.unknown_fields, [path]);
         }
     }
 
     #[test]
-    fn strict_rejects_unknown_users_fields() {
-        let err = from_toml_strict(CONFIG, &format!("{USERS}unknown_user = 1\n")).unwrap_err();
-        assert!(err.to_string().contains("unknown_user"), "{err}");
+    fn unknown_users_fields_are_reported() {
+        let users = format!("{USERS}unknown_user = 1\n");
+        let usual: Users = toml::from_str(&users).unwrap();
+        let strict = parse_toml::<Users>(&users).unwrap();
+        assert_eq!(strict.value, usual);
+        assert_eq!(strict.unknown_fields, ["users.0.unknown_user"]);
     }
 }

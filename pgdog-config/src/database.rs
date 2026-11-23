@@ -1,3 +1,4 @@
+use pgdog_util::deserialize::{UnknownFields, WithUnknownFields};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -238,6 +239,17 @@ pub struct Database {
     /// Only queries containing labels will be routed to this replica.
     #[serde(default)]
     pub label_required: bool,
+
+    /// Keys that no field of this struct recognized.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub unknown: UnknownFields,
+}
+
+impl WithUnknownFields for Database {
+    fn unknown_fields(&self) -> impl Iterator<Item = String> + '_ {
+        self.unknown.unknown_fields()
+    }
 }
 
 impl Database {

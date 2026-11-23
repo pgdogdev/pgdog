@@ -3042,6 +3042,7 @@ dependencies = [
  "derive_more",
  "indexmap 2.14.0",
  "once_cell",
+ "pgdog-util",
  "pgdog-vector",
  "rand 0.10.1",
  "schemars 1.2.1",

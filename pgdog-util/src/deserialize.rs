@@ -11,9 +11,9 @@ use serde::de::IgnoredAny;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// The parsed value with additional `unknown_fields` list
+/// The deserialized value and the paths of all keys that no field recognized.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Output<T> {
+pub struct Deserialized<T> {
     pub value: T,
     pub unknown_fields: Vec<String>,
 }
@@ -36,7 +36,9 @@ pub trait WithUnknownFields {
 
 /// Deserialize with any [Deserializer] and catch any fields that were not identified by
 /// utilizing [WithUnknownFields].
-pub fn deserialize_with_unknown_fields<'de, D, T>(deserializer: D) -> Result<Output<T>, D::Error>
+pub fn deserialize_with_unknown_fields<'de, D, T>(
+    deserializer: D,
+) -> Result<Deserialized<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de> + WithUnknownFields,
@@ -46,7 +48,7 @@ where
         serde_ignored::deserialize(deserializer, |path| unknown_fields.push(path.to_string()))?;
     unknown_fields.extend(value.unknown_fields());
 
-    Ok(Output {
+    Ok(Deserialized {
         value,
         unknown_fields,
     })
@@ -184,7 +186,7 @@ value = 2
 unknown_item = "x"
 "#;
         let usual: Root = toml::from_str(source).unwrap();
-        let strict: Output<Root> =
+        let strict: Deserialized<Root> =
             deserialize_with_unknown_fields(toml::Deserializer::new(source)).unwrap();
 
         assert_eq!(usual, expected());
@@ -211,7 +213,8 @@ unknown_item = "x"
         }"#;
         let usual: Root = serde_json::from_str(source).unwrap();
         let mut deserializer = serde_json::Deserializer::from_str(source);
-        let strict: Output<Root> = deserialize_with_unknown_fields(&mut deserializer).unwrap();
+        let strict: Deserialized<Root> =
+            deserialize_with_unknown_fields(&mut deserializer).unwrap();
         deserializer.end().unwrap();
 
         assert_eq!(usual, expected());
@@ -239,7 +242,7 @@ value = 1
 value = 2
 "#;
         let usual: Root = toml::from_str(source).unwrap();
-        let strict: Output<Root> =
+        let strict: Deserialized<Root> =
             deserialize_with_unknown_fields(toml::Deserializer::new(source)).unwrap();
 
         assert_eq!(usual, expected());
@@ -264,7 +267,7 @@ value = 1
 unknown_flattened = true
 "#;
         let usual: FlattenedWithoutCatchAll = toml::from_str(source).unwrap();
-        let strict: Output<FlattenedWithoutCatchAll> =
+        let strict: Deserialized<FlattenedWithoutCatchAll> =
             deserialize_with_unknown_fields(toml::Deserializer::new(source)).unwrap();
 
         assert_eq!(usual, strict.value);
@@ -280,7 +283,7 @@ value = 1
 unknown_flattened = true
 "#;
         let usual: Flattened = toml::from_str(source).unwrap();
-        let strict: Output<Flattened> =
+        let strict: Deserialized<Flattened> =
             deserialize_with_unknown_fields(toml::Deserializer::new(source)).unwrap();
 
         assert_eq!(usual, strict.value);
@@ -312,7 +315,7 @@ unknown_flattened = true
 another_unknown = "x"
 "#;
         let usual: Parent = toml::from_str(source).unwrap();
-        let strict: Output<Parent> =
+        let strict: Deserialized<Parent> =
             deserialize_with_unknown_fields(toml::Deserializer::new(source)).unwrap();
 
         assert_eq!(usual, strict.value);

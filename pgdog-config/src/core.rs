@@ -1,5 +1,7 @@
 use indexmap::IndexMap;
+use pgdog_util::deserialize::{Deserialized, WithUnknownFields, deserialize_with_unknown_fields};
 use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::read_to_string;
@@ -50,7 +52,7 @@ impl ConfigAndUsers {
     pub fn load(config_path: &Path, users_path: &Path) -> Result<Self, Error> {
         let config_text = read_to_string(config_path).ok();
         let mut config: Config = if let Some(text) = &config_text {
-            let config = match toml::from_str(text) {
+            let config = match parse_toml_strict::<Config>(config_path, text) {
                 Ok(config) => config,
                 Err(err) => {
                     let error = Error::config(text, err);
@@ -74,8 +76,8 @@ impl ConfigAndUsers {
 
         let users_text = read_to_string(users_path).ok();
         let mut users: Users = if let Some(text) = &users_text {
-            let users: Users = match toml::from_str(text) {
-                Ok(config) => config,
+            let users: Users = match parse_toml_strict::<Users>(users_path, text) {
+                Ok(users) => users,
                 Err(err) => {
                     let error = Error::config(text, err);
                     error!("failed to load {}: {}", users_path.display(), error);
@@ -202,6 +204,41 @@ impl Default for ConfigAndUsers {
             config_text: None,
             users_text: None,
         }
+    }
+}
+
+pub fn parse_toml<T>(text: &str) -> Result<Deserialized<T>, toml::de::Error>
+where
+    T: DeserializeOwned + WithUnknownFields,
+{
+    deserialize_with_unknown_fields(toml::Deserializer::new(text))
+}
+
+pub fn parse_toml_strict<T>(path: &Path, text: &str) -> Result<T, toml::de::Error>
+where
+    T: DeserializeOwned + WithUnknownFields,
+{
+    let deserialized = parse_toml::<T>(text)?;
+    if !deserialized.unknown_fields.is_empty() {
+        warn!(
+            file = %path.display(),
+            fields = ?deserialized.unknown_fields,
+            "unknown fields in config, ignoring"
+        );
+    }
+    Ok(deserialized.value)
+}
+
+impl WithUnknownFields for Config {
+    fn unknown_fields(&self) -> impl Iterator<Item = String> + '_ {
+        self.databases
+            .iter()
+            .enumerate()
+            .flat_map(|(index, database)| {
+                database
+                    .unknown_fields()
+                    .map(move |field| format!("databases.{index}.{field}"))
+            })
     }
 }
 
@@ -1874,10 +1911,6 @@ unknown_top_level = 1
 port = 6433
 unknown_general = true
 
-[qos]
-write_backoff_delay = 10
-unknown_qos = 1
-
 [unknown_section]
 key = 1
 
@@ -1885,15 +1918,30 @@ key = 1
 name = "prod"
 host = "127.0.0.1"
 tls_verify = "disabled"
+pool_size_primary = 5
 unknown_database = "x"
 "#;
         let config: Config = toml::from_str(source).unwrap();
         assert_eq!(config.general.port, 6433);
-        assert_eq!(config.qos.backoff.write_backoff_delay, Some(10));
         assert_eq!(config.databases[0].name, "prod");
         assert_eq!(
             config.databases[0].tls.tls_verify,
             Some(TlsVerifyMode::Disabled)
+        );
+        assert_eq!(config.databases[0].role_config.pool_size_primary, Some(5));
+
+        let strict = parse_toml::<Config>(source).unwrap();
+        assert_eq!(strict.value, config);
+        let mut unknown_fields = strict.unknown_fields;
+        unknown_fields.sort();
+        assert_eq!(
+            unknown_fields,
+            [
+                "databases.0.unknown_database",
+                "general.unknown_general",
+                "unknown_section",
+                "unknown_top_level",
+            ]
         );
 
         let source = r#"
@@ -1906,6 +1954,10 @@ unknown_user = 1
         let users: Users = toml::from_str(source).unwrap();
         assert_eq!(users.users[0].name, "alice");
         assert_eq!(users.users[0].role_config.pool_size_primary, Some(5));
+
+        let strict = parse_toml::<Users>(source).unwrap();
+        assert_eq!(strict.value, users);
+        assert_eq!(strict.unknown_fields, ["users.0.unknown_user"]);
     }
 
     #[test]
@@ -1918,7 +1970,6 @@ unknown_user = 1
                 "unknown_config": 1,
                 "unknown_section": { "key": 1 },
                 "general": { "port": 6433, "unknown_general": true },
-                "qos": { "write_backoff_delay": 10, "unknown_qos": 1 },
                 "databases": [{
                     "name": "prod",
                     "host": "127.0.0.1",
@@ -1938,7 +1989,6 @@ unknown_user = 1
         }"#;
         let config: ConfigAndUsers = serde_json::from_str(source).unwrap();
         assert_eq!(config.config.general.port, 6433);
-        assert_eq!(config.config.qos.backoff.write_backoff_delay, Some(10));
         assert_eq!(config.config.databases[0].name, "prod");
         assert_eq!(
             config.config.databases[0].tls.tls_verify,

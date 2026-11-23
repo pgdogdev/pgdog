@@ -1,3 +1,4 @@
+use pgdog_util::deserialize::{UnknownFields, WithUnknownFields};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt::Display;
@@ -44,6 +45,15 @@ pub struct Users {
     /// <https://docs.pgdog.dev/configuration/users.toml/users/>
     #[serde(default)]
     pub users: Vec<User>,
+}
+
+impl WithUnknownFields for Users {
+    fn unknown_fields(&self) -> impl Iterator<Item = String> + '_ {
+        self.users.iter().enumerate().flat_map(|(index, user)| {
+            user.unknown_fields()
+                .map(move |field| format!("users.{index}.{field}"))
+        })
+    }
 }
 
 impl Users {
@@ -443,6 +453,17 @@ pub struct User {
 
     /// Read-write split algorithm to use for this user.
     pub read_write_split: Option<ReadWriteSplit>,
+
+    /// Keys that no field of this struct recognized.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub unknown: UnknownFields,
+}
+
+impl WithUnknownFields for User {
+    fn unknown_fields(&self) -> impl Iterator<Item = String> + '_ {
+        self.unknown.unknown_fields()
+    }
 }
 
 impl User {
