@@ -34,6 +34,8 @@ pub(super) struct Inner {
     pub(super) online: bool,
     /// Pool is paused.
     pub(super) paused: bool,
+    /// Skip minimum-size replenishment while draining the pool.
+    pub(super) min_disabled: bool,
     /// Track out of sync terminations.
     pub(super) out_of_sync: usize,
     /// How many times servers had to be re-synced
@@ -82,6 +84,7 @@ impl Inner {
             waiting: VecDeque::new(),
             online: false,
             paused: false,
+            min_disabled: false,
             force_close: 0,
             out_of_sync: 0,
             re_synced: 0,
@@ -203,7 +206,7 @@ impl Inner {
     pub(super) fn should_create(&self) -> ShouldCreate {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
-        let maintain_min = below_min && below_max;
+        let maintain_min = !self.min_disabled && below_min && below_max;
         let client_needs =
             below_max && !self.waiting.is_empty() && self.idle_connections.is_empty();
         let maintenance_on = self.online && !self.paused;
@@ -366,11 +369,15 @@ impl Inner {
     }
 
     /// Dump all idle connections.
-    pub(super) fn dump_idle(&mut self) {
+    pub(super) fn dump_idle(&mut self) -> usize {
         for conn in &mut self.idle_connections {
             conn.disconnect_reason(DisconnectReason::Offline);
         }
+        let total = self.idle_connections.len();
+
         self.idle_connections.clear();
+
+        total
     }
 
     /// Take all idle connections and tell active ones to
