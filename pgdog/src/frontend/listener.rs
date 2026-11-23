@@ -151,7 +151,7 @@ impl Listener {
                 cluster
                     .shards()
                     .iter()
-                    .map(|shard| shard.pool_iter().map(|pool| pool.dump_idle()))
+                    .flat_map(|shard| shard.pool_iter().map(|pool| pool.dump_idle()))
                     .sum::<usize>()
             })
             .sum::<usize>();
