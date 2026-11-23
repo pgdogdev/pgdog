@@ -6,23 +6,32 @@
 
 use itertools::Itertools;
 use pg_raw_parse::{Node, nodes};
+use pgdog_stats::Relation;
 
 use crate::backend::replication::ShardedTables;
+use crate::backend::schema::Schema;
 use crate::frontend::router::parser::rewrite::statement::projection::Positions;
 use crate::frontend::router::parser::{AggregateFunction, Column, Function, Table};
 
-/// SELECT list positions of `count`, `sum` and `avg` over `DISTINCT key`,
-/// where `key` is the sharding key.
+/// SELECT list positions of `DISTINCT` `count`, `sum` and `avg` whose shard
+/// results merge like the plain aggregate's. Either:
 ///
-/// No two shards hold the same key, so each shard aggregates keys no other
-/// shard has and the results merge like the plain aggregate's, with or
-/// without `GROUP BY`.
+/// - the argument is the sharding key. No two shards hold the same key, so
+///   each shard aggregates keys no other shard has, with or without
+///   `GROUP BY`; or
+/// - `GROUP BY` includes the sharding key. Each group is on one shard, which
+///   returns its final result, whatever the argument is.
 ///
 /// Variance and standard deviation are left out: their helper sums
-/// `DISTINCT key * key`, and two keys can share a square.
-pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTables) -> Positions {
-    // Resolved on the first DISTINCT aggregate; most queries have none.
+/// `DISTINCT x * x`, and two values can share a square.
+pub(crate) fn disjoint_distinct(
+    select: &nodes::SelectStmt,
+    schema: &Schema,
+    tables: &ShardedTables,
+) -> Positions {
+    // Both are resolved on the first DISTINCT aggregate; most queries have none.
     let mut key = None;
+    let mut grouped = None;
 
     select
         .target_list()
@@ -48,13 +57,19 @@ pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTabl
             ) {
                 return false;
             }
-            let Ok(argument) = call.args().iter().exactly_one() else {
+            let Some(key) = key
+                .get_or_insert_with(|| ShardingKey::new(select, tables))
+                .as_ref()
+            else {
                 return false;
             };
 
-            key.get_or_insert_with(|| ShardingKey::new(select, tables))
-                .as_ref()
-                .is_some_and(|key| key.matches(argument))
+            *grouped.get_or_insert_with(|| key.groups_stay_on_one_shard(select, schema))
+                || call
+                    .args()
+                    .iter()
+                    .exactly_one()
+                    .is_ok_and(|argument| key.matches(argument))
         })
         .map(|(position, _)| position)
         .collect()
@@ -69,7 +84,7 @@ struct ShardingKey<'a> {
 impl<'a> ShardingKey<'a> {
     /// `None` unless the SELECT reads exactly one plain table. Joins,
     /// subqueries and functions in `FROM` can repeat a key on several shards,
-    /// and a CTE can shadow the table's name.
+    /// a CTE can shadow the table's name, and `AS t(a, b)` renames its columns.
     fn new(select: &'a nodes::SelectStmt, tables: &'a ShardedTables) -> Option<Self> {
         if select.with_clause().is_some() {
             return None;
@@ -77,6 +92,12 @@ impl<'a> ShardingKey<'a> {
         let Ok(Node::RangeVar(range_var)) = select.from_clause().iter().exactly_one() else {
             return None;
         };
+        if range_var
+            .alias()
+            .is_some_and(|alias| !alias.colnames().is_empty())
+        {
+            return None;
+        }
 
         Some(Self {
             table: Table::from(range_var),
@@ -84,40 +105,78 @@ impl<'a> ShardingKey<'a> {
         })
     }
 
-    /// Whether `node` is a bare reference to the sharding key column.
+    /// Name of the sharding key column, if `node` is a bare reference to it.
     /// Expressions over the key, e.g. `user_id % 2`, don't count:
     /// two shards can produce the same result.
-    fn matches(&self, node: Node<'_>) -> bool {
+    fn key_column(&self, node: Node<'_>) -> Option<&'a str> {
         let Node::ColumnRef(column) = node else {
-            return false;
+            return None;
         };
-        let Ok(mut column) = Column::try_from(column) else {
-            return false;
-        };
+        let mut column = Column::try_from(column).ok()?;
         if !self.qualifier_matches(&column) {
-            return false;
+            return None;
         }
         column.table = Some(self.table.name);
         column.schema = self.table.schema;
 
-        self.tables.sharding_key(column).is_some()
+        self.tables
+            .sharding_key(column)
+            .map(|table| table.column.as_str())
     }
 
-    /// Whether `GROUP BY` includes the sharding key, by name or by SELECT
-    /// list position, so that no group spans shards.
-    // Not called yet: the NULL key group spans shards and needs its own handling.
-    #[cfg_attr(not(test), expect(dead_code))]
-    fn in_group_by(&self, select: &nodes::SelectStmt) -> bool {
-        select.group_clause().iter().any(|item| match item {
+    /// Whether `node` is a bare reference to the sharding key column.
+    fn matches(&self, node: Node<'_>) -> bool {
+        self.key_column(node).is_some()
+    }
+
+    /// The sharding key column `GROUP BY` includes, by name or by SELECT
+    /// list position.
+    fn group_by_key(&self, select: &nodes::SelectStmt) -> Option<&'a str> {
+        select.group_clause().iter().find_map(|item| match item {
             // Postgres counts SELECT list positions from 1.
             Node::A_Const(ordinal) => ordinal
                 .val()
                 .and_then(|value| value.numeric_value::<i32>())
                 .and_then(|ordinal| usize::try_from(ordinal).ok()?.checked_sub(1))
                 .and_then(|position| select.target_list().iter().nth(position))
-                .is_some_and(|target| self.matches(target.val())),
-            item => self.matches(item),
+                .and_then(|target| self.key_column(target.val())),
+            item => self.key_column(item),
         })
+    }
+
+    /// Whether every group is on one shard: `GROUP BY` includes the sharding
+    /// key and the key can't be `NULL`.
+    ///
+    /// Rows with a `NULL` key are written to every shard, so their group
+    /// would come back from all of them.
+    fn groups_stay_on_one_shard(&self, select: &nodes::SelectStmt, schema: &Schema) -> bool {
+        self.group_by_key(select)
+            .is_some_and(|column| self.is_not_null(column, schema))
+    }
+
+    /// Whether the table declares `column` as `NOT NULL`. A table missing
+    /// from the schema, e.g. before the schema is loaded, doesn't.
+    fn is_not_null(&self, column: &str, schema: &Schema) -> bool {
+        let not_null = |relation: &Relation| {
+            relation
+                .columns
+                .get(column)
+                .is_some_and(|column| !column.is_nullable)
+        };
+
+        match self.table.schema {
+            Some(name) => schema.get(name, self.table.name).is_some_and(not_null),
+            // The search path isn't known here, so every table with this name
+            // has to agree.
+            None => {
+                let mut relations = schema
+                    .relations
+                    .values()
+                    .filter_map(|relations| relations.get(self.table.name))
+                    .peekable();
+                relations.peek().is_some() && relations.all(not_null)
+            }
+        }
     }
 
     /// An aliased table is only known by its alias.
@@ -137,6 +196,7 @@ impl<'a> ShardingKey<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::schema::relation::Relation as SchemaRelation;
     use crate::frontend::router::sharding::ShardedTable;
     use pg_raw_parse::{Owned, make};
     use pgdog_config::{OmnishardedTable, SystemCatalogsBehavior};
@@ -171,7 +231,10 @@ mod tests {
         let key = ShardingKey::new(&select, tables)?;
         let first = select.target_list().iter().next().expect("one target");
 
-        Some((key.matches(first.val()), key.in_group_by(&select)))
+        Some((
+            key.matches(first.val()),
+            key.group_by_key(&select).is_some(),
+        ))
     }
 
     #[test]
@@ -215,7 +278,107 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                disjoint_distinct(&select(sql), &tables),
+                disjoint_distinct(&select(sql), &Schema::default(), &tables),
+                Positions::from_iter(expected),
+                "{sql}"
+            );
+        }
+    }
+
+    /// Schema with an `orders` table in each of `schemas`, given as
+    /// (schema name, whether `user_id` is nullable).
+    fn orders_schema(schemas: &[(&str, bool)]) -> Schema {
+        let relations = schemas
+            .iter()
+            .map(|&(schema, nullable)| {
+                let columns = ["user_id", "product_id"]
+                    .into_iter()
+                    .map(|name| {
+                        let column = pgdog_stats::Column {
+                            column_name: name.into(),
+                            is_nullable: nullable || name != "user_id",
+                            ..Default::default()
+                        };
+                        (name.to_owned(), column.into())
+                    })
+                    .collect();
+                (
+                    (schema.to_owned(), "orders".to_owned()),
+                    SchemaRelation::test_table(schema, "orders", columns),
+                )
+            })
+            .collect();
+
+        Schema::from_parts(vec!["public".into()], relations)
+    }
+
+    #[test]
+    fn finds_distinct_aggregates_grouped_by_not_null_key() {
+        let tables = orders_by_user();
+        let not_null = orders_schema(&[("public", false)]);
+        let nullable = orders_schema(&[("public", true)]);
+        // The search path could resolve `orders` to either table.
+        let mixed = orders_schema(&[("public", false), ("archive", true)]);
+
+        for (sql, schema, expected) in [
+            (
+                "SELECT user_id, count(DISTINCT product_id) FROM orders GROUP BY user_id",
+                &not_null,
+                vec![1],
+            ),
+            (
+                "SELECT user_id, status, sum(DISTINCT amount), avg(DISTINCT amount), count(*) \
+                 FROM orders GROUP BY 1, 2",
+                &not_null,
+                vec![2, 3],
+            ),
+            (
+                "SELECT count(DISTINCT product_id) FROM public.orders GROUP BY user_id",
+                &mixed,
+                vec![0],
+            ),
+            // Other groups span shards.
+            (
+                "SELECT status, count(DISTINCT product_id) FROM orders GROUP BY status",
+                &not_null,
+                vec![],
+            ),
+            (
+                "SELECT variance(DISTINCT amount) FROM orders GROUP BY user_id",
+                &not_null,
+                vec![],
+            ),
+            // Rows with a NULL key are on every shard, and so is their group.
+            (
+                "SELECT count(DISTINCT product_id) FROM orders GROUP BY user_id",
+                &nullable,
+                vec![],
+            ),
+            (
+                "SELECT count(DISTINCT product_id) FROM orders GROUP BY user_id",
+                &mixed,
+                vec![],
+            ),
+            (
+                "SELECT count(DISTINCT product_id) FROM archive.orders GROUP BY user_id",
+                &mixed,
+                vec![],
+            ),
+            // The schema isn't loaded.
+            (
+                "SELECT count(DISTINCT product_id) FROM orders GROUP BY user_id",
+                &Schema::default(),
+                vec![],
+            ),
+            // The key is still found by its own name, nullable or not.
+            (
+                "SELECT count(DISTINCT user_id) FROM orders GROUP BY status",
+                &nullable,
+                vec![0],
+            ),
+        ] {
+            assert_eq!(
+                disjoint_distinct(&select(sql), schema, &tables),
                 Positions::from_iter(expected),
                 "{sql}"
             );
@@ -259,6 +422,8 @@ mod tests {
             "SELECT user_id FROM (SELECT user_id FROM orders) AS orders",
             "SELECT user_id FROM generate_series(1, 3) AS orders(user_id)",
             "WITH orders AS (SELECT 1 AS user_id) SELECT user_id FROM orders",
+            // `user_id` is now the name of the table's first column.
+            "SELECT user_id FROM orders AS o(user_id)",
             "SELECT user_id FROM orders UNION SELECT user_id FROM orders",
             "SELECT 1",
         ] {

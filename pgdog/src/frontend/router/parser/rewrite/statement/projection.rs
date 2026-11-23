@@ -369,7 +369,7 @@ fn build(
     }
 
     let mut plan = ProjectionRewritePlan {
-        disjoint_distinct: disjoint_distinct(select, tables),
+        disjoint_distinct: disjoint_distinct(select, schema, tables),
         ..Default::default()
     };
     let rewritten = make::try_owned(|mem| {
@@ -547,6 +547,49 @@ mod tests {
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let rewrite = build(&ast, &Schema::default(), tables, false).unwrap();
+            let marked = rewrite
+                .as_ref()
+                .and_then(|rewrite| rewrite.plan.as_deref())
+                .map(|plan| plan.disjoint_distinct)
+                .unwrap_or_default();
+            assert_eq!(marked, Positions::from_iter(expected), "{sql}");
+        }
+    }
+
+    #[test]
+    fn distinct_aggregates_grouped_by_sharding_key_are_planned() {
+        let tables = ShardedTables::from(
+            [ShardedTable {
+                name: Some("items".into()),
+                column: "id".into(),
+                ..Default::default()
+            }]
+            .as_slice(),
+        );
+        // `items_schema()` declares every column NOT NULL.
+        let schema = items_schema();
+
+        // (query, schema, SELECT list positions that merge as the plain aggregate)
+        for (sql, schema, expected) in [
+            (
+                "SELECT id, count(DISTINCT category) FROM items GROUP BY id",
+                &schema,
+                vec![1],
+            ),
+            (
+                "SELECT region, count(DISTINCT category) FROM items GROUP BY region",
+                &schema,
+                vec![],
+            ),
+            // Without the schema, the key isn't known to be NOT NULL.
+            (
+                "SELECT id, count(DISTINCT category) FROM items GROUP BY id",
+                &Schema::default(),
+                vec![],
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let rewrite = build(&ast, schema, &tables, false).unwrap();
             let marked = rewrite
                 .as_ref()
                 .and_then(|rewrite| rewrite.plan.as_deref())
