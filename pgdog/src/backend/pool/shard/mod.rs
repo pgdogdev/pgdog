@@ -79,18 +79,18 @@ impl Shard {
     }
 
     /// Get connection to the primary database.
-    pub(crate) async fn primary(&self, request: &LbRequest) -> Result<Guard, Error> {
+    pub(crate) async fn primary(&self, request: &LbRequest<'_>) -> Result<Guard, Error> {
         self.lb.get_primary(request).await
     }
 
     /// Get connection to one of the replica databases, using the configured
     /// load balancing algorithm.
-    pub(crate) async fn replica(&self, request: &LbRequest) -> Result<Guard, Error> {
+    pub(crate) async fn replica(&self, request: &LbRequest<'_>) -> Result<Guard, Error> {
         self.lb.get(request).await
     }
 
     /// Get connection to primary if configured, otherwise replica.
-    pub(crate) async fn primary_or_replica(&self, request: &LbRequest) -> Result<Guard, Error> {
+    pub(crate) async fn primary_or_replica(&self, request: &LbRequest<'_>) -> Result<Guard, Error> {
         match self.primary(request).await {
             Ok(primary) => Ok(primary),
             _ => self.replica(request).await,
@@ -284,7 +284,7 @@ impl Shard {
     }
 
     /// Get parameters from first available connection pool.
-    pub(crate) async fn params(&self, request: &LbRequest) -> Result<&Arc<Parameters>, Error> {
+    pub(crate) async fn params(&self, request: &LbRequest<'_>) -> Result<&Arc<Parameters>, Error> {
         self.lb.params(request).await
     }
 

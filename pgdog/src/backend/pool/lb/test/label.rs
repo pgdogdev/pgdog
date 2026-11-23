@@ -22,6 +22,13 @@ fn labeled_replicas() -> LoadBalancer {
     replicas
 }
 
+async fn get_with_label(replicas: &LoadBalancer, label: Option<&str>) -> Result<Guard, Error> {
+    let mut route = Route::read(ShardWithPriority::default());
+    route.label = label.map(str::to_owned);
+    let request = LbRequest::new(Default::default(), &route, false, Instant::now());
+    replicas.get(&request).await
+}
+
 #[tokio::test]
 async fn test_label_required() {
     let reporting = create_test_pool_config("127.0.0.1", 5432);
@@ -39,12 +46,10 @@ async fn test_label_required() {
     replicas.launch();
 
     for (label, target) in [(None, 0), (Some("analytics"), 1)] {
-        let mut route = Route::read(ShardWithPriority::default());
-        route.label = label.map(str::to_owned);
-        let request = LbRequest::new(Default::default(), &route, false, Instant::now());
-
         for _ in 0..4 {
-            let conn = replicas.get(&request).await.expect("eligible replica");
+            let conn = get_with_label(&replicas, label)
+                .await
+                .expect("eligible replica");
             assert_eq!(conn.pool.id(), replicas.targets[target].pool.id());
         }
     }
@@ -55,13 +60,8 @@ async fn test_label_required() {
 #[tokio::test]
 async fn test_label_filtering() {
     let replicas = labeled_replicas();
-    let mut route = Route::read(ShardWithPriority::default());
-    route.label = Some("analytics".into());
-    let request = LbRequest::new(Default::default(), &route, false, Instant::now());
-
     for _ in 0..4 {
-        let conn = replicas
-            .get(&request)
+        let conn = get_with_label(&replicas, Some("analytics"))
             .await
             .expect("matching labeled replica");
         assert_eq!(conn.pool.id(), replicas.targets[1].pool.id());
@@ -75,13 +75,8 @@ async fn test_label_respects_ban_when_unbanned_replica_exists() {
     let replicas = labeled_replicas();
     replicas.targets[0].ban.ban(Error::ManualBan, Duration::MAX);
 
-    let mut route = Route::read(ShardWithPriority::default());
-    route.label = Some("reporting".into());
-    let request = LbRequest::new(Default::default(), &route, false, Instant::now());
-
     for _ in 0..4 {
-        let conn = replicas
-            .get(&request)
+        let conn = get_with_label(&replicas, Some("reporting"))
             .await
             .expect("unbanned labeled replica");
         assert_eq!(conn.pool.id(), replicas.targets[1].pool.id());
@@ -97,12 +92,7 @@ async fn test_label_ignores_ban() {
     target.ban.ban(Error::ServerError, Duration::from_secs(60));
     assert!(target.ban.banned());
 
-    let mut route = Route::read(ShardWithPriority::default());
-    route.label = Some("analytics".into());
-    let request = LbRequest::new(Default::default(), &route, false, Instant::now());
-
-    let conn = replicas
-        .get(&request)
+    let conn = get_with_label(&replicas, Some("analytics"))
         .await
         .expect("labeled request ignores the replica ban");
     assert_eq!(conn.pool.id(), target.pool.id());
@@ -118,13 +108,8 @@ async fn test_label_skips_banned_replica_when_matching_replica_is_available() {
         .ban
         .ban(Error::ServerError, Duration::from_secs(60));
 
-    let mut route = Route::read(ShardWithPriority::default());
-    route.label = Some("reporting".into());
-    let request = LbRequest::new(Default::default(), &route, false, Instant::now());
-
     for _ in 0..4 {
-        let conn = replicas
-            .get(&request)
+        let conn = get_with_label(&replicas, Some("reporting"))
             .await
             .expect("unbanned matching replica");
         assert_eq!(conn.pool.id(), replicas.targets[1].pool.id());
@@ -142,14 +127,9 @@ async fn test_label_ignores_bans_when_all_matching_replicas_are_banned() {
     }
     assert!(!replicas.targets[2].ban.banned());
 
-    let mut route = Route::read(ShardWithPriority::default());
-    route.label = Some("reporting".into());
-    let request = LbRequest::new(Default::default(), &route, false, Instant::now());
-
     let mut selected = HashSet::new();
     for _ in 0..4 {
-        let conn = replicas
-            .get(&request)
+        let conn = get_with_label(&replicas, Some("reporting"))
             .await
             .expect("matching replica despite bans");
         selected.insert(conn.pool.id());

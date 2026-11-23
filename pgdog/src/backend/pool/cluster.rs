@@ -456,7 +456,11 @@ impl Cluster {
     }
 
     /// Get a connection to a primary of the given shard.
-    pub(crate) async fn primary(&self, shard: usize, request: &LbRequest) -> Result<Guard, Error> {
+    pub(crate) async fn primary(
+        &self,
+        shard: usize,
+        request: &LbRequest<'_>,
+    ) -> Result<Guard, Error> {
         #[allow(clippy::unnecessary_lazy_evaluations)]
         let shard = self
             .shards
@@ -466,7 +470,11 @@ impl Cluster {
     }
 
     /// Get a connection to a replica of the given shard.
-    pub(crate) async fn replica(&self, shard: usize, request: &LbRequest) -> Result<Guard, Error> {
+    pub(crate) async fn replica(
+        &self,
+        shard: usize,
+        request: &LbRequest<'_>,
+    ) -> Result<Guard, Error> {
         #[allow(clippy::unnecessary_lazy_evaluations)]
         let shard = self
             .shards

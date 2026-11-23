@@ -194,6 +194,7 @@ impl Address {
             // The database number will change if we remove a replica.
             other.database_number = self.database_number;
             other.passwords = self.passwords.clone();
+            other.labels = self.labels.clone(); // A change in labels doesn't require a reconnect.
             self == &other
         } else {
             true

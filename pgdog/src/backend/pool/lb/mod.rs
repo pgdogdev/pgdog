@@ -300,12 +300,12 @@ impl LoadBalancer {
     }
 
     /// Get a live connection from the pool.
-    pub(crate) async fn get(&self, request: &LbRequest) -> Result<Guard, Error> {
+    pub(crate) async fn get(&self, request: &LbRequest<'_>) -> Result<Guard, Error> {
         self.get_internal(request).await
     }
 
     /// Get parameters from first non-banned connection pool.
-    pub(crate) async fn params(&self, request: &LbRequest) -> Result<&Arc<Parameters>, Error> {
+    pub(crate) async fn params(&self, request: &LbRequest<'_>) -> Result<&Arc<Parameters>, Error> {
         if let Some(target) = self.targets.iter().find(|target| !target.ban.banned()) {
             return target.pool.params(request).await;
         }
@@ -411,7 +411,7 @@ impl LoadBalancer {
     ///
     /// In automatic mode, the caller waits for an election. Static
     /// replica-only configurations fail immediately with [`Error::NoPrimary`].
-    pub(super) async fn get_primary(&self, request: &LbRequest) -> Result<Guard, Error> {
+    pub(super) async fn get_primary(&self, request: &LbRequest<'_>) -> Result<Guard, Error> {
         if let Some(pool) = self.primary() {
             return pool.get(request).await;
         }
@@ -424,7 +424,7 @@ impl LoadBalancer {
     }
 
     /// Check out a read connection using the configured load balancing strategy.
-    async fn get_internal(&self, request: &LbRequest) -> Result<Guard, Error> {
+    async fn get_internal(&self, request: &LbRequest<'_>) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
         use smallvec::SmallVec;
 
@@ -441,8 +441,15 @@ impl LoadBalancer {
             });
         }
 
-        if let Some(ref label) = request.label {
-            candidates.retain(|target| target.pool.addr().labels.contains(label));
+        if let Some(label) = request.label {
+            candidates.retain(|target| {
+                target
+                    .pool
+                    .addr()
+                    .labels
+                    .iter()
+                    .any(|candidate| candidate == label)
+            });
         } else {
             candidates.retain(|target| !target.pool.addr().label_required);
         }
@@ -454,7 +461,11 @@ impl LoadBalancer {
         }
 
         if candidates.is_empty() {
-            return Err(Error::AllReplicasDown);
+            return Err(if request.label.is_some() {
+                Error::NoReplicaWithLabel
+            } else {
+                Error::AllReplicasDown
+            });
         }
 
         // Let labeled requests use banned targets when no unbanned replica remains.

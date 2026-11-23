@@ -14,9 +14,6 @@ pub(crate) struct Request {
     /// Is the query a read or a write? This is the query router decision, i.e.,
     /// a read would typically be a SELECT.
     pub(crate) read: bool,
-    /// Minimum replica LSN the client wants the replica to have
-    /// before allowing reads on it, in its 64-bit representation.
-    pub(crate) lsn: Option<u64>,
 }
 
 impl Request {
@@ -26,7 +23,6 @@ impl Request {
             id,
             created_at,
             read: route.is_read(),
-            lsn: route.lsn,
         }
     }
 
@@ -35,7 +31,6 @@ impl Request {
             id,
             created_at: Instant::now(),
             read: false,
-            lsn: None,
         }
     }
 }

@@ -546,12 +546,8 @@ async fn test_user_read_only_include_primary() {
         .launch();
 
     // Notice that we `read` to true and `read_only` to true.
-    let request = LbRequest::new(
-        Default::default(),
-        &Route::read(ShardWithPriority::default()),
-        true,
-        Instant::now(),
-    );
+    let route = Route::read(ShardWithPriority::default());
+    let request = LbRequest::new(Default::default(), &route, true, Instant::now());
 
     // Try getting connections multiple times and verify primary is never used
     let mut replica_ids = HashSet::new();
@@ -592,12 +588,8 @@ async fn test_user_read_only_include_primary_no_replicas() {
 
     // `read_only` is set to true. This would usually override `IncludePrimary`,
     // but we have no replicas available.
-    let request = LbRequest::new(
-        Default::default(),
-        &Route::read(ShardWithPriority::default()),
-        true,
-        Instant::now(),
-    );
+    let route = Route::read(ShardWithPriority::default());
+    let request = LbRequest::new(Default::default(), &route, true, Instant::now());
 
     // Should only use primary since replica is banned
     let mut used_pool_ids = HashSet::new();

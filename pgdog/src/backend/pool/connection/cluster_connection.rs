@@ -94,7 +94,7 @@ impl ClusterConnection {
     /// connect to replicas.
     pub(crate) async fn get_conns_for_shards(
         &mut self,
-        request: &LbRequest,
+        request: &LbRequest<'_>,
         shards: &[usize],
         is_read: bool,
     ) -> Result<Vec<Guard>, Error> {
@@ -120,7 +120,7 @@ impl ClusterConnection {
     /// Get all connections necessary to serve the request.
     pub(super) async fn get_conns(
         &mut self,
-        request: &LbRequest,
+        request: &LbRequest<'_>,
         shard: &Shard,
         is_read: bool,
     ) -> Result<(Vec<Guard>, Vec<usize>), Error> {
@@ -145,7 +145,7 @@ impl ClusterConnection {
     /// Get a connection from the cluster for the given `shard`.
     pub(super) async fn get_conn(
         &mut self,
-        request: &LbRequest,
+        request: &LbRequest<'_>,
         shard: usize,
         is_read: bool,
     ) -> Result<Guard, Error> {
@@ -171,7 +171,7 @@ impl ClusterConnection {
 
     async fn get_conn_internal(
         &self,
-        request: &LbRequest,
+        request: &LbRequest<'_>,
         shard: usize,
         is_read: bool,
     ) -> Result<Guard, Error> {
