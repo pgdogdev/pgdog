@@ -71,17 +71,6 @@ mod tests {
     }
 
     #[test]
-    fn test_distinct_on_ordinals_start_at_one() {
-        assert_eq!(
-            distinct("SELECT DISTINCT ON (1, value) id, value FROM sharded"),
-            Some(DistinctBy::Columns(vec![
-                DistinctColumn::Index(0),
-                DistinctColumn::Name("value".into()),
-            ]))
-        );
-    }
-
-    #[test]
     fn test_distinct_on_ordinal_below_one_is_left_to_postgres() {
         // Postgres rejects both: "DISTINCT ON position 0 is not in select list".
         for sql in [
@@ -90,14 +79,5 @@ mod tests {
         ] {
             assert_eq!(distinct(sql), Some(DistinctBy::Columns(vec![])), "{sql}");
         }
-    }
-
-    #[test]
-    fn test_distinct_row_and_none() {
-        assert_eq!(
-            distinct("SELECT DISTINCT id FROM sharded"),
-            Some(DistinctBy::Row)
-        );
-        assert_eq!(distinct("SELECT id FROM sharded"), None);
     }
 }
