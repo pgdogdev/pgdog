@@ -324,6 +324,27 @@ async fn test_sharded_distinct_on_sharding_key_merges_shards() {
     );
     expect_message!(client.read().await, ReadyForQuery);
 
+    // Grouped by the key, each group is on one shard, which returns its final
+    // result for any column.
+    client
+        .send_simple(Query::new(format!(
+            "SELECT id, count(DISTINCT value), count(DISTINCT id) FROM sharded \
+             WHERE id IN ({ids}) GROUP BY id"
+        )))
+        .await;
+    expect_message!(client.read().await, RowDescription);
+    for _ in 0..2 {
+        let row = expect_message!(client.read().await, DataRow);
+        assert!([id_shard0, id_shard1].contains(&row.get_int(0, true).unwrap()));
+        assert_eq!(row.get_int(1, true), Some(1));
+        assert_eq!(row.get_int(2, true), Some(1));
+    }
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SELECT 2"
+    );
+    expect_message!(client.read().await, ReadyForQuery);
+
     // Cleanup
     client
         .send_simple(Query::new(format!(
