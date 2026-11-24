@@ -38,7 +38,7 @@ use pgdog_config::resharding::PostDataValidationStage;
 use pgdog_stats::{
     Databases, MissedRows, ReplicationClusterDefinition, ReplicationClusterStatus,
     ReplicationCutoverReason, ReplicationDefinition, ReplicationShardDefinition,
-    ReplicationShardStatus, ReplicationStatus, ReshardingDirection, TaskDefinition,
+    ReplicationShardStatus, ReplicationStatus, ReshardingDirection, ReshardingId, TaskDefinition,
 };
 use tracing::{error, info, warn};
 
@@ -62,6 +62,7 @@ pub(crate) struct ReplicationTask {
     cutover: CutoverMode,
     schema_sync: SchemaSyncBuilder,
     validate: bool,
+    resumed: Option<ReshardingId>,
 }
 
 /// Executes the whole replication process. It runs a replication until a cutover,
@@ -89,6 +90,7 @@ impl Task for ReplicationTask {
             databases: self.state.databases(),
             auto_cutover: self.cutover == CutoverMode::Auto,
             cleanup_on_cancel: self.state.cleanup_on_cancel(),
+            resumed: self.resumed,
         }
     }
 
@@ -146,6 +148,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             cutover,
             schema_sync,
             validate,
+            resumed: _,
         } = task;
         let validation_stage = if validate {
             config().config.resharding.post_data_validation

@@ -409,7 +409,7 @@ pub struct RatioProgress {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{CommandKind, Lsn, MissedRows, SyncState};
+    use crate::{CommandKind, Lsn, MissedRows, ReshardingId, SyncState};
     use pgdog_config::CopyFormat;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -440,6 +440,7 @@ mod test {
                 sync_only: false,
                 auto_cutover: true,
                 cleanup_on_cancel: false,
+                resumed: Some(ReshardingId::generate()),
             }
             .into(),
             CopyDataDefinition {
@@ -464,6 +465,7 @@ mod test {
                 databases: databases(),
                 auto_cutover: false,
                 cleanup_on_cancel: true,
+                resumed: Some(ReshardingId::generate()),
             }
             .into(),
             ReplicationClusterDefinition {
@@ -539,6 +541,7 @@ mod test {
                 sync_only: false,
                 auto_cutover: true,
                 cleanup_on_cancel: true,
+                resumed: None,
             })
             .to_string(),
             "reshard prod -> prod_sharded"
@@ -855,7 +858,7 @@ mod test {
     }
 
     #[test]
-    fn test_missing_cleanup_on_cancel_reads_as_true() {
+    fn test_missing_optional_fields_read_as_defaults() {
         assert_eq!(
             serde_json::from_str::<TaskDefinition>(
                 r#"{"name":"reshard","kind":"reshard","databases":{"source":"prod","destination":"prod_sharded"},"skip_schema_sync":false,"replicate_only":false,"sync_only":false,"auto_cutover":true}"#
@@ -868,6 +871,7 @@ mod test {
                 sync_only: false,
                 auto_cutover: true,
                 cleanup_on_cancel: true,
+                resumed: None,
             })
         );
         assert_eq!(
@@ -879,6 +883,7 @@ mod test {
                 databases: databases(),
                 auto_cutover: true,
                 cleanup_on_cancel: true,
+                resumed: None,
             })
         );
     }
@@ -897,6 +902,7 @@ mod test {
                 sync_only: false,
                 auto_cutover: true,
                 cleanup_on_cancel: false,
+                resumed: None,
             })
         );
     }

@@ -8,7 +8,7 @@ use derive_more::Display;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Databases, Lsn, TaskId};
+use crate::{Databases, Lsn, ReshardingId, TaskId};
 
 /// Replication slot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +76,8 @@ pub struct ReplicationDefinition {
     pub auto_cutover: bool,
     #[serde(default = "crate::task::reshard::default_cleanup_on_cancel")]
     pub cleanup_on_cancel: bool,
+    #[serde(default)]
+    pub resumed: Option<ReshardingId>,
 }
 
 /// Stages of logical replication, reported as the task's status.
