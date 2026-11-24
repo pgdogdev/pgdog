@@ -71,7 +71,7 @@ impl Task for ReshardTask {
         let cutover = self.cutover_mode();
         let command = self.command();
         let mut state = self.state;
-        state.start_run(command, ctx.root_id()).await?;
+        state.open_run(command, ctx.root_id()).await?;
         let schema_sync = SchemaSyncTask::builder()
             .publication_tables_only(self.tables_only)
             .databases(state.databases())

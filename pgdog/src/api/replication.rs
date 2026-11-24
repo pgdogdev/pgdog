@@ -175,7 +175,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             let command = ReshardingCommand::Replicate {
                 auto_cutover: self.cutover == CutoverMode::Auto,
             };
-            self.state.start_run(command, ctx.root_id()).await?;
+            self.state.open_run(command, ctx.root_id()).await?;
         }
         let state = self.state.clone();
         let result = self.replicate_loop(ctx, self.cutover).await;
