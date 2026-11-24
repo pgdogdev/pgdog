@@ -75,12 +75,45 @@ pub(crate) fn groups_stay_on_one_shard(
     schema: &Schema,
     tables: &ShardedTables,
 ) -> bool {
-    // Most queries have no GROUP BY and never look at FROM.
-    !select.group_clause().is_empty()
+    // Most queries have no GROUP BY, and most that do don't group by a column
+    // named like a sharding key: neither looks at FROM.
+    select
+        .group_clause()
+        .iter()
+        .any(|item| names_key_column(group_by_expr(select, item), tables))
         && ShardingKey::new(select, tables).is_some_and(|key| {
             key.group_by_key(select)
                 .is_some_and(|column| key.is_not_null(column, schema))
         })
+}
+
+/// The expression a `GROUP BY` item groups by: the item itself, or the SELECT
+/// list entry it refers to by position.
+fn group_by_expr<'a>(select: &'a nodes::SelectStmt, item: Node<'a>) -> Option<Node<'a>> {
+    match item {
+        // Postgres counts SELECT list positions from 1.
+        Node::A_Const(ordinal) => ordinal
+            .val()
+            .and_then(|value| value.numeric_value::<i32>())
+            .and_then(|ordinal| usize::try_from(ordinal).ok()?.checked_sub(1))
+            .and_then(|position| select.target_list().iter().nth(position))
+            .map(|target| target.val()),
+        item => Some(item),
+    }
+}
+
+/// Whether `node` is a column named like some table's sharding key. The table
+/// isn't checked: this only rules out the columns that can't be a key.
+fn names_key_column(node: Option<Node<'_>>, tables: &ShardedTables) -> bool {
+    let Some(Node::ColumnRef(column)) = node else {
+        return false;
+    };
+    Column::try_from(column).is_ok_and(|column| {
+        tables
+            .tables()
+            .iter()
+            .any(|table| table.column == column.name)
+    })
 }
 
 /// Answers whether an expression is the sharding key of the queried table.
@@ -140,16 +173,10 @@ impl<'a> ShardingKey<'a> {
     /// The sharding key column `GROUP BY` includes, by name or by SELECT
     /// list position.
     fn group_by_key(&self, select: &nodes::SelectStmt) -> Option<&'a str> {
-        select.group_clause().iter().find_map(|item| match item {
-            // Postgres counts SELECT list positions from 1.
-            Node::A_Const(ordinal) => ordinal
-                .val()
-                .and_then(|value| value.numeric_value::<i32>())
-                .and_then(|ordinal| usize::try_from(ordinal).ok()?.checked_sub(1))
-                .and_then(|position| select.target_list().iter().nth(position))
-                .and_then(|target| self.key_column(target.val())),
-            item => self.key_column(item),
-        })
+        select
+            .group_clause()
+            .iter()
+            .find_map(|item| self.key_column(group_by_expr(select, item)?))
     }
 
     /// Whether the table declares `column` as `NOT NULL`. A table missing

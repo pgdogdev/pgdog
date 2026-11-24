@@ -226,12 +226,6 @@ impl ShardedTables {
         let table = column.table()?;
 
         for candidate in &self.inner.tables {
-            // Checked first: most columns aren't a sharding key, and this is
-            // the cheapest way to find that out.
-            if column.name != candidate.column {
-                continue;
-            }
-
             if let Some(table_name) = candidate.name.as_ref()
                 && !table.name_match(table_name)
                 && !candidate.name_matches(table.name)
@@ -246,7 +240,9 @@ impl ShardedTables {
                 continue;
             }
 
-            return Some(candidate);
+            if column.name == candidate.column {
+                return Some(candidate);
+            }
         }
 
         None
@@ -257,19 +253,8 @@ impl ShardedTables {
     /// Configs that name a table match that table's column. Configs with only
     /// a column match that column on any table.
     pub(crate) fn sharding_key(&self, column: Column<'_>) -> Option<&ShardedTable> {
-        let table = self
-            .get_table(column)
-            .filter(|table| table.name.is_some())
-            // Column-only config: user explicitly wants any table with this column to be sharded
-            .or_else(|| {
-                self.tables()
-                    .iter()
-                    .find(|table| table.name.is_none() && table.column == column.name)
-            })?;
-
         // Omnisharded config takes priority over sharded tables:
         // a sharding key on an omnisharded table doesn't route.
-        // Looked up last: most columns never get this far.
         if column
             .table
             .is_some_and(|name| self.omnishards().contains_key(name))
@@ -277,7 +262,16 @@ impl ShardedTables {
             return None;
         }
 
-        Some(table)
+        if let Some(table) = self.get_table(column)
+            && table.name.is_some()
+        {
+            return Some(table);
+        }
+
+        // Column-only config: user explicitly wants any table with this column to be sharded
+        self.tables()
+            .iter()
+            .find(|table| table.name.is_none() && table.column == column.name)
     }
 }
 
