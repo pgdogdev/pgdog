@@ -72,6 +72,10 @@ impl Array {
         &self.elements
     }
 
+    pub fn into_elements(self) -> Vec<Datum> {
+        self.elements
+    }
+
     /// Decode an array with a known element type OID.
     ///
     /// For binary format, the element OID is also present in the wire header

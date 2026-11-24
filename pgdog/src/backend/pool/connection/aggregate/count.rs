@@ -41,26 +41,31 @@ impl Count {
     }
 
     pub(super) fn finalize(self) -> Result<Datum, TypeError> {
-        match self.data_type {
-            DataType::SmallInt => i16::try_from(self.total)
-                .map(Datum::SmallInt)
-                .map_err(|_| TypeError::NumericOutOfRange(self.data_type)),
-            DataType::Integer => i32::try_from(self.total)
-                .map(Datum::Integer)
-                .map_err(|_| TypeError::NumericOutOfRange(self.data_type)),
-            DataType::Bigint => Ok(self.total.into()),
-            DataType::Real => Ok(Datum::Float(Float(self.total as f32))),
-            DataType::DoublePrecision => Ok(Datum::from(self.total as f64)),
-            DataType::Numeric => Ok(Datum::Numeric(Numeric::from(self.total))),
-            to => Err(TypeError::InvalidCast {
-                from: DataType::Bigint,
-                to,
-            }),
-        }
+        cast_count(self.total, self.data_type)
     }
 
     pub(super) fn finalize_i64(self) -> i64 {
         self.total
+    }
+}
+
+/// A count in the type the shards returned it in, e.g. `integer` for `count(*)::int`.
+pub(super) fn cast_count(total: i64, data_type: DataType) -> Result<Datum, TypeError> {
+    match data_type {
+        DataType::SmallInt => i16::try_from(total)
+            .map(Datum::SmallInt)
+            .map_err(|_| TypeError::NumericOutOfRange(data_type)),
+        DataType::Integer => i32::try_from(total)
+            .map(Datum::Integer)
+            .map_err(|_| TypeError::NumericOutOfRange(data_type)),
+        DataType::Bigint => Ok(total.into()),
+        DataType::Real => Ok(Datum::Float(Float(total as f32))),
+        DataType::DoublePrecision => Ok(Datum::from(total as f64)),
+        DataType::Numeric => Ok(Datum::Numeric(Numeric::from(total))),
+        to => Err(TypeError::InvalidCast {
+            from: DataType::Bigint,
+            to,
+        }),
     }
 }
 

@@ -4,20 +4,26 @@ use itertools::*;
 use pg_raw_parse::{Node, make, nodes};
 
 use super::{AggregateHelper, HelperKind};
-use crate::frontend::router::parser::rewrite::statement::projection::ProjectionRewritePlan;
+use crate::frontend::router::parser::rewrite::statement::projection::{
+    Positions, ProjectionRewritePlan,
+};
 
-/// Query rewrite engine. Currently supports injecting helper aggregates for AVG and
-/// variance-related functions that require additional helper aggregates when run
+/// Query rewrite engine. Injects the helper aggregates that AVG, the
+/// variance-related functions and `COUNT(DISTINCT ...)` need to be merged
 /// across shards.
 #[derive(Default)]
 pub(crate) struct AggregatesRewrite;
 
 impl AggregatesRewrite {
     /// Rewrite a SELECT query in-place, adding helper aggregates when necessary.
+    ///
+    /// `disjoint_distinct` has the `DISTINCT` aggregates over the sharding
+    /// key. Shards never share a key, so they merge without a helper.
     pub(crate) fn rewrite_select<'a>(
         select: &mut nodes::SelectStmtMut<'a, '_>,
         mem: make::MemoryToken<'a>,
         aggregate: &Aggregate,
+        disjoint_distinct: Positions,
     ) -> ProjectionRewritePlan {
         let mut plan = ProjectionRewritePlan::default();
 
@@ -34,7 +40,11 @@ impl AggregatesRewrite {
                     panic!("Previously parsed function was not a FuncCall");
                 };
 
-                Self::helper_specs(func_call, target.function(), mem)
+                // Shards can share these values, so PgDog has to see them.
+                let shared_distinct =
+                    target.is_distinct() && !disjoint_distinct.contains(target.column());
+
+                Self::helper_specs(func_call, target.function(), shared_distinct, mem)
                     .into_iter()
                     .map(move |spec| (target, spec))
             })
@@ -99,9 +109,17 @@ impl AggregatesRewrite {
     fn helper_specs<'a>(
         func_call: &nodes::FuncCall,
         function: &AggregateFunction,
+        shared_distinct: bool,
         mem: make::MemoryToken<'a>,
     ) -> Vec<HelperSpec<'a>> {
         match function {
+            // Each shard returns its distinct values, and PgDog counts their union.
+            AggregateFunction::Count if shared_distinct => {
+                vec![HelperSpec {
+                    func: Self::copy_and_rename_function(func_call, "array_agg", mem),
+                    kind: HelperKind::DistinctValues,
+                }]
+            }
             AggregateFunction::Avg => {
                 vec![HelperSpec {
                     func: Self::copy_and_rename_function(func_call, "count", mem),
@@ -179,10 +197,50 @@ mod tests {
                 &mut stmt.as_mut(),
                 mem,
                 &aggregate,
+                Positions::default(),
             ));
             stmt
         });
         (select, plan.unwrap())
+    }
+
+    #[test]
+    fn rewrite_engine_projects_distinct_values_for_count() {
+        let sql =
+            "SELECT COUNT(DISTINCT price) FILTER (WHERE price > 0), COUNT(DISTINCT id) FROM menu";
+        let ast = pg_raw_parse::parse(sql).unwrap();
+        let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
+            unreachable!("not a select");
+        };
+
+        // `id` is the sharding key: no shard has another shard's ids.
+        let mut plan = None;
+        let select = make::owned(|mem| {
+            let mut stmt = mem.make_unique(stmt);
+            let aggregate = Aggregate::parse(&stmt, &Default::default());
+            plan = Some(AggregatesRewrite::rewrite_select(
+                &mut stmt.as_mut(),
+                mem,
+                &aggregate,
+                Positions::from_iter([1]),
+            ));
+            stmt
+        });
+
+        assert_eq!(
+            pg_raw_parse::deparse(&*select).unwrap().as_str(),
+            "SELECT count(DISTINCT price) FILTER (WHERE price > 0), count(DISTINCT id), \
+             array_agg(DISTINCT price) FILTER (WHERE price > 0) AS __pgdog_distinct_col0 FROM menu"
+        );
+        assert_eq!(
+            plan.unwrap().aggregate_helpers,
+            [AggregateHelper {
+                target_column: 0,
+                distinct: true,
+                kind: HelperKind::DistinctValues,
+                alias: "__pgdog_distinct_col0".into(),
+            }]
+        );
     }
 
     #[test]

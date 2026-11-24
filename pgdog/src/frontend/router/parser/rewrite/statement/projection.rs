@@ -428,8 +428,12 @@ fn build(
             .or(aggregate.as_ref())
             .expect("non-HAVING aggregate parsed before projection rewrite");
         if !aggregate.is_empty() {
-            let aggregate_plan =
-                AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, aggregate);
+            let aggregate_plan = AggregatesRewrite::rewrite_select(
+                &mut select.as_mut(),
+                mem,
+                aggregate,
+                plan.disjoint_distinct,
+            );
             plan.aggregate_helpers = aggregate_plan.aggregate_helpers;
         }
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
