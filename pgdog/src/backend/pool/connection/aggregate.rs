@@ -110,7 +110,7 @@ enum State {
     Cmp(cmp::Cmp),
     /// Ah ah aaaaaaah
     Count(von::Count),
-    CountDistinct(distinct::CountDistinct),
+    Distinct(distinct::DistinctValues),
     Sum(sum::Sum),
     Variance(variance::Variance),
 }
@@ -140,13 +140,20 @@ impl State {
                 })?,
             ))),
             (AggregateFunction::Count, false) => Ok(Self::Count(von::Count::new(target.column()))),
-            (AggregateFunction::Count, true)
-                if let Some(values_column) = helper.distinct_values =>
-            {
-                Ok(Self::CountDistinct(distinct::CountDistinct::new(
-                    target.column(),
-                    values_column,
-                )))
+            (
+                function @ (AggregateFunction::Count
+                | AggregateFunction::Sum
+                | AggregateFunction::Avg),
+                true,
+            ) if let Some(values_column) = helper.distinct_values => {
+                let column = target.column();
+                Ok(Self::Distinct(match function {
+                    AggregateFunction::Count => {
+                        distinct::DistinctValues::count(column, values_column)
+                    }
+                    AggregateFunction::Sum => distinct::DistinctValues::sum(column, values_column),
+                    _ => distinct::DistinctValues::avg(column, values_column),
+                }))
             }
             (AggregateFunction::Max, _) => Ok(Self::Cmp(cmp::Cmp::max(target.column()))),
             (AggregateFunction::Min, _) => Ok(Self::Cmp(cmp::Cmp::min(target.column()))),
@@ -239,10 +246,10 @@ impl State {
             State::Count(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
-            State::CountDistinct(state) => {
-                let count = row.get_column_checked(state.column, decoder)?.value;
+            State::Distinct(state) => {
+                let result = row.get_column_checked(state.column, decoder)?.value;
                 let values = row.get_column_checked(state.values_column, decoder)?.value;
-                state.accumulate(count, values)
+                state.accumulate(result, values)
             }
             State::Sum(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
@@ -263,7 +270,7 @@ impl State {
             State::Bit(state) => Ok(state.finalize()),
             State::Cmp(state) => Ok(state.finalize()),
             State::Count(state) => state.finalize().map_err(Into::into),
-            State::CountDistinct(state) => state.finalize().map_err(Into::into),
+            State::Distinct(state) => state.finalize(),
             State::Sum(state) => Ok(state.finalize()),
             State::Variance(state) => Ok(state.finalize()?),
         }
@@ -338,10 +345,11 @@ impl<'a> Aggregates<'a> {
         let helpers_present = aggregate.targets().iter().all(|target| {
             let key = target.column();
             match target.function() {
+                // The count weighs shard averages. `avg(DISTINCT x)` is
+                // computed from the distinct values and may have only those.
                 AggregateFunction::Avg => helper_columns
                     .get(&key)
-                    .and_then(|columns| columns.count)
-                    .is_some(),
+                    .is_some_and(|columns| columns.count.or(columns.distinct_values).is_some()),
                 AggregateFunction::StddevPop
                 | AggregateFunction::StddevSamp
                 | AggregateFunction::VarPop

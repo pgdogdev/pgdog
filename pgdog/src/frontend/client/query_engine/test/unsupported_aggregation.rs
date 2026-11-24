@@ -15,13 +15,13 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
 
     for (query, expected_error) in [
         (
-            "SELECT sum(DISTINCT length(value)) FROM sharded",
-            "unsupported aggregation sum: sum(DISTINCT ...) is not yet supported",
+            "SELECT variance(DISTINCT length(value)) FROM sharded",
+            "unsupported aggregation var_samp: var_samp(DISTINCT ...) is not yet supported",
         ),
         (
-            // The cast must not hide DISTINCT and let per-shard sums be added.
-            "SELECT sum(DISTINCT length(value))::int FROM sharded",
-            "unsupported aggregation sum: sum(DISTINCT ...) is not yet supported",
+            // The cast must not hide DISTINCT and let per-shard results be merged.
+            "SELECT variance(DISTINCT length(value))::int FROM sharded",
+            "unsupported aggregation var_samp: var_samp(DISTINCT ...) is not yet supported",
         ),
         (
             "SELECT count(*) FROM sharded HAVING count(*) > 0 LIMIT (SELECT 1)",
