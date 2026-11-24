@@ -42,21 +42,21 @@ impl StatementRewrite<'_> {
         // Get the columns specified in the INSERT (preserving order)
         let insert_columns: IndexSet<&str> = self.get_insert_column_names_ordered(&node);
 
-        // Find BIGINT primary key columns
-        let bigint_pk_columns: Vec<&str> = relation
+        let omni_global = mode == RewriteMode::RewriteOmniGlobal && !is_sharded;
+        let pk_columns: Vec<&str> = relation
             .columns()
             .values()
-            .filter(|col| col.is_primary_key && is_bigint_type(&col.data_type))
+            .filter(|col| col.is_primary_key && eligible_pk_type(&col.data_type, omni_global))
             .map(|col| col.column_name.as_str())
             .collect();
 
-        if bigint_pk_columns.is_empty() {
+        if pk_columns.is_empty() {
             return Ok(());
         }
 
         // Find positions of present PK columns (for DEFAULT replacement)
         let (present_pk_positions, missing_columns): (Vec<_>, Vec<_>) =
-            bigint_pk_columns.into_iter().partition_map(|pk_col| {
+            pk_columns.into_iter().partition_map(|pk_col| {
                 insert_columns
                     .get_index_of(&pk_col)
                     .map(|pos| Either::Left((pos, pk_col)))
@@ -69,8 +69,8 @@ impl StatementRewrite<'_> {
                 RewriteMode::RewriteOmni | RewriteMode::RewriteOmniGlobal
             ) && !is_sharded;
 
-        let sequence_prefix = (mode == RewriteMode::RewriteOmniGlobal && !is_sharded)
-            .then(|| format!("{}.{}", relation.schema(), relation.name));
+        let sequence_prefix =
+            omni_global.then(|| format!("{}.{}", relation.schema(), relation.name));
 
         // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
@@ -211,12 +211,12 @@ impl StatementRewrite<'_> {
     }
 }
 
-/// Check if a data type is a BIGINT variant.
-fn is_bigint_type(data_type: &str) -> bool {
-    matches!(
-        data_type.to_lowercase().as_str(),
-        "bigint" | "int8" | "bigserial" | "serial8"
-    )
+fn eligible_pk_type(data_type: &str, omni_global: bool) -> bool {
+    match data_type {
+        "bigint" | "int8" | "bigserial" | "serial8" => true,
+        "integer" | "int" | "int4" | "serial" | "serial4" => omni_global,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -289,7 +289,7 @@ mod tests {
         Relation::test_table(schema, "users", columns)
     }
 
-    fn make_schema_with_non_bigint_pk() -> Schema {
+    fn make_schema_with_non_bigint_pk(data_type: &str) -> Schema {
         let mut columns = IndexMap::new();
         columns.insert(
             "id".to_string(),
@@ -300,7 +300,7 @@ mod tests {
                 column_name: "id".into(),
                 column_default: String::new(),
                 is_nullable: false,
-                data_type: "uuid".into(),
+                data_type: data_type.into(),
                 ordinal_position: 1,
                 is_primary_key: true,
                 foreign_keys: Vec::new(),
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_no_inject_for_non_bigint_pk() {
-        let db_schema = make_schema_with_non_bigint_pk();
+        let db_schema = make_schema_with_non_bigint_pk("uuid");
         let (sql, plan) = rewrite_sql_with_mode(
             "INSERT INTO users (name) VALUES ('test')",
             &db_schema,
@@ -674,15 +674,16 @@ mod tests {
 
     #[test]
     fn test_rewrite_omni_global_uses_column_sequence() {
-        let db_schema = make_schema_with_bigint_pk();
         let schema = ShardingSchema {
             shards: 3,
             ..sharding_schema_with_mode(RewriteMode::RewriteOmniGlobal)
         };
 
-        for (table, sequence) in [
-            ("users", "public.users_id_seq"),
-            ("public.users", "public.users_id_seq"),
+        let sequence = "public.users_id_seq";
+        for (table, db_schema) in [
+            ("users", make_schema_with_bigint_pk()),
+            ("public.users", make_schema_with_bigint_pk()),
+            ("users", make_schema_with_non_bigint_pk("integer")),
         ] {
             for (columns, values, expected_values) in [
                 (
