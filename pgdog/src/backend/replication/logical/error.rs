@@ -325,6 +325,11 @@ pub(crate) enum Error {
     )]
     ReshardingNotResumable { key: String, stage: String },
 
+    #[error(
+        "resharding {0} copied tables, and a copy cannot resume yet; abort it with WITH (abort) and start again"
+    )]
+    ReshardingCopyNotResumable(String),
+
     #[error("no unfinished resharding {0}")]
     NoResharding(String),
 

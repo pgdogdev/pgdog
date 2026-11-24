@@ -473,12 +473,7 @@ impl ReshardingState {
             .await?
             .ok_or_else(|| Error::NoResharding(key.to_string()))?;
         self.check_resumed(&record, command, &self.config_snapshot()?)?;
-        if record.stage < Stage::Replication {
-            return Err(Error::ReshardingNotResumable {
-                key: key.to_string(),
-                stage: record.stage.to_string(),
-            });
-        }
+        Self::resumable(&record)?;
         store
             .resume(
                 record.id,
@@ -487,6 +482,25 @@ impl ReshardingState {
             )
             .await?;
         Ok(record)
+    }
+
+    fn resumable(record: &ReshardingRecord) -> Result<(), Error> {
+        if record.stage < Stage::Replication {
+            return Err(Error::ReshardingNotResumable {
+                key: record.key.to_string(),
+                stage: record.stage.to_string(),
+            });
+        }
+        match record.command {
+            ReshardingCommand::Replicate { .. }
+            | ReshardingCommand::Reshard {
+                replicate_only: true,
+                ..
+            } => Ok(()),
+            ReshardingCommand::Reshard { .. } => {
+                Err(Error::ReshardingCopyNotResumable(record.key.to_string()))
+            }
+        }
     }
 
     async fn accept_run(
