@@ -1,6 +1,6 @@
 use crate::{
     expect_message,
-    net::{CommandComplete, Parameters, Query, ReadyForQuery},
+    net::{CommandComplete, ErrorResponse, Parameters, Query, ReadyForQuery},
 };
 
 use super::prelude::*;
@@ -254,4 +254,32 @@ async fn test_sharded_delete_returning_from_all_shards() {
     let cc_msg = messages.iter().find(|m| m.code() == 'C').unwrap();
     let cc = CommandComplete::try_from(cc_msg.clone()).unwrap();
     assert_eq!(cc.command(), "DELETE 2");
+}
+
+#[tokio::test]
+async fn test_sharded_distinct_on_invalid_ordinal_returns_postgres_error() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    for ordinal in [0, -1] {
+        client
+            .send_simple(Query::new(format!(
+                "SELECT DISTINCT ON ({ordinal}) id FROM sharded"
+            )))
+            .await;
+
+        let error = expect_message!(client.read().await, ErrorResponse);
+        assert_eq!(error.code, "42P10");
+        assert_eq!(
+            error.message,
+            format!("DISTINCT ON position {ordinal} is not in select list")
+        );
+        // Every shard rejects the query, and nothing but errors precede ReadyForQuery.
+        loop {
+            let message = client.read().await;
+            if message.code() == 'Z' {
+                break;
+            }
+            assert_eq!(message.code(), 'E');
+        }
+    }
 }
