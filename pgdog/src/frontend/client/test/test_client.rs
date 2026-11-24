@@ -2,7 +2,7 @@ use std::{fmt::Debug, ops::Deref};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use pgdog_config::RewriteMode;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},

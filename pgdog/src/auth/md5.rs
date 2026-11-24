@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use md5::Context;
 
-use rand::Rng;
+use rand::RngExt;
 
 use super::Error;
 use crate::net::messages::{Authentication, Password};
@@ -50,12 +50,12 @@ impl<'a> Client<'a> {
         let mut md5 = Context::new();
         md5.consume(password);
         md5.consume(self.user);
-        let first_pass = md5.compute();
+        let first_pass = md5.finalize();
 
         let mut md5 = Context::new();
         md5.consume(format!("{:x}", first_pass));
         md5.consume(self.salt);
-        format!("md5{:x}", md5.compute())
+        format!("md5{:x}", md5.finalize())
     }
 
     /// Used for pgdog->postgres auth which can only be

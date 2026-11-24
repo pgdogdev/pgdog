@@ -50,7 +50,7 @@ async fn sharded_multi_row_insert_rejected() {
     let mut pools = connections_sqlx().await;
     let sharded = pools.swap_remove(1);
 
-    let err = sqlx::query(&format!(
+    let err = sqlx::query(unsafe_sql!(
         "INSERT INTO {SHARDED_INSERT_TABLE} (id, value) VALUES (1, 'one'), (2, 'two')"
     ))
     .execute(&sharded)
@@ -78,14 +78,14 @@ async fn non_sharded_multi_row_insert_allowed() {
 
     prepare_non_sharded_table(&primary).await;
 
-    sqlx::query(&format!(
+    sqlx::query(unsafe_sql!(
         "INSERT INTO {NON_SHARDED_TABLE} (id, name) VALUES (1, 'one'), (2, 'two')"
     ))
     .execute(&primary)
     .await
     .expect("multi-row insert should succeed for non-sharded table");
 
-    let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+    let rows: Vec<(i64, String)> = sqlx::query_as(unsafe_sql!(
         "SELECT id, name FROM {NON_SHARDED_TABLE} ORDER BY id"
     ))
     .fetch_all(&primary)
@@ -113,20 +113,20 @@ async fn split_inserts_rewrite_moves_rows_across_shards() {
 
     prepare_split_table(&pool).await;
 
-    sqlx::query(&format!(
+    sqlx::query(unsafe_sql!(
         "INSERT INTO {SHARDED_INSERT_TABLE} (id, value) VALUES (1, 'one'), (11, 'eleven')"
     ))
     .execute(&pool)
     .await
     .expect("split insert should succeed");
 
-    let shard0: Option<String> = sqlx::query_scalar(&format!(
+    let shard0: Option<String> = sqlx::query_scalar(unsafe_sql!(
         "SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 1"
     ))
     .fetch_optional(&pool)
     .await
     .expect("fetch shard 0 row");
-    let shard1: Option<String> = sqlx::query_scalar(&format!(
+    let shard1: Option<String> = sqlx::query_scalar(unsafe_sql!(
         "SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 11"
     ))
     .fetch_optional(&pool)
@@ -176,7 +176,7 @@ async fn omnisharded_sharding_key_update_in_transaction() {
     assert_eq!(result.rows_affected(), 1);
 
     for shard in [0, 1] {
-        let rows: Vec<(i64, i64, String)> = sqlx::query_as(&format!(
+        let rows: Vec<(i64, i64, String)> = sqlx::query_as(unsafe_sql!(
             "/* pgdog_shard: {shard} */ SELECT id, customer_id, value FROM sharded_omni"
         ))
         .fetch_all(&mut *txn)
@@ -199,17 +199,15 @@ async fn update_moves_row_between_shards() {
 
     prepare_table(&pool).await;
 
-    let insert = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
-    pool.execute(insert.as_str())
-        .await
-        .expect("insert initial row");
+    let insert = unsafe_sql!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
+    pool.execute(insert).await.expect("insert initial row");
 
     assert_eq!(count_on_shard(&pool, 0, 1).await, 1, "row on shard 0");
     assert_eq!(count_on_shard(&pool, 1, 1).await, 0, "no row on shard 1");
 
     let mut txn = pool.begin().await.unwrap();
-    let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id = 1");
-    let result = txn.execute(update.as_str()).await.expect("rewrite update");
+    let update = unsafe_sql!("UPDATE {TEST_TABLE} SET id = 11 WHERE id = 1");
+    let result = txn.execute(update).await.expect("rewrite update");
     assert_eq!(result.rows_affected(), 1, "exactly one row updated");
     txn.commit().await.unwrap();
 
@@ -237,21 +235,19 @@ async fn update_rejects_multiple_rows() {
 
     prepare_table(&pool).await;
 
-    let insert_first = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
-    pool.execute(insert_first.as_str())
-        .await
-        .expect("insert first row");
+    let insert_first = unsafe_sql!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
+    pool.execute(insert_first).await.expect("insert first row");
 
-    let insert_second = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (2, 'older')");
-    pool.execute(insert_second.as_str())
+    let insert_second = unsafe_sql!("INSERT INTO {TEST_TABLE} (id, value) VALUES (2, 'older')");
+    pool.execute(insert_second)
         .await
         .expect("insert second row");
 
     let mut txn = pool.begin().await.unwrap();
 
-    let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id IN (1, 2)");
+    let update = unsafe_sql!("UPDATE {TEST_TABLE} SET id = 11 WHERE id IN (1, 2)");
     let err = txn
-        .execute(update.as_str())
+        .execute(update)
         .await
         .expect_err("expected multi-row rewrite to fail");
     let db_err = err
@@ -295,16 +291,14 @@ async fn update_expects_transactions() {
 
     prepare_table(&pool).await;
 
-    let insert = format!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
-    pool.execute(insert.as_str())
-        .await
-        .expect("insert initial row");
+    let insert = unsafe_sql!("INSERT INTO {TEST_TABLE} (id, value) VALUES (1, 'old')");
+    pool.execute(insert).await.expect("insert initial row");
 
     let mut conn = pool.acquire().await.expect("acquire connection");
 
-    let update = format!("UPDATE {TEST_TABLE} SET id = 11 WHERE id = 1");
+    let update = unsafe_sql!("UPDATE {TEST_TABLE} SET id = 11 WHERE id = 1");
     let err = conn
-        .execute(update.as_str())
+        .execute(update)
         .await
         .expect_err("sharding key update must be executed inside a transaction");
     let db_err = err
@@ -404,62 +398,59 @@ async fn test_error_disconnects_and_update_works() -> Result<(), Box<dyn std::er
 
 async fn prepare_table(pool: &Pool<Postgres>) {
     for shard in [0, 1] {
-        let drop = format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {TEST_TABLE}");
-        pool.execute(drop.as_str()).await.unwrap();
-        let create = format!(
+        let drop = unsafe_sql!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {TEST_TABLE}");
+        pool.execute(drop).await.unwrap();
+        let create = unsafe_sql!(
             "/* pgdog_shard: {shard} */ CREATE TABLE {TEST_TABLE} (id BIGINT PRIMARY KEY, value TEXT)"
         );
-        pool.execute(create.as_str()).await.unwrap();
+        pool.execute(create).await.unwrap();
     }
 }
 
 async fn cleanup_table(pool: &Pool<Postgres>) {
     for shard in [0, 1] {
-        let drop = format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {TEST_TABLE}");
-        pool.execute(drop.as_str()).await.ok();
+        let drop = unsafe_sql!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {TEST_TABLE}");
+        pool.execute(drop).await.ok();
     }
 }
 
 async fn prepare_split_table(pool: &Pool<Postgres>) {
-    let truncate = format!("TRUNCATE TABLE {SHARDED_INSERT_TABLE}");
-    pool.execute(truncate.as_str()).await.unwrap();
+    let truncate = unsafe_sql!("TRUNCATE TABLE {SHARDED_INSERT_TABLE}");
+    pool.execute(truncate).await.unwrap();
 }
 
 async fn cleanup_split_table(pool: &Pool<Postgres>) {
-    let truncate = format!("TRUNCATE TABLE {SHARDED_INSERT_TABLE}");
-    pool.execute(truncate.as_str()).await.ok();
+    let truncate = unsafe_sql!("TRUNCATE TABLE {SHARDED_INSERT_TABLE}");
+    pool.execute(truncate).await.ok();
 }
 
 async fn count_on_shard(pool: &Pool<Postgres>, shard: i32, id: i64) -> i64 {
-    let sql = format!(
+    let sql = unsafe_sql!(
         "/* pgdog_shard: {shard} */ SELECT COUNT(*)::bigint FROM {TEST_TABLE} WHERE id = {id}"
     );
-    sqlx::query_scalar(sql.as_str())
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }
 
 async fn prepare_non_sharded_table(pool: &Pool<Postgres>) {
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {NON_SHARDED_TABLE}"))
+    let _ = sqlx::query(unsafe_sql!("DROP TABLE IF EXISTS {NON_SHARDED_TABLE}"))
         .execute(pool)
         .await;
 
-    sqlx::query(&format!(
+    sqlx::query(unsafe_sql!(
         "CREATE TABLE IF NOT EXISTS {NON_SHARDED_TABLE} (id BIGINT PRIMARY KEY, name TEXT)"
     ))
     .execute(pool)
     .await
     .expect("create non-sharded table");
 
-    sqlx::query(&format!("TRUNCATE TABLE {NON_SHARDED_TABLE}"))
+    sqlx::query(unsafe_sql!("TRUNCATE TABLE {NON_SHARDED_TABLE}"))
         .execute(pool)
         .await
         .expect("truncate non-sharded table");
 }
 
 async fn cleanup_non_sharded_table(pool: &Pool<Postgres>) {
-    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {NON_SHARDED_TABLE}"))
+    let _ = sqlx::query(unsafe_sql!("DROP TABLE IF EXISTS {NON_SHARDED_TABLE}"))
         .execute(pool)
         .await;
 }

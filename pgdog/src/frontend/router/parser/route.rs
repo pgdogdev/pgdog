@@ -84,7 +84,7 @@ impl From<Vec<usize>> for Shard {
 
 /// Path a query should take and any transformations
 /// that should be applied to the response.
-#[derive(Debug, Clone, Default, derive_builder::Builder)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Route {
     /// Computed shard. This is where the query carrying
     /// this route will go no matter what.

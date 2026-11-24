@@ -9,7 +9,7 @@ use pgdog_config::users::PasswordKind;
 use scram::server::ClientFinal;
 use tracing::error;
 
-use rand::Rng;
+use rand::RngExt;
 use scram::{
     AuthenticationProvider, AuthenticationStatus, PasswordInfo, ScramServer, hash_password,
 };

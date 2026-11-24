@@ -2,7 +2,7 @@
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use rand::Rng;
+use rand::RngExt;
 use tracing::{debug, error, info};
 
 use std::collections::HashMap;

@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 
 use super::frontend_pid::FrontendPid;
 
-use rand::Rng;
+use rand::RngExt;
 const LEGACY_SECRET_LEN: usize = std::mem::size_of::<i32>();
 const EXTENDED_SECRET_LEN: usize = 32;
 const MAX_SECRET_LEN: usize = 256;

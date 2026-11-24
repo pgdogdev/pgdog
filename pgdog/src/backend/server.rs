@@ -1284,7 +1284,7 @@ impl Server {
         if jitter.is_zero() {
             return;
         }
-        use rand::Rng;
+        use rand::RngExt;
         // Sampling is signed, so drop into ms locally; result goes back
         // out as a Duration immediately, no leak across the API.
         let jitter_ms = jitter.as_millis() as i64;
@@ -3026,7 +3026,7 @@ pub(crate) mod test {
     #[tokio::test]
     async fn test_drain_chaos() {
         use crate::net::bind::Parameter;
-        use rand::Rng;
+        use rand::RngExt;
 
         let mut server = test_server().await;
         let mut rng = rand::rng();
@@ -3705,7 +3705,7 @@ pub(crate) mod test {
     }
 
     async fn verify_server_usable(server: &mut Server) {
-        use rand::Rng;
+        use rand::RngExt;
         let expected: i32 = rand::rng().random_range(1..1_000_000);
         let result = server
             .execute(&format!("SELECT {}", expected))

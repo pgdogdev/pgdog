@@ -13,7 +13,7 @@ async fn test_auth_types() {
 
     for auth_type in ["md5", "scram", "plain", "trust"] {
         admin
-            .execute(format!("SET auth_type TO '{auth_type}'").as_str())
+            .execute(unsafe_sql!("SET auth_type TO '{auth_type}'"))
             .await
             .unwrap();
         assert_setting_str("auth_type", auth_type).await;
@@ -178,7 +178,7 @@ async fn test_multiple_passwords() {
     // by every password-based auth type.
     for auth_type in ["md5", "scram", "plain"] {
         admin
-            .execute(format!("SET auth_type TO '{auth_type}'").as_str())
+            .execute(unsafe_sql!("SET auth_type TO '{auth_type}'"))
             .await
             .unwrap();
         assert_setting_str("auth_type", auth_type).await;
@@ -220,7 +220,7 @@ async fn test_multiple_passwords_server_side() {
     // password should succeed.
     for auth_type in ["md5", "scram", "plain"] {
         admin
-            .execute(format!("SET auth_type TO '{auth_type}'").as_str())
+            .execute(unsafe_sql!("SET auth_type TO '{auth_type}'"))
             .await
             .unwrap();
         assert_setting_str("auth_type", auth_type).await;

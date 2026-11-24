@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true
 serde_json.workspace = true
 tracing = "0.1"
 thiserror = "2"
-toml = "0.8"
+toml.workspace = true
 url = "2"
 uuid.workspace = true
-rand = "*"
+rand.workspace = true
 pgdog-vector = { path = "../pgdog-vector" }
 once_cell = "*"
 schemars.workspace = true

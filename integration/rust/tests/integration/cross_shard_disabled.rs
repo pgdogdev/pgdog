@@ -101,7 +101,7 @@ async fn test_cross_shard_disabled_with_unknown_sharding_key() {
 
         conn.execute("BEGIN").await.unwrap();
 
-        conn.execute(format!("SET pgdog.sharding_key TO '{}'", 25).as_str())
+        conn.execute(unsafe_sql!("SET pgdog.sharding_key TO '{}'", 25))
             .await
             .unwrap();
 

@@ -22,7 +22,7 @@ async fn run_set_in_transaction_reset_after_commit() {
 
     // Start a transaction and change lock_timeout
     conn.execute("BEGIN").await.unwrap();
-    conn.execute(format!("SET lock_timeout TO '{}'", new_timeout).as_str())
+    conn.execute(unsafe_sql!("SET lock_timeout TO '{}'", new_timeout))
         .await
         .unwrap();
 
@@ -110,7 +110,7 @@ async fn run_set_in_transaction_reset_after_rollback() {
 
     // Start a transaction and change statement_timeout
     conn.execute("BEGIN").await.unwrap();
-    conn.execute(format!("SET statement_timeout TO '{}'", new_timeout).as_str())
+    conn.execute(unsafe_sql!("SET statement_timeout TO '{}'", new_timeout))
         .await
         .unwrap();
 
@@ -181,7 +181,7 @@ async fn run_set_local_in_transaction_reset_after_commit() {
 
     // Start a transaction and change work_mem using SET LOCAL
     conn.execute("BEGIN").await.unwrap();
-    conn.execute(format!("SET LOCAL work_mem TO '{}'", new_work_mem).as_str())
+    conn.execute(unsafe_sql!("SET LOCAL work_mem TO '{}'", new_work_mem))
         .await
         .unwrap();
 

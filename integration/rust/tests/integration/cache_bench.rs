@@ -8,7 +8,7 @@ async fn test_cache_bench() {
         .unwrap();
 
     for i in 0..10_000 {
-        let query = format!(
+        let query = unsafe_sql!(
             r#"SELECT
             a.aid,
             a.bid,
@@ -152,7 +152,7 @@ async fn test_cache_bench() {
         "#,
             i
         );
-        let stmt = conn.prepare(&query).await.unwrap();
+        let stmt = conn.prepare(query).await.unwrap();
         stmt.query().execute(&mut conn).await.unwrap();
     }
 }

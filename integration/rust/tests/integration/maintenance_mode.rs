@@ -85,7 +85,7 @@ async fn test_maintenance_mode_multiple_cycles() {
         admin.simple_query("MAINTENANCE OFF").await.unwrap();
 
         // Connection should work when maintenance is off
-        conn.execute(format!("SELECT {}", i * 2 + 1).as_str())
+        conn.execute(unsafe_sql!("SELECT {}", i * 2 + 1))
             .await
             .unwrap();
 
@@ -94,7 +94,7 @@ async fn test_maintenance_mode_multiple_cycles() {
         admin.simple_query("MAINTENANCE OFF").await.unwrap();
 
         // Connection should work after maintenance is turned off
-        conn.execute(format!("SELECT {}", i * 2 + 2).as_str())
+        conn.execute(unsafe_sql!("SELECT {}", i * 2 + 2))
             .await
             .unwrap();
     }
