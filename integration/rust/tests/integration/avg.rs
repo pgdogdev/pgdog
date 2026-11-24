@@ -8,19 +8,19 @@ async fn avg_merges_with_helper_count() -> Result<(), Box<dyn std::error::Error>
 
     // Ensure clean state on each shard.
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ DROP TABLE IF EXISTS avg_reduce_test",
             shard
         );
-        sharded.execute(comment.as_str()).await.ok();
+        sharded.execute(comment).await.ok();
     }
 
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ CREATE TABLE avg_reduce_test(price DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
-        sharded.execute(comment.as_str()).await?;
+        sharded.execute(comment).await?;
     }
 
     // Make sure sharded table is loaded in schema.
@@ -53,8 +53,8 @@ async fn avg_merges_with_helper_count() -> Result<(), Box<dyn std::error::Error>
 
     // Cleanup tables per shard.
     for shard in [0, 1] {
-        let comment = format!("/* pgdog_shard: {} */ DROP TABLE avg_reduce_test", shard);
-        sharded.execute(comment.as_str()).await.ok();
+        let comment = unsafe_sql!("/* pgdog_shard: {} */ DROP TABLE avg_reduce_test", shard);
+        sharded.execute(comment).await.ok();
     }
 
     Ok(())
@@ -67,19 +67,19 @@ async fn avg_without_helper_should_still_merge() -> Result<(), Box<dyn std::erro
 
     // Clean slate on each shard.
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ DROP TABLE IF EXISTS avg_rewrite_expectation",
             shard
         );
-        sharded.execute(comment.as_str()).await.ok();
+        sharded.execute(comment).await.ok();
     }
 
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ CREATE TABLE avg_rewrite_expectation(price DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
-        sharded.execute(comment.as_str()).await?;
+        sharded.execute(comment).await?;
     }
 
     admin_sqlx().await.execute("RELOAD").await?;
@@ -141,19 +141,19 @@ async fn avg_multiple_columns_should_merge() -> Result<(), Box<dyn std::error::E
     let sharded = conns.get(1).cloned().unwrap();
 
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ DROP TABLE IF EXISTS avg_multi_column",
             shard
         );
-        sharded.execute(comment.as_str()).await.ok();
+        sharded.execute(comment).await.ok();
     }
 
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ CREATE TABLE avg_multi_column(price DOUBLE PRECISION, discount DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
-        sharded.execute(comment.as_str()).await?;
+        sharded.execute(comment).await?;
     }
 
     admin_sqlx().await.execute("RELOAD").await?;
@@ -216,8 +216,8 @@ async fn avg_multiple_columns_should_merge() -> Result<(), Box<dyn std::error::E
     );
 
     for shard in [0, 1] {
-        let comment = format!("/* pgdog_shard: {} */ DROP TABLE avg_multi_column", shard);
-        sharded.execute(comment.as_str()).await.ok();
+        let comment = unsafe_sql!("/* pgdog_shard: {} */ DROP TABLE avg_multi_column", shard);
+        sharded.execute(comment).await.ok();
     }
 
     Ok(())
@@ -229,19 +229,19 @@ async fn avg_prepared_statement_should_merge() -> Result<(), Box<dyn std::error:
     let sharded = conns.get(1).cloned().unwrap();
 
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ DROP TABLE IF EXISTS avg_prepared_params",
             shard
         );
-        sharded.execute(comment.as_str()).await.ok();
+        sharded.execute(comment).await.ok();
     }
 
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ CREATE TABLE avg_prepared_params(price DOUBLE PRECISION, customer_id BIGINT)",
             shard
         );
-        sharded.execute(comment.as_str()).await?;
+        sharded.execute(comment).await?;
     }
 
     admin_sqlx().await.execute("RELOAD").await?;
@@ -293,11 +293,11 @@ async fn avg_prepared_statement_should_merge() -> Result<(), Box<dyn std::error:
     );
 
     for shard in [0, 1] {
-        let comment = format!(
+        let comment = unsafe_sql!(
             "/* pgdog_shard: {} */ DROP TABLE avg_prepared_params",
             shard
         );
-        sharded.execute(comment.as_str()).await.ok();
+        sharded.execute(comment).await.ok();
     }
 
     Ok(())

@@ -131,7 +131,7 @@ async fn assert_schema_sync_rows(admin: &Pool<Postgres>, task_id: i64, sync_stat
 }
 
 async fn create_validation_schema(direct: &Pool<Postgres>) {
-    let script = format!(
+    let script = unsafe_sql!(
         "CREATE SCHEMA {TEST_SCHEMA};
 
          CREATE TABLE {TEST_SCHEMA}.{VALIDATION_PARENT} (id BIGINT PRIMARY KEY);
@@ -160,13 +160,13 @@ async fn create_validation_schema(direct: &Pool<Postgres>) {
              {TEST_SCHEMA}.{VALIDATION_UNCHECKED_CHILD};"
     );
 
-    direct.execute(script.as_str()).await.unwrap();
+    direct.execute(script).await.unwrap();
 }
 
 async fn run_schema_sync_phase(admin: &Pool<Postgres>, phase: &str) -> i64 {
     let task_id = run_task_command(
         admin,
-        &format!("SCHEMA_SYNC {phase} pgdog pgdog_sharded {TEST_PUB}"),
+        unsafe_sql!("SCHEMA_SYNC {phase} pgdog pgdog_sharded {TEST_PUB}"),
     )
     .await;
     wait_for_task_status(admin, task_id, TaskProgress::Finished).await;
@@ -229,7 +229,7 @@ async fn test_schema_sync_pre() {
 
     let task_id = run_task_command(
         &admin,
-        &format!("SCHEMA_SYNC pre pgdog pgdog_sharded {TEST_PUB}"),
+        unsafe_sql!("SCHEMA_SYNC pre pgdog pgdog_sharded {TEST_PUB}"),
     )
     .await;
 
@@ -257,12 +257,9 @@ async fn test_schema_sync_post() {
         for database in ["shard_0", "shard_1"] {
             let shard = connection_sqlx_direct_db(database).await;
             let error = shard
-                .execute(
-                    format!(
-                        "INSERT INTO {TEST_SCHEMA}.{VALIDATION_CHILD} (id, parent_id) VALUES (1, 42)"
-                    )
-                    .as_str(),
-                )
+                .execute(unsafe_sql!(
+                    "INSERT INTO {TEST_SCHEMA}.{VALIDATION_CHILD} (id, parent_id) VALUES (1, 42)"
+                ))
                 .await
                 .unwrap_err();
             assert_eq!(
@@ -309,12 +306,9 @@ async fn test_schema_sync_validation_rejects_existing_orphan() {
 
         let shard = connection_sqlx_direct_db("shard_0").await;
         shard
-            .execute(
-                format!(
-                    "INSERT INTO {TEST_SCHEMA}.{VALIDATION_CHILD} (id, parent_id) VALUES (1, 42)"
-                )
-                .as_str(),
-            )
+            .execute(unsafe_sql!(
+                "INSERT INTO {TEST_SCHEMA}.{VALIDATION_CHILD} (id, parent_id) VALUES (1, 42)"
+            ))
             .await
             .unwrap();
 
@@ -322,7 +316,7 @@ async fn test_schema_sync_validation_rejects_existing_orphan() {
 
         let task_id = run_task_command(
             &admin,
-            &format!("SCHEMA_SYNC post-data-validation pgdog pgdog_sharded {TEST_PUB}"),
+            unsafe_sql!("SCHEMA_SYNC post-data-validation pgdog pgdog_sharded {TEST_PUB}"),
         )
         .await;
         let failure = wait_for_validation_failure(&admin, task_id).await;

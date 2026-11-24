@@ -21,8 +21,9 @@ async fn slam_with_prepared() -> Result<(), Box<dyn std::error::Error>> {
             loop {
                 let r = rand::random_range(0..statements);
 
-                let query = format!("SELECT 1, 2, 3, 4, $1, 'apples and oranges', 'blah', {}", r);
-                let query = sqlx::query(query.as_str()).bind(r).execute(&mut conn);
+                let query =
+                    unsafe_sql!("SELECT 1, 2, 3, 4, $1, 'apples and oranges', 'blah', {}", r);
+                let query = sqlx::query(query).bind(r).execute(&mut conn);
 
                 select! {
                     res = query => {

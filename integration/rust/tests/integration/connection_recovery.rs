@@ -57,11 +57,11 @@ async fn ban_pools(database: &str) {
     let (primary_id, replica_id) = get_pool_ids(database).await;
 
     admin
-        .execute(format!("BAN {}", primary_id).as_str())
+        .execute(unsafe_sql!("BAN {}", primary_id))
         .await
         .unwrap();
     admin
-        .execute(format!("BAN {}", replica_id).as_str())
+        .execute(unsafe_sql!("BAN {}", replica_id))
         .await
         .unwrap();
 }
@@ -71,11 +71,11 @@ async fn unban_pools(database: &str) {
     let (primary_id, replica_id) = get_pool_ids(database).await;
 
     admin
-        .execute(format!("UNBAN {}", primary_id).as_str())
+        .execute(unsafe_sql!("UNBAN {}", primary_id))
         .await
         .unwrap();
     admin
-        .execute(format!("UNBAN {}", replica_id).as_str())
+        .execute(unsafe_sql!("UNBAN {}", replica_id))
         .await
         .unwrap();
 }

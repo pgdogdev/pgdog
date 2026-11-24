@@ -16,7 +16,7 @@ pub(crate) use time::{
 
 use futures::future::Either;
 use once_cell::sync::Lazy;
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use std::ops::ControlFlow;
 use std::{env, future::Future, future::ready};
 use tokio::task::{JoinError, spawn_blocking};

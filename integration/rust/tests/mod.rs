@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate integration_tests_rust;
+
 pub mod bench;
 pub mod integration;
 pub mod sqlx;

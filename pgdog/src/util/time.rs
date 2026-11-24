@@ -3,7 +3,7 @@
 use chrono::{DateTime, Local, Utc};
 use futures::{FutureExt, future::Either};
 use pgdog_config::MAX_DURATION;
-use rand::Rng;
+use rand::RngExt;
 use std::future::{Future, pending};
 use std::panic::Location;
 use std::time::{Duration, Instant};

@@ -30,10 +30,10 @@ async fn test_passthrough_concurrent_first_login() -> anyhow::Result<()> {
             // forcibly interrupted run that could not reach the cleanup below.
             let user = format!("pgdog_passthrough_race_{round:02}");
             direct
-                .execute(format!("DROP ROLE IF EXISTS {user}").as_str())
+                .execute(unsafe_sql!("DROP ROLE IF EXISTS {user}"))
                 .await?;
             direct
-                .execute(format!("CREATE ROLE {user} LOGIN PASSWORD 'pgdog'").as_str())
+                .execute(unsafe_sql!("CREATE ROLE {user} LOGIN PASSWORD 'pgdog'"))
                 .await?;
             roles.push(user.clone());
             let url = format!("postgres://{user}:pgdog@127.0.0.1:6432/pgdog");
@@ -88,7 +88,7 @@ async fn test_passthrough_concurrent_first_login() -> anyhow::Result<()> {
         cleanup_errors.push(format!("restore config: {error}"));
     }
     for user in roles {
-        if let Err(error) = direct.execute(format!("DROP ROLE {user}").as_str()).await {
+        if let Err(error) = direct.execute(unsafe_sql!("DROP ROLE {user}")).await {
             cleanup_errors.push(format!("drop {user}: {error}"));
         }
     }

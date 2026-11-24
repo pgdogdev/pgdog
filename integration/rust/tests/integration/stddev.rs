@@ -9,16 +9,19 @@ async fn test_variance_sparse_inputs() {
     for data_type in ["int4", "int8", "numeric", "real", "float8"] {
         let table = format!("test_variance_sparse_{data_type}");
         setup_schema(&conns, &table, data_type).await;
-        let query = format!(
+        let query = unsafe_sql!(
             "SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM {table}"
         );
         for values in [&[][..], &["NULL"][..], &["42"][..], &["42", "NULL"][..]] {
             setup_data(&conns, &table, values).await;
             let expected = postgres
-                .fetch_one(&*query)
+                .fetch_one(query.clone())
                 .await
                 .expect("PostgreSQL result");
-            let actual = conns[1].fetch_one(&*query).await.expect("sharded result");
+            let actual = conns[1]
+                .fetch_one(query.clone())
+                .await
+                .expect("sharded result");
             for column in 0..4 {
                 if matches!(data_type, "real" | "float8") {
                     assert_eq!(
@@ -207,10 +210,10 @@ fn assert_dec_eq(mut actual: Decimal, expected: Decimal) {
 
 async fn setup_schema(conns: &[Pool<Postgres>], table_name: &str, data_type: &str) {
     for conn in conns {
-        conn.execute(&*format!("DROP TABLE IF EXISTS {table_name}"))
+        conn.execute(unsafe_sql!("DROP TABLE IF EXISTS {table_name}"))
             .await
             .unwrap();
-        conn.execute(&*format!(
+        conn.execute(unsafe_sql!(
             "CREATE TABLE {table_name} (customer_id BIGINT NOT NULL, value {data_type})",
         ))
         .await
@@ -221,11 +224,11 @@ async fn setup_schema(conns: &[Pool<Postgres>], table_name: &str, data_type: &st
 
 async fn setup_data<T: std::fmt::Display>(conns: &[Pool<Postgres>], table_name: &str, data: &[T]) {
     for conn in conns {
-        conn.execute(&*format!("TRUNCATE TABLE {table_name}"))
+        conn.execute(unsafe_sql!("TRUNCATE TABLE {table_name}"))
             .await
             .unwrap();
         for (i, value) in data.iter().enumerate() {
-            conn.execute(&*format!(
+            conn.execute(unsafe_sql!(
                 "INSERT INTO {table_name} (customer_id, value) VALUES ({i}, {value})"
             ))
             .await

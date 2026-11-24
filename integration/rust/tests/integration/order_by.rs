@@ -20,7 +20,9 @@ async fn sorts_by_case_expression_across_shards() {
         (16, "pay"),
     ] {
         sharded_connection
-            .execute(format!("INSERT INTO sharded (id, value) VALUES ({id}, '{value}')").as_str())
+            .execute(unsafe_sql!(
+                "INSERT INTO sharded (id, value) VALUES ({id}, '{value}')"
+            ))
             .await
             .unwrap();
     }

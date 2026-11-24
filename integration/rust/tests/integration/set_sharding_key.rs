@@ -33,7 +33,7 @@ async fn test_single_sharding_function() {
 
     for id in 1..21 {
         conn.execute("BEGIN").await.unwrap();
-        conn.execute(format!("SET pgdog.sharding_key TO '{}'", id).as_str())
+        conn.execute(unsafe_sql!("SET pgdog.sharding_key TO '{}'", id))
             .await
             .unwrap();
         let result: (i64,) =

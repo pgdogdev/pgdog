@@ -85,7 +85,7 @@ pub(crate) enum Error {
     TlsRequired,
 
     #[error("{0}")]
-    DnsLookupError(#[from] hickory_resolver::ResolveError),
+    DnsLookupError(#[from] hickory_resolver::net::NetError),
 
     #[error("could not resolve to any address for hostname {0}")]
     DnsResolutionFailed(String),

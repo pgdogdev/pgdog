@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use pgdog_config::User;
 use pgdog_postgres_types::Oid;
-use rand::Rng;
+use rand::RngExt;
 
 use crate::{
     backend::{
