@@ -4,6 +4,7 @@ pub mod replication;
 pub mod replication_slots;
 #[allow(clippy::module_inception)]
 pub mod resharding;
+pub mod resume;
 pub mod schema_sync;
 pub mod table_copies;
 
@@ -209,6 +210,15 @@ async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: Task
     if result.is_err() {
         panic!("task {task_id} did not reach status {status} in SHOW TASKS in time");
     }
+}
+
+async fn stop_task(admin: &Pool<Postgres>, task_id: i64, status: TaskProgress) {
+    let stopped = admin
+        .fetch_one(unsafe_sql!("STOP_TASK {task_id}"))
+        .await
+        .expect("task stop must succeed");
+    assert_eq!(stopped.get::<String, _>("stop_task"), "OK");
+    wait_for_task_status(admin, task_id, status).await;
 }
 
 async fn task_status_line(admin: &Pool<Postgres>, task_id: i64) -> String {

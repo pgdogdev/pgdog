@@ -130,8 +130,7 @@ initialize_resharding() {
         done
     done
 
-    "${PGDOG_BIN}" &
-    PGDOG_PID="$!"
+    start_pgdog
 
     export PGPASSWORD=pgdog
     export PGHOST=127.0.0.1
@@ -142,17 +141,40 @@ initialize_resharding() {
         sleep 1
     done
 
-    pgbench -f pgbench.sql -P 1 source -c 5 -t 1000000 &
-    PGBENCH_PID="$!"
+    start_pgbench
 
     sleep 10
+}
+
+start_pgdog() {
+    "${PGDOG_BIN}" &
+    PGDOG_PID="$!"
+}
+
+start_pgbench() {
+    pgbench -f pgbench.sql -P 1 source -c 5 -t 1000000 &
+    PGBENCH_PID="$!"
+}
+
+stop_pgbench() {
+    kill -TERM "${PGBENCH_PID}" 2>/dev/null || true
+    wait "${PGBENCH_PID}" 2>/dev/null || true
+    PGBENCH_PID=""
+}
+
+kill_pgdog() {
+    kill -KILL "${PGDOG_PID}"
+    wait "${PGDOG_PID}" 2>/dev/null || true
 }
 
 restart_pgdog() {
     kill -TERM "${PGDOG_PID}"
     wait "${PGDOG_PID}" || true
-    "${PGDOG_BIN}" &
-    PGDOG_PID="$!"
+    start_pgdog
+    wait_for_pgdog_admin
+}
+
+wait_for_pgdog_admin() {
     local deadline=$((SECONDS + 60))
     until psql admin -c 'SHOW TASKS' > /dev/null 2>&1; do
         if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
@@ -181,9 +203,7 @@ replace_copy_with_replicate() {
 prepare_resharding_verification() {
     sleep 10
 
-    kill -TERM "${PGBENCH_PID}" 2>/dev/null || true
-    wait "${PGBENCH_PID}" 2>/dev/null || true
-    PGBENCH_PID=""
+    stop_pgbench
 
     replace_copy_with_replicate tenants name
     replace_copy_with_replicate accounts full_name
@@ -422,6 +442,20 @@ verify_resharding_data() {
 }
 
 pg_sql() { PGPASSWORD=pgdog psql -h 127.0.0.1 -p "$1" -U pgdog -d postgres -v ON_ERROR_STOP=1 -tAc "$2"; }
+
+source_slots() {
+    local first second
+    first=$(pg_sql 15432 "SELECT count(*) FROM pg_replication_slots WHERE slot_name = '$1_0'") || return 1
+    second=$(pg_sql 15433 "SELECT count(*) FROM pg_replication_slots WHERE slot_name = '$1_1'") || return 1
+    echo $((first + second))
+}
+
+# command|state|replication_slot of the source -> destination resharding.
+resharding() {
+    local rows
+    rows=$(psql admin -tAc 'SHOW RESHARDING') || return 1
+    grep '^source|destination|' <<< "${rows}" | cut -d'|' -f3,6,9 || true
+}
 
 admin_task_type() {
     local target="$1"

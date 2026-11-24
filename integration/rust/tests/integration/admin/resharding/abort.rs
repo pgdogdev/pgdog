@@ -5,8 +5,8 @@ use sqlx::{Executor, Pool, Postgres, Row};
 use super::replication::prepare_replication;
 use super::table_copies::poll;
 use super::{
-    TEST_PUB, assert_layout, cleanup, fail_if_task_errored, run_task_command, test_slot_names,
-    wait_for_task, wait_for_task_status, with_cleanup,
+    TEST_PUB, assert_layout, cleanup, fail_if_task_errored, run_task_command, stop_task,
+    test_slot_names, wait_for_task, wait_for_task_status, with_cleanup,
 };
 
 const SLOT: &str = "__pgdog_repl_abort";
@@ -15,14 +15,14 @@ fn abort(command: &str, slot: &str) -> String {
     format!("{command} pgdog pgdog_sharded {TEST_PUB}{slot} WITH (abort)")
 }
 
-async fn admin_error(admin: &Pool<Postgres>, sql: &str) -> String {
+pub(super) async fn admin_error(admin: &Pool<Postgres>, sql: &str) -> String {
     match admin.execute(unsafe_sql!("{sql}")).await {
         Err(sqlx::Error::Database(err)) => err.message().to_owned(),
         other => panic!("{sql} must fail with a database error, got {other:?}"),
     }
 }
 
-async fn resharding_records() -> i64 {
+pub(super) async fn resharding_records() -> i64 {
     let shard = connection_sqlx_direct_db("shard_0").await;
     let exists: bool = sqlx::query_scalar("SELECT to_regclass('pgdog.resharding') IS NOT NULL")
         .fetch_one(&shard)
@@ -68,7 +68,7 @@ const RESHARDING_COLUMNS: [&str; 5] = [
     "task_id",
 ];
 
-async fn show_resharding(admin: &Pool<Postgres>) -> Vec<Vec<Option<String>>> {
+pub(super) async fn show_resharding(admin: &Pool<Postgres>) -> Vec<Vec<Option<String>>> {
     let rows = admin.fetch_all("SHOW RESHARDING").await.unwrap();
     if !rows.is_empty() {
         assert_layout(&rows, SHOW_RESHARDING_LAYOUT);
@@ -173,12 +173,7 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
         .await;
         assert_eq!(resharding_records().await, 1);
 
-        let stopped = admin
-            .fetch_one(unsafe_sql!("STOP_TASK {task_id}"))
-            .await
-            .expect("replication stop must succeed");
-        assert_eq!(stopped.get::<String, _>("stop_task"), "OK");
-        wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;
+        stop_task(&admin, task_id, TaskProgress::Cancelled).await;
         assert_eq!(resharding_records().await, 1);
         assert_eq!(test_slot_names(&direct).await, [format!("{SLOT}_0")]);
         let paused = poll("SHOW RESHARDING to list the paused resharding", || async {
