@@ -6,10 +6,15 @@ use std::{
 
 use bytes::{Buf, Bytes};
 
-use crate::{Data, DataType, Error, Format, FromDataType, ToDataRowColumn, original::Original};
+use crate::{
+    Data, DataType, Error, Format, FromDataType, ToDataRowColumn, original::Original,
+    timestamp::POSTGRES_EPOCH_MICROS,
+};
+
+const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 /// Days from 1970-01-01 to 2000-01-01, the day Postgres counts dates from.
-const POSTGRES_EPOCH_DAYS: i64 = 10_957;
+const POSTGRES_EPOCH_DAYS: i64 = POSTGRES_EPOCH_MICROS / MICROS_PER_DAY;
 
 /// DATE, ordered by its day number: days since 2000-01-01, as Postgres stores it.
 /// `infinity` and `-infinity` are the largest and smallest day numbers.
