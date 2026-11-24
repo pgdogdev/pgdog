@@ -23,6 +23,7 @@ pub(crate) use error::Error;
 mod avg;
 mod bit;
 mod cmp;
+mod distinct;
 mod error;
 mod sum;
 mod variance;
@@ -109,6 +110,7 @@ enum State {
     Cmp(cmp::Cmp),
     /// Ah ah aaaaaaah
     Count(von::Count),
+    CountDistinct(distinct::CountDistinct),
     Sum(sum::Sum),
     Variance(variance::Variance),
 }
@@ -138,6 +140,14 @@ impl State {
                 })?,
             ))),
             (AggregateFunction::Count, false) => Ok(Self::Count(von::Count::new(target.column()))),
+            (AggregateFunction::Count, true)
+                if let Some(values_column) = helper.distinct_values =>
+            {
+                Ok(Self::CountDistinct(distinct::CountDistinct::new(
+                    target.column(),
+                    values_column,
+                )))
+            }
             (AggregateFunction::Max, _) => Ok(Self::Cmp(cmp::Cmp::max(target.column()))),
             (AggregateFunction::Min, _) => Ok(Self::Cmp(cmp::Cmp::min(target.column()))),
             // false < true, so all shards agree when the smallest answer is true
@@ -229,6 +239,11 @@ impl State {
             State::Count(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
+            State::CountDistinct(state) => {
+                let count = row.get_column_checked(state.column, decoder)?.value;
+                let values = row.get_column_checked(state.values_column, decoder)?.value;
+                state.accumulate(count, values)
+            }
             State::Sum(state) => state
                 .accumulate(row.get_column_checked(state.column, decoder)?.value)
                 .map_err(Into::into),
@@ -248,6 +263,7 @@ impl State {
             State::Bit(state) => Ok(state.finalize()),
             State::Cmp(state) => Ok(state.finalize()),
             State::Count(state) => state.finalize().map_err(Into::into),
+            State::CountDistinct(state) => state.finalize().map_err(Into::into),
             State::Sum(state) => Ok(state.finalize()),
             State::Variance(state) => Ok(state.finalize()?),
         }
@@ -259,6 +275,7 @@ struct HelperColumns {
     count: Option<usize>,
     sum: Option<usize>,
     sumsq: Option<usize>,
+    distinct_values: Option<usize>,
 }
 
 // Provides everything needed (plus Grouping struct) to re-build a singular output row.
@@ -313,6 +330,7 @@ impl<'a> Aggregates<'a> {
                     HelperKind::Count => entry.count = Some(index),
                     HelperKind::Sum => entry.sum = Some(index),
                     HelperKind::SumSquares => entry.sumsq = Some(index),
+                    HelperKind::DistinctValues => entry.distinct_values = Some(index),
                 }
             }
         }
@@ -702,6 +720,74 @@ mod test {
         };
         assert_eq!(value(0), Some(Decimal::from(36)));
         assert_eq!(value(1), Some(Decimal::new(72, 1)));
+    }
+
+    #[test]
+    fn aggregate_count_distinct_counts_the_union_of_shard_values() {
+        use crate::frontend::router::parser::rewrite::statement::aggregate::AggregateHelper;
+
+        let aggregate = parse("SELECT grp, COUNT(DISTINCT name)::int FROM users GROUP BY grp");
+        let mut values = integer_field("__pgdog_distinct_col1");
+        values.type_oid = 1009; // text[]
+        let decoder = Decoder::from(RowDescription::new(&[
+            integer_field("grp"),
+            integer_field("count"),
+            values,
+        ]));
+        let plan = ProjectionRewritePlan {
+            aggregate_helpers: vec![AggregateHelper {
+                target_column: 1,
+                distinct: true,
+                kind: HelperKind::DistinctValues,
+                alias: "__pgdog_distinct_col1".into(),
+            }],
+            ..Default::default()
+        };
+
+        // (grp, distinct names on the shard, the names). Both shards have "b"
+        // in group 1, and one of them has only NULL names in group 2.
+        let rows = [
+            ("1", "2", "{a,b}"),
+            ("2", "0", "{NULL}"),
+            ("1", "2", "{b,c}"),
+            ("2", "1", "{d,NULL}"),
+        ]
+        .into_iter()
+        .map(|row| DataRow::from_columns(vec![row.0, row.1, row.2]))
+        .collect::<VecDeque<_>>();
+
+        let merged = Aggregates::new(&rows, &decoder, &aggregate, Some(&plan))
+            .unwrap()
+            .aggregate()
+            .unwrap();
+        let mut counts = merged
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<i32>(0, Format::Text).unwrap(),
+                    row.get::<i32>(1, Format::Text).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        counts.sort_unstable();
+        // Adding the shard counts would give 4 for group 1.
+        assert_eq!(counts, [(1, 3), (2, 1)]);
+
+        // A type PgDog doesn't decode can't be compared.
+        let mut values = integer_field("__pgdog_distinct_col1");
+        values.type_oid = 3807; // jsonb[]
+        let decoder = Decoder::from(RowDescription::new(&[
+            integer_field("grp"),
+            integer_field("count"),
+            values,
+        ]));
+        let unsupported = Aggregates::new(&rows, &decoder, &aggregate, Some(&plan))
+            .unwrap()
+            .aggregate();
+        assert!(matches!(
+            unsupported,
+            Err(Error::UnsupportedAggregation { .. })
+        ));
     }
 
     #[test]

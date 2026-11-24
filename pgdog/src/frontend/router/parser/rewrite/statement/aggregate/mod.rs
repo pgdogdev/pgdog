@@ -15,6 +15,8 @@ pub(crate) enum HelperKind {
     Sum,
     /// `SUM(POWER(column, 2))`.
     SumSquares,
+    /// `ARRAY_AGG(DISTINCT column)`.
+    DistinctValues,
 }
 
 impl HelperKind {
@@ -24,6 +26,7 @@ impl HelperKind {
             Self::Count => "count",
             Self::Sum => "sum",
             Self::SumSquares => "sumsq",
+            Self::DistinctValues => "distinct",
         }
     }
 }
