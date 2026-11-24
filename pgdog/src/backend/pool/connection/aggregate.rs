@@ -6,7 +6,10 @@ use std::mem;
 use crate::{
     frontend::router::parser::{
         Aggregate, AggregateFunction, AggregateTarget,
-        rewrite::statement::{aggregate::HelperKind, projection::ProjectionRewritePlan},
+        rewrite::statement::{
+            aggregate::HelperKind,
+            projection::{Positions, ProjectionRewritePlan},
+        },
     },
     net::{
         Decoder,
@@ -71,6 +74,7 @@ impl<'a> Accumulator<'a> {
     pub(crate) fn from_aggregate(
         aggregate: &'a Aggregate,
         helpers: &HashMap<usize, HelperColumns>,
+        disjoint_distinct: Positions,
     ) -> Result<Vec<Self>, Error> {
         aggregate
             .targets()
@@ -80,7 +84,7 @@ impl<'a> Accumulator<'a> {
 
                 let accumulator = Accumulator {
                     target,
-                    state: State::new(target, helper)?,
+                    state: State::new(target, helper, disjoint_distinct.contains(target.column()))?,
                 };
 
                 Ok(accumulator)
@@ -112,8 +116,18 @@ enum State {
 impl State {
     /// Construct a new aggregate state based on the function provided
     /// Errors if the function is not one we support.
-    fn new(target: &AggregateTarget, helper: HelperColumns) -> Result<Self, Error> {
-        match (target.function(), target.is_distinct()) {
+    ///
+    /// `disjoint_distinct` is set for a `DISTINCT` aggregate over the sharding
+    /// key: shards never share a key, so it merges like the plain aggregate.
+    fn new(
+        target: &AggregateTarget,
+        helper: HelperColumns,
+        disjoint_distinct: bool,
+    ) -> Result<Self, Error> {
+        match (
+            target.function(),
+            target.is_distinct() && !disjoint_distinct,
+        ) {
             (AggregateFunction::Avg, false) => Ok(Self::Avg(avg::Avg::new(
                 target.column(),
                 helper.count.ok_or_else(|| Error::UnsupportedAggregation {
@@ -263,6 +277,7 @@ pub(super) struct Aggregates<'a> {
     decoder: &'a Decoder,
     aggregate: &'a Aggregate,
     helper_columns: HashMap<usize, HelperColumns>,
+    disjoint_distinct: Positions,
 }
 
 impl<'a> Aggregates<'a> {
@@ -333,6 +348,7 @@ impl<'a> Aggregates<'a> {
                 mappings: HashMap::new(),
                 aggregate,
                 helper_columns,
+                disjoint_distinct: plan.map(|plan| plan.disjoint_distinct).unwrap_or_default(),
             })
         } else {
             None
@@ -359,8 +375,11 @@ impl<'a> Aggregates<'a> {
             let entry = match self.mappings.entry(grouping) {
                 Entry::Occupied(o) => o.into_mut(),
                 Entry::Vacant(v) => {
-                    let accumulators =
-                        Accumulator::from_aggregate(self.aggregate, &self.helper_columns)?;
+                    let accumulators = Accumulator::from_aggregate(
+                        self.aggregate,
+                        &self.helper_columns,
+                        self.disjoint_distinct,
+                    )?;
 
                     // Gather all col vals corresponding to list of passthrough indices.
                     let mut passthrough = Vec::new();
@@ -579,6 +598,54 @@ mod test {
         let row = result.pop_front().unwrap();
         let total_count = row.get::<i32>(0, Format::Text).unwrap();
         assert_eq!(total_count, 5);
+    }
+
+    #[test]
+    fn aggregate_count_distinct_on_sharding_key_sums_shard_counts() {
+        let aggregate = parse("SELECT grp, COUNT(DISTINCT id)::int FROM users GROUP BY grp");
+        let decoder = Decoder::from(RowDescription::new(&[
+            integer_field("grp"),
+            integer_field("count"),
+        ]));
+
+        // (grp, distinct ids on the shard)
+        let rows = [("1", "2"), ("2", "1"), ("1", "3")]
+            .into_iter()
+            .map(|(grp, count)| {
+                let mut row = DataRow::new();
+                row.add(grp).add(count);
+                row
+            })
+            .collect::<VecDeque<_>>();
+
+        // Shards may share values of any other column, so the counts can't be added.
+        let unplanned = Aggregates::new(&rows, &decoder, &aggregate, None)
+            .unwrap()
+            .aggregate();
+        assert!(matches!(
+            unplanned,
+            Err(Error::UnsupportedAggregation { .. })
+        ));
+
+        let plan = ProjectionRewritePlan {
+            disjoint_distinct: Positions::from_iter([1]),
+            ..Default::default()
+        };
+        let merged = Aggregates::new(&rows, &decoder, &aggregate, Some(&plan))
+            .unwrap()
+            .aggregate()
+            .unwrap();
+        let mut counts = merged
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<i32>(0, Format::Text).unwrap(),
+                    row.get::<i32>(1, Format::Text).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        counts.sort_unstable();
+        assert_eq!(counts, [(1, 5), (2, 1)]);
     }
 
     #[test]

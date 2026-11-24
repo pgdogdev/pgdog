@@ -1,3 +1,4 @@
+use crate::backend::ShardedTables;
 use crate::backend::schema::Schema;
 use crate::frontend::router::Ast;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
@@ -46,6 +47,7 @@ async fn direct_aggregate_keeps_base_sql() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -76,6 +78,7 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -115,6 +118,7 @@ async fn cross_shard_having_rewrites_and_replaces_route_aggregate() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -158,6 +162,7 @@ async fn direct_having_keeps_native_postgres_semantics() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -201,6 +206,7 @@ async fn named_prepared_aggregate_uses_cross_shard_variant() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -267,6 +273,7 @@ async fn named_prepared_direct_aggregate_keeps_base_variant() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -313,6 +320,7 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -364,6 +372,7 @@ async fn cross_shard_order_by_helper_keeps_nulls_placement() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -391,7 +400,13 @@ fn cached_projection_does_not_depend_on_first_route_order() {
         None,
     ));
 
-    projection::finalize_after_route(&mut first, &Schema::default(), None).unwrap();
+    projection::finalize_after_route(
+        &mut first,
+        &Schema::default(),
+        &ShardedTables::default(),
+        None,
+    )
+    .unwrap();
     let first_query = match &first.messages[0] {
         ProtocolMessage::Query(query) => query,
         _ => panic!("expected Query"),
@@ -419,7 +434,13 @@ fn cached_projection_does_not_depend_on_first_route_order() {
         None,
     ));
 
-    projection::finalize_after_route(&mut second, &Schema::default(), None).unwrap();
+    projection::finalize_after_route(
+        &mut second,
+        &Schema::default(),
+        &ShardedTables::default(),
+        None,
+    )
+    .unwrap();
     assert_eq!(
         second.route().order_by(),
         &[
@@ -442,7 +463,13 @@ fn aliased_projected_sort_column_remaps_route() {
         None,
     ));
 
-    projection::finalize_after_route(&mut request, &Schema::default(), None).unwrap();
+    projection::finalize_after_route(
+        &mut request,
+        &Schema::default(),
+        &ShardedTables::default(),
+        None,
+    )
+    .unwrap();
 
     let query = match &request.messages[0] {
         ProtocolMessage::Query(query) => query,
@@ -477,7 +504,13 @@ fn duplicate_sort_column_names_use_injected_helper() {
         None,
     ));
 
-    projection::finalize_after_route(&mut request, &Schema::default(), None).unwrap();
+    projection::finalize_after_route(
+        &mut request,
+        &Schema::default(),
+        &ShardedTables::default(),
+        None,
+    )
+    .unwrap();
 
     let query = match &request.messages[0] {
         ProtocolMessage::Query(query) => query,
@@ -509,7 +542,13 @@ fn helper_replaces_the_matching_duplicate_order_by_position() {
         None,
     ));
 
-    projection::finalize_after_route(&mut request, &Schema::default(), None).unwrap();
+    projection::finalize_after_route(
+        &mut request,
+        &Schema::default(),
+        &ShardedTables::default(),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         request.route().order_by(),
@@ -544,6 +583,7 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -610,6 +650,7 @@ async fn split_anonymous_prepare_rewrites_each_execution_once() {
         projection::finalize_after_route(
             client_request,
             &Schema::default(),
+            &ShardedTables::default(),
             result.as_ref().and_then(RewriteResult::offset_plan),
         )
         .unwrap();
@@ -650,6 +691,7 @@ async fn split_anonymous_prepare_rewrites_each_execution_once() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
@@ -701,6 +743,7 @@ async fn named_statement_can_switch_from_direct_to_cross_shard_variant() {
         projection::finalize_after_route(
             client_request,
             &Schema::default(),
+            &ShardedTables::default(),
             result.as_ref().and_then(RewriteResult::offset_plan),
         )
         .unwrap();
@@ -729,6 +772,7 @@ async fn named_statement_can_switch_from_direct_to_cross_shard_variant() {
     projection::finalize_after_route(
         client_request,
         &Schema::default(),
+        &ShardedTables::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();

@@ -8,10 +8,53 @@ use itertools::Itertools;
 use pg_raw_parse::{Node, nodes};
 
 use crate::backend::replication::ShardedTables;
-use crate::frontend::router::parser::{Column, Table};
+use crate::frontend::router::parser::rewrite::statement::projection::Positions;
+use crate::frontend::router::parser::{AggregateFunction, Column, Function, Table};
+
+/// SELECT list positions of `count(DISTINCT key)`, where `key` is the sharding key.
+///
+/// No two shards count the same key, so their counts add up to the distinct
+/// count across all of them, with or without `GROUP BY`.
+pub(crate) fn disjoint_distinct(select: &nodes::SelectStmt, tables: &ShardedTables) -> Positions {
+    // Resolved on the first DISTINCT aggregate; most queries have none.
+    let mut key = None;
+
+    select
+        .target_list()
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| {
+            let Some(call) = Function::extract_func_call(target.val()) else {
+                return false;
+            };
+            // Checked first: it's the cheapest test and most aggregates fail it.
+            if !call.agg_distinct {
+                return false;
+            }
+            let is_count = call
+                .funcname()
+                .iter()
+                .filter_map(Node::as_str)
+                .next_back()
+                .and_then(AggregateFunction::from_builtin_name)
+                == Some(AggregateFunction::Count);
+            if !is_count {
+                return false;
+            }
+            let Ok(argument) = call.args().iter().exactly_one() else {
+                return false;
+            };
+
+            key.get_or_insert_with(|| ShardingKey::new(select, tables))
+                .as_ref()
+                .is_some_and(|key| key.matches(argument))
+        })
+        .map(|(position, _)| position)
+        .collect()
+}
 
 /// Answers whether an expression is the sharding key of the queried table.
-pub(crate) struct ShardingKey<'a> {
+struct ShardingKey<'a> {
     table: Table<'a>,
     tables: &'a ShardedTables,
 }
@@ -20,7 +63,7 @@ impl<'a> ShardingKey<'a> {
     /// `None` unless the SELECT reads exactly one plain table. Joins,
     /// subqueries and functions in `FROM` can repeat a key on several shards,
     /// and a CTE can shadow the table's name.
-    pub(crate) fn new(select: &'a nodes::SelectStmt, tables: &'a ShardedTables) -> Option<Self> {
+    fn new(select: &'a nodes::SelectStmt, tables: &'a ShardedTables) -> Option<Self> {
         if select.with_clause().is_some() {
             return None;
         }
@@ -37,7 +80,7 @@ impl<'a> ShardingKey<'a> {
     /// Whether `node` is a bare reference to the sharding key column.
     /// Expressions over the key, e.g. `user_id % 2`, don't count:
     /// two shards can produce the same result.
-    pub(crate) fn matches(&self, node: Node<'_>) -> bool {
+    fn matches(&self, node: Node<'_>) -> bool {
         let Node::ColumnRef(column) = node else {
             return false;
         };
@@ -55,7 +98,9 @@ impl<'a> ShardingKey<'a> {
 
     /// Whether `GROUP BY` includes the sharding key, by name or by SELECT
     /// list position, so that no group spans shards.
-    pub(crate) fn in_group_by(&self, select: &nodes::SelectStmt) -> bool {
+    // Not called yet: the NULL key group spans shards and needs its own handling.
+    #[cfg_attr(not(test), expect(dead_code))]
+    fn in_group_by(&self, select: &nodes::SelectStmt) -> bool {
         select.group_clause().iter().any(|item| match item {
             // Postgres counts SELECT list positions from 1.
             Node::A_Const(ordinal) => ordinal
@@ -120,6 +165,46 @@ mod tests {
         let first = select.target_list().iter().next().expect("one target");
 
         Some((key.matches(first.val()), key.in_group_by(&select)))
+    }
+
+    #[test]
+    fn finds_count_distinct_on_key() {
+        let tables = orders_by_user();
+
+        for (sql, expected) in [
+            ("SELECT count(DISTINCT user_id) FROM orders", vec![0]),
+            (
+                "SELECT count(DISTINCT o.user_id)::int FROM orders o",
+                vec![0],
+            ),
+            (
+                "SELECT status, count(DISTINCT user_id), count(*) FROM orders GROUP BY status",
+                vec![1],
+            ),
+            (
+                "SELECT count(DISTINCT user_id) FILTER (WHERE status = 'paid') FROM orders",
+                vec![0],
+            ),
+            ("SELECT count(user_id) FROM orders", vec![]),
+            ("SELECT count(DISTINCT product_id) FROM orders", vec![]),
+            ("SELECT count(DISTINCT user_id % 2) FROM orders", vec![]),
+            (
+                "SELECT count(DISTINCT (user_id, status)) FROM orders",
+                vec![],
+            ),
+            // Summing the keys of each shard is a later change.
+            ("SELECT sum(DISTINCT user_id) FROM orders", vec![]),
+            (
+                "SELECT count(DISTINCT user_id) FROM orders JOIN users ON users.id = orders.user_id",
+                vec![],
+            ),
+        ] {
+            assert_eq!(
+                disjoint_distinct(&select(sql), &tables),
+                Positions::from_iter(expected),
+                "{sql}"
+            );
+        }
     }
 
     #[test]
