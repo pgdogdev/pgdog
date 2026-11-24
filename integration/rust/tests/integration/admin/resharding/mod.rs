@@ -120,18 +120,17 @@ async fn wait_for_source_slot(admin: &Pool<Postgres>, task_id: i64, slot: Option
         Some(slot) => ("slot_name = $1", format!("{slot}_0")),
         None => ("slot_name LIKE $1", r"\_\_pgdog\_repl\_%\_0".to_owned()),
     };
-    let query = format!(
-        "SELECT count(*) FROM pg_replication_slots \
-         WHERE {condition} AND confirmed_flush_lsn IS NOT NULL"
-    );
     let direct = connection_sqlx_direct().await;
     table_copies::poll("the source replication slot", || async {
         fail_if_task_errored(admin, task_id).await;
-        let slots: i64 = sqlx::query_scalar(&query)
-            .bind(&value)
-            .fetch_one(&direct)
-            .await
-            .expect("replication slots must be readable");
+        let slots: i64 = sqlx::query_scalar(unsafe_sql!(
+            "SELECT count(*) FROM pg_replication_slots \
+             WHERE {condition} AND confirmed_flush_lsn IS NOT NULL"
+        ))
+        .bind(&value)
+        .fetch_one(&direct)
+        .await
+        .expect("replication slots must be readable");
         (slots > 0).then_some(())
     })
     .await;

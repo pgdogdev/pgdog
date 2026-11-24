@@ -16,7 +16,7 @@ fn abort(command: &str, slot: &str) -> String {
 }
 
 async fn admin_error(admin: &Pool<Postgres>, sql: &str) -> String {
-    match admin.execute(sql).await {
+    match admin.execute(unsafe_sql!("{sql}")).await {
         Err(sqlx::Error::Database(err)) => err.message().to_owned(),
         other => panic!("{sql} must fail with a database error, got {other:?}"),
     }
@@ -115,7 +115,7 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
 
         let task_id = run_task_command(
             &admin,
-            &format!(
+            unsafe_sql!(
                 "REPLICATE pgdog pgdog_sharded {TEST_PUB} {SLOT} WITH (cleanup_on_cancel false)"
             ),
         )
@@ -174,7 +174,7 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
         assert_eq!(resharding_records().await, 1);
 
         let stopped = admin
-            .fetch_one(format!("STOP_TASK {task_id}").as_str())
+            .fetch_one(unsafe_sql!("STOP_TASK {task_id}"))
             .await
             .expect("replication stop must succeed");
         assert_eq!(stopped.get::<String, _>("stop_task"), "OK");
@@ -188,7 +188,7 @@ async fn test_abort_refuses_a_running_run_and_cleans_up_a_paused_one() {
         .await;
         assert_eq!(paused, [resharding_row("paused", None)]);
 
-        let abort_id = run_task_command(&admin, &abort_slot).await;
+        let abort_id = run_task_command(&admin, unsafe_sql!("{abort_slot}")).await;
         wait_for_task(&admin, "abort task listed", |task| {
             task.id == Some(abort_id) && task.kind == "abort"
         })

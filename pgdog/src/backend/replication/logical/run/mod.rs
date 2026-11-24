@@ -10,7 +10,7 @@ use super::Error;
 use super::publisher::{Permanent, ReplicationSlot};
 use crate::backend::{
     Cluster,
-    pool::{Address, Request},
+    pool::{Address, LbRequest},
 };
 
 mod queries;
@@ -26,7 +26,7 @@ pub(crate) async fn state_address(destination: &Cluster) -> Result<Address, Erro
         .shards()
         .first()
         .ok_or_else(|| Error::NoPrimary)?
-        .primary(&Request::default())
+        .primary(&LbRequest::default())
         .await?
         .addr()
         .clone())
@@ -134,7 +134,7 @@ pub(crate) async fn existing_slots(
 ) -> Result<HashMap<usize, ReplicationSlot<Permanent>>, Error> {
     let mut slots = HashMap::new();
     for (number, shard) in source.shards().iter().enumerate() {
-        let addr = shard.primary(&Request::default()).await?.addr().clone();
+        let addr = shard.primary(&LbRequest::default()).await?.addr().clone();
         let slot =
             ReplicationSlot::new_permanent(publication, &addr, Some(slot_name.to_owned()), number);
         match slot.verify_exists().await {
