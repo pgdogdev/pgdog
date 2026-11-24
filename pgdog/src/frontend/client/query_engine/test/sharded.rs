@@ -324,6 +324,33 @@ async fn test_sharded_distinct_on_sharding_key_merges_shards() {
     );
     expect_message!(client.read().await, ReadyForQuery);
 
+    // Grouped by the key, each group is on one shard, which returns its final
+    // result: nothing is merged, so any aggregate works, and so does HAVING.
+    client
+        .send_simple(Query::new(format!(
+            "SELECT id, count(DISTINCT value), string_agg(value, ','), variance(DISTINCT id) \
+             FROM sharded WHERE id IN ({ids}) GROUP BY id \
+             HAVING count(DISTINCT value) = 1 ORDER BY count(*), id DESC LIMIT 5"
+        )))
+        .await;
+    let description = expect_message!(client.read().await, RowDescription);
+    assert_eq!(description.fields.len(), 4, "the sort helper is dropped");
+    let mut ids_by_shard = [(id_shard0, "cd1"), (id_shard1, "cd2")];
+    ids_by_shard.sort_unstable_by_key(|&(id, _)| std::cmp::Reverse(id));
+    for (id, value) in ids_by_shard {
+        let row = expect_message!(client.read().await, DataRow);
+        assert_eq!(row.get_int(0, true), Some(id));
+        assert_eq!(row.get_int(1, true), Some(1));
+        assert_eq!(row.get_text(2).as_deref(), Some(value));
+        // The variance of a single value is NULL.
+        assert!(row.get_raw(3).is_some_and(|variance| variance.is_null));
+    }
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SELECT 2"
+    );
+    expect_message!(client.read().await, ReadyForQuery);
+
     // Cleanup
     client
         .send_simple(Query::new(format!(

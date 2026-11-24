@@ -419,6 +419,14 @@ impl Aggregate {
         }
     }
 
+    /// An aggregate with nothing to merge.
+    pub(crate) const fn empty() -> Self {
+        Self {
+            targets: Vec::new(),
+            group_by: Vec::new(),
+        }
+    }
+
     /// Nothing to merge across shards. GROUP BY without aggregate
     /// functions still has to merge the groups each shard returns.
     pub(crate) fn is_empty(&self) -> bool {

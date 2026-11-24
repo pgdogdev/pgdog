@@ -5,7 +5,9 @@
 //! AST only after routing and cached independently from per-execution Bind values.
 
 use super::Error;
-use super::aggregate::{AggregatesRewrite, HelperKind, disjoint_distinct};
+use super::aggregate::{
+    AggregatesRewrite, HelperKind, disjoint_distinct, groups_stay_on_one_shard,
+};
 use super::group_by::{self, GroupByRewrite};
 use super::having;
 use super::offset::{self, OffsetPlan};
@@ -68,7 +70,13 @@ pub(crate) struct ProjectionRewritePlan {
     /// SELECT list positions of `DISTINCT` aggregates over the sharding key.
     /// Shards never share a key, so these merge like the plain aggregate.
     pub(crate) disjoint_distinct: Positions,
+    /// `GROUP BY` includes the sharding key, so each shard returns complete
+    /// groups and there is nothing to merge.
+    pub(crate) groups_on_one_shard: bool,
 }
+
+/// What a query with complete groups on every shard has to merge.
+static NOTHING_TO_MERGE: Aggregate = Aggregate::empty();
 
 /// A set of SELECT list positions, kept in one word so that a plan
 /// carrying none costs no allocation.
@@ -133,10 +141,14 @@ impl ProjectionRewritePlan {
             && self.having.is_none()
             && self.group_by.is_none()
             && self.disjoint_distinct.is_empty()
+            && !self.groups_on_one_shard
     }
 
     /// The aggregate of the rewritten query, if it differs from the client's.
     pub(crate) fn aggregate(&self) -> Option<&Aggregate> {
+        if self.groups_on_one_shard {
+            return Some(&NOTHING_TO_MERGE);
+        }
         self.having
             .as_deref()
             .map(HavingRewriteResult::aggregate)
@@ -322,18 +334,22 @@ fn build(
     let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
         return Ok(None);
     };
-    let has_having = !matches!(select.having_clause(), Node::None);
+    // Shards return complete groups: aggregates and HAVING are final as each
+    // shard computed them, and PgDog only sorts and pages the rows.
+    let groups_on_one_shard = groups_stay_on_one_shard(select, schema, tables);
+    // Otherwise HAVING has to wait until PgDog has merged the groups.
+    let has_having = !groups_on_one_shard && !matches!(select.having_clause(), Node::None);
     if has_having && let Some(reason) = unsupported_with_having(select, schema) {
         return Err(Error::UnsupportedHaving(reason));
     }
     // HAVING classifies the GROUP BY keys in its own rewrite.
     // Kept on the stack: this runs for every cross-shard SELECT.
-    let group_keys: SmallVec<[GroupByKey; 4]> = if has_having {
+    let group_keys: SmallVec<[GroupByKey; 4]> = if has_having || groups_on_one_shard {
         SmallVec::new()
     } else {
         GroupByKey::parse(select, schema).collect()
     };
-    let aggregate = if has_having {
+    let aggregate = if has_having || groups_on_one_shard {
         None
     } else {
         let aggregate = Aggregate::with_keys(select, schema, group_keys.iter().copied());
@@ -347,9 +363,17 @@ fn build(
         Some(aggregate)
     };
     // Shards return every group; PgDog applies LIMIT and OFFSET after the merge.
-    let remove_limit = aggregate
-        .as_ref()
-        .is_some_and(|aggregate| pages_merged_groups(select, aggregate));
+    // Complete groups can be paged by their shard like plain rows, which
+    // `rewrite_offset` does. Without it, the shards return every group here too.
+    let remove_limit = if groups_on_one_shard {
+        !rewrite_offset
+            && (!matches!(select.limit_count(), Node::None)
+                || !matches!(select.limit_offset(), Node::None))
+    } else {
+        aggregate
+            .as_ref()
+            .is_some_and(|aggregate| pages_merged_groups(select, aggregate))
+    };
     if remove_limit && let Some(reason) = offset::unsupported_limit(select) {
         return Err(Error::UnsupportedGroupBy(reason));
     }
@@ -358,9 +382,10 @@ fn build(
     // Each shard runs the aggregate ONLY on the rows stored directly on it, e.g., Shard A counts 2 'free' rows and Shard B counts 3.
     // The merge adds up the aggregates in the SELECT list, but not the helper column, so we would sort by Shard A's count (2) instead of the total (5).
     // We can't sort by an expression with DISTINCT either, as the helper column would change which rows are distinct.
+    // With complete groups on every shard nothing is merged, so the helper column already holds the final aggregate.
     let has_unsupported_sort_key = select.sort_clause().iter().any(|sort_by| {
         order_by::is_computed_sort_key(sort_by.node())
-            && (order_by::contains_aggregate(sort_by.node(), schema)
+            && ((!groups_on_one_shard && order_by::contains_aggregate(sort_by.node(), schema))
                 || !select.distinct_clause().is_empty())
     });
 
@@ -369,7 +394,12 @@ fn build(
     }
 
     let mut plan = ProjectionRewritePlan {
-        disjoint_distinct: disjoint_distinct(select, tables),
+        disjoint_distinct: if groups_on_one_shard {
+            Positions::default()
+        } else {
+            disjoint_distinct(select, tables)
+        },
+        groups_on_one_shard,
         ..Default::default()
     };
     let rewritten = make::try_owned(|mem| {
@@ -553,6 +583,84 @@ mod tests {
                 .map(|plan| plan.disjoint_distinct)
                 .unwrap_or_default();
             assert_eq!(marked, Positions::from_iter(expected), "{sql}");
+        }
+    }
+
+    #[test]
+    fn groups_on_one_shard_are_not_merged() {
+        let tables = ShardedTables::from(
+            [ShardedTable {
+                name: Some("items".into()),
+                column: "id".into(),
+                ..Default::default()
+            }]
+            .as_slice(),
+        );
+        // `items_schema()` declares every column NOT NULL.
+        let schema = items_schema();
+
+        // (query, shard query): the shards compute everything but the final
+        // sort and page, so no helper for merging is added.
+        for (sql, shard_sql) in [
+            (
+                "SELECT id, count(DISTINCT category), avg(id), string_agg(region, ',') \
+                 FROM items GROUP BY id",
+                "SELECT id, count(DISTINCT category), avg(id), string_agg(region, ',') \
+                 FROM items GROUP BY id",
+            ),
+            // Each shard filters its own complete groups. They return all of
+            // them, and PgDog applies LIMIT and OFFSET.
+            (
+                "SELECT id, count(*) + 1 FROM items GROUP BY id \
+                 HAVING variance(DISTINCT id) > 1 LIMIT 5 OFFSET 2",
+                "SELECT id, count(*) + 1 FROM items GROUP BY id \
+                 HAVING variance(DISTINCT id) > 1 \
+                 LIMIT CASE WHEN 5::bigint < 0 THEN 5::bigint END \
+                 OFFSET CASE WHEN 2::bigint < 0 THEN 2::bigint END",
+            ),
+            // The sort key is final on the shard, so it only needs projecting.
+            (
+                "SELECT id FROM items GROUP BY id ORDER BY count(*) DESC",
+                "SELECT id, count(*) AS __pgdog_order_col0 FROM items \
+                 GROUP BY id ORDER BY count(*) DESC",
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let rewrite = build(&ast, &schema, &tables, false).unwrap().unwrap();
+            let plan = rewrite.plan.as_deref().expect("plan");
+
+            assert!(plan.groups_on_one_shard, "{sql}");
+            assert!(plan.aggregate().expect("aggregate").is_empty(), "{sql}");
+            assert!(plan.aggregate_helpers.is_empty(), "{sql}");
+            assert!(plan.having.is_none() && plan.group_by.is_none(), "{sql}");
+            assert_eq!(rewrite.sql.as_ref(), shard_sql, "{sql}");
+        }
+
+        // Shards page complete groups like plain rows.
+        let ast =
+            pg_raw_parse::parse("SELECT id, count(*) FROM items GROUP BY id LIMIT 5 OFFSET 2")
+                .unwrap();
+        let rewrite = build(&ast, &schema, &tables, true).unwrap().unwrap();
+        assert!(rewrite.sql.contains("LIMIT"), "{}", rewrite.sql);
+        assert!(!rewrite.sql.contains("OFFSET"), "{}", rewrite.sql);
+
+        // Groups span shards, or the key isn't known to be NOT NULL.
+        for (sql, schema) in [
+            (
+                "SELECT region, count(*) FROM items GROUP BY region",
+                &schema,
+            ),
+            (
+                "SELECT id, count(*) FROM items GROUP BY id",
+                &Schema::default(),
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let merged = build(&ast, schema, &tables, false)
+                .unwrap()
+                .and_then(|rewrite| rewrite.plan)
+                .is_none_or(|plan| !plan.groups_on_one_shard);
+            assert!(merged, "{sql}");
         }
     }
 
