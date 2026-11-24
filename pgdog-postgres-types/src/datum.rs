@@ -7,7 +7,7 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
-    Array, Data, Double, Error, Format, FromDataType, Inet, Interval, Money, Numeric, Oid,
+    Array, Data, Date, Double, Error, Format, FromDataType, Inet, Interval, Money, Numeric, Oid,
     Timestamp, TimestampTz, ToDataRowColumn,
 };
 
@@ -48,6 +48,8 @@ pub enum Datum {
     Money(Money),
     /// INET or CIDR.
     Inet(Inet),
+    /// DATE.
+    Date(Date),
     /// We don't know.
     Unknown(Bytes),
     /// NULL.
@@ -93,6 +95,8 @@ impl PartialOrd for Datum {
             (Money(_), _) | (_, Money(_)) => None,
             (Inet(a), Inet(b)) => a.partial_cmp(b),
             (Inet(_), _) | (_, Inet(_)) => None,
+            (Date(a), Date(b)) => a.partial_cmp(b),
+            (Date(_), _) | (_, Date(_)) => None,
             (Unknown(a), Unknown(b)) => a.partial_cmp(b),
             (Unknown(_), _) | (_, Unknown(_)) => None,
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
@@ -126,6 +130,7 @@ impl ToDataRowColumn for Datum {
                 .into(),
             Money(money) => money.to_data_row_column(),
             Inet(inet) => inet.to_data_row_column(),
+            Date(date) => date.to_data_row_column(),
             Unknown(bytes) => bytes.clone().into(),
             Null => Data::null(),
             Boolean(val) => val.to_data_row_column(),
@@ -192,6 +197,14 @@ impl Datum {
             DataType::Money => Ok(Datum::Money(Money::decode(bytes, encoding)?)),
             DataType::Inet => Ok(Datum::Inet(Inet::decode(bytes, encoding)?)),
             DataType::Cidr => Ok(Datum::Inet(Inet::decode(bytes, encoding)?.into_cidr())),
+            DataType::Date => match Date::decode(bytes, encoding) {
+                Ok(date) => Ok(Datum::Date(date)),
+                // Only ISO text can be ordered. Other DateStyles keep their bytes.
+                Err(Error::SessionDependentText(_)) => {
+                    Ok(Datum::Unknown(Bytes::copy_from_slice(bytes)))
+                }
+                Err(err) => Err(err),
+            },
             DataType::Array(element_oid) => match Array::decode_typed(bytes, encoding, element_oid)
             {
                 Ok(array) => Ok(Datum::Array(array)),
@@ -225,6 +238,7 @@ impl Datum {
             Datum::Array(a) => a.encode(format),
             Datum::Money(m) => m.encode(format),
             Datum::Inet(i) => i.encode(format),
+            Datum::Date(d) => d.encode(format),
             Datum::Null => Ok(Bytes::new()),
             Datum::Unknown(bytes) => Ok(bytes.clone()),
         }
@@ -248,6 +262,7 @@ impl Datum {
             Datum::Oid(..) => DataType::Oid,
             Datum::Array(a) => DataType::Array(a.element_oid),
             Datum::Money(..) => DataType::Money,
+            Datum::Date(..) => DataType::Date,
             Datum::Inet(inet) => inet.data_type(),
             Datum::Null => DataType::Other(0),
             Datum::Unknown(..) => DataType::Other(0),
@@ -307,6 +322,7 @@ pub enum DataType {
     Money,
     Inet,
     Cidr,
+    Date,
 }
 
 impl DataType {
@@ -324,6 +340,7 @@ impl DataType {
             701 => DataType::DoublePrecision,
             790 => DataType::Money,
             869 => DataType::Inet,
+            1082 => DataType::Date,
             1043 => DataType::Text, // varchar
             1114 => DataType::Timestamp,
             1184 => DataType::TimestampTz,
@@ -373,6 +390,7 @@ impl DataType {
             DataType::Money => todo!(),
             DataType::Inet => todo!(),
             DataType::Cidr => todo!(),
+            DataType::Date => Some(1082),
         }
     }
 
@@ -470,6 +488,7 @@ impl fmt::Display for DataType {
             Array(i) => write!(f, "{}[]", Self::from_oid(*i)),
             Money => write!(f, "money"),
             Inet => write!(f, "inet"),
+            Date => write!(f, "date"),
             Cidr => write!(f, "cidr"),
         }
     }
@@ -613,6 +632,20 @@ mod tests {
         ] {
             assert_eq!(text_datum(oid, value).data_type(), data_type, "{value}");
         }
+    }
+
+    #[test]
+    fn test_date_decodes_iso_text_and_keeps_other_styles_as_bytes() {
+        let iso = text_datum(1082, "1999-12-31");
+        assert_eq!(iso.data_type(), DataType::Date);
+        assert_eq!(iso.to_data_row_column().data, Bytes::from("1999-12-31"));
+        assert_eq!(DataType::Date.to_oid(), Some(1082));
+
+        // DateStyle "SQL, MDY": the text doesn't say which field is the month.
+        assert_eq!(
+            text_datum(1082, "12/31/1999"),
+            Datum::Unknown(Bytes::from("12/31/1999"))
+        );
     }
 
     #[test]

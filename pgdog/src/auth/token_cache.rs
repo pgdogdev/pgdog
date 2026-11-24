@@ -9,7 +9,7 @@ use lru::LruCache;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use pgdog_config::ServerAuth;
-use rand::seq::{IndexedRandom, IteratorRandom};
+use rand::seq::IteratorRandom;
 use std::{
     sync::{
         Arc,
@@ -21,7 +21,13 @@ use tokio::sync::OnceCell;
 use tracing::error;
 
 use super::Error;
-use crate::{backend::pool::Connection, config::config};
+use crate::{
+    backend::{
+        auth::rds_iam,
+        pool::{Connection, Pool},
+    },
+    config::config,
+};
 use crate::{tasks, util::LruHasher};
 
 /// Client token cache.
@@ -126,6 +132,26 @@ fn expires_at(server_auth: ServerAuth) -> SystemTime {
     }
 }
 
+/// Pick the pool to validate a client's token against.
+///
+/// RDS accepts an IAM token only on the endpoint it was signed for, so
+/// prefer the pools on that endpoint. Otherwise, pick a random pool.
+fn validation_pool<'a>(pools: &[&'a Pool], token: &str) -> &'a Pool {
+    let endpoint = rds_iam::token_endpoint(token);
+    let signed_for = pools.iter().copied().filter(|pool| {
+        let addr = pool.addr();
+        addr.server_auth == ServerAuth::RdsIam
+            && endpoint.is_some_and(|(host, port)| {
+                addr.host.eq_ignore_ascii_case(host) && addr.port == port
+            })
+    });
+
+    signed_for
+        .choose(&mut rand::rng())
+        .or_else(|| pools.iter().copied().choose(&mut rand::rng()))
+        .expect("to have at least one pool")
+}
+
 impl AuthTokenCache {
     /// Check a token against the external token provider, e.g., RDS.
     ///
@@ -150,20 +176,18 @@ impl AuthTokenCache {
             return Ok(true);
         }
 
-        // Get a random pool from any of the shards.
+        // Any pool of any shard will do, apart from the endpoint check.
         //
         // Invariant: all shards have the same IAM permissions.
         //
         let conn = Connection::new(user, database, false)?;
-        let shard = conn
+        let pools: Vec<_> = conn
             .cluster()?
             .shards()
-            .choose(&mut rand::rng())
-            .expect("to have at least one shard");
-        let pool = shard
-            .pool_iter()
-            .choose(&mut rand::rng())
-            .expect("to have at least one pool");
+            .iter()
+            .flat_map(|shard| shard.pool_iter())
+            .collect();
+        let pool = validation_pool(&pools, token).clone();
         let server_auth = pool.addr().server_auth;
 
         let entry = self.insert(&key, server_auth);
@@ -266,7 +290,61 @@ pub(crate) struct TokenCacheStats {
 
 #[cfg(test)]
 mod test {
+    use pgdog_config::Role;
+
     use super::*;
+    use crate::backend::pool::{Address, PoolConfig};
+
+    fn rds_pool(host: &str, role: Role) -> Pool {
+        Pool::new(&PoolConfig {
+            address: Address {
+                host: host.into(),
+                server_auth: ServerAuth::RdsIam,
+                configured_role: role,
+                ..Address::new_test()
+            },
+            config: Default::default(),
+        })
+    }
+
+    #[test]
+    fn test_validation_pool_is_on_the_endpoint_the_token_was_signed_for() {
+        let primary = rds_pool("db.abc.us-east-1.rds.amazonaws.com", Role::Primary);
+        let replica = rds_pool("db-ro.abc.us-east-1.rds.amazonaws.com", Role::Replica);
+        let pools = [&primary, &replica];
+
+        for _ in 0..100 {
+            let pool = validation_pool(
+                &pools,
+                "db-ro.abc.us-east-1.rds.amazonaws.com:5432/?Action=connect&DBUser=pgdog",
+            );
+            assert_eq!(pool.addr().host, replica.addr().host);
+
+            let pool = validation_pool(
+                &pools,
+                "DB.abc.us-east-1.rds.amazonaws.com:5432/?Action=connect&DBUser=pgdog",
+            );
+            assert_eq!(pool.addr().host, primary.addr().host);
+        }
+    }
+
+    #[test]
+    fn test_validation_pool_is_random_when_no_endpoint_matches() {
+        let primary = rds_pool("db.abc.us-east-1.rds.amazonaws.com", Role::Primary);
+        let replica = rds_pool("db-ro.abc.us-east-1.rds.amazonaws.com", Role::Replica);
+        let pools = [&primary, &replica];
+
+        for token in [
+            "other.abc.us-east-1.rds.amazonaws.com:5432/?Action=connect&DBUser=pgdog",
+            "db.abc.us-east-1.rds.amazonaws.com:5433/?Action=connect&DBUser=pgdog",
+            "eyJhbGciOiJSUzI1NiJ9.e30.sig",
+        ] {
+            let hosts: std::collections::HashSet<_> = (0..200)
+                .map(|_| validation_pool(&pools, token).addr().host.clone())
+                .collect();
+            assert_eq!(hosts.len(), 2, "{token}");
+        }
+    }
 
     #[tokio::test]
     async fn test_expired_key_is_validated_again() {

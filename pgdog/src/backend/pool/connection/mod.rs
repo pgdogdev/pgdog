@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     super::{Error, pool::Guard},
-    Address, Cluster, Request,
+    Address, Cluster, LbRequest,
 };
 
 use std::{
@@ -152,7 +152,11 @@ impl Connection {
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    pub(crate) async fn connect(
+        &mut self,
+        request: &LbRequest<'_>,
+        route: &Route,
+    ) -> Result<(), Error> {
         self.ensure_connected(request, route).await?;
 
         Ok(())
@@ -173,7 +177,11 @@ impl Connection {
     }
 
     /// Make sure we have all required shard connections to serve the request.
-    async fn ensure_connected(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    async fn ensure_connected(
+        &mut self,
+        request: &LbRequest<'_>,
+        route: &Route,
+    ) -> Result<(), Error> {
         if matches!(
             self.binding,
             Binding::NotConnected | Binding::Transaction(_)
@@ -209,7 +217,11 @@ impl Connection {
     }
 
     /// Try to get a connection for the given route.
-    async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    async fn connect_internal(
+        &mut self,
+        request: &LbRequest<'_>,
+        route: &Route,
+    ) -> Result<(), Error> {
         // Start a transaction on the server(s) if client started one.
         let (is_read, transaction_stmt) =
             if let Binding::Transaction(ref mut transaction) = self.binding {
@@ -271,7 +283,10 @@ impl Connection {
     }
 
     /// Get server parameters.
-    pub(crate) async fn parameters(&mut self, request: &Request) -> Result<Arc<Parameters>, Error> {
+    pub(crate) async fn parameters(
+        &mut self,
+        request: &LbRequest<'_>,
+    ) -> Result<Arc<Parameters>, Error> {
         if matches!(self.binding, Binding::Admin(_)) {
             return Ok(ADMIN_PARAMETERS.clone());
         }
@@ -289,7 +304,7 @@ impl Connection {
         }
     }
 
-    async fn try_parameters(&mut self, request: &Request) -> Result<Arc<Parameters>, Error> {
+    async fn try_parameters(&mut self, request: &LbRequest<'_>) -> Result<Arc<Parameters>, Error> {
         // Get params from the first database that answers.
         // Parameters are cached on the pool.
         for shard in self.cluster()?.shards() {

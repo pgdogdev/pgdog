@@ -137,15 +137,17 @@ impl From<crate::frontend::Error> for Error {
 }
 
 impl Error {
-    /// Checkout timeout.
+    /// Checkout failed because no eligible server was available.
     pub(crate) fn no_server(&self) -> bool {
         use crate::backend::pool::Error as PoolError;
-        match self {
-            // These are recoverable errors.
-            Error::Pool(PoolError::CheckoutTimeout) => true,
-            Error::Pool(PoolError::AllReplicasDown) => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::Pool(
+                PoolError::CheckoutTimeout
+                    | PoolError::AllReplicasDown
+                    | PoolError::NoReplicaWithLabel
+            )
+        )
     }
 
     /// It's not a supported feature so we should tell the client so.

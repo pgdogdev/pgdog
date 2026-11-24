@@ -26,7 +26,7 @@ async fn two_pc_subset_commit_counts() {
     let pid = FrontendPid::new();
     for shard in [1, 2] {
         connection
-            .connect(&Request::default(), &route(Shard::Direct(shard), false))
+            .connect(&LbRequest::default(), &route(Shard::Direct(shard), false))
             .await
             .unwrap();
         connection
@@ -58,7 +58,7 @@ async fn two_pc_missing_participants_not_counted() {
 
     let mut connection = test_connection();
     connection
-        .connect(&Request::default(), &route(Shard::All, false))
+        .connect(&LbRequest::default(), &route(Shard::All, false))
         .await
         .unwrap();
     connection
@@ -90,7 +90,7 @@ async fn two_pc_recovery_subset() {
     let pid = FrontendPid::new();
     for shard in [1, 2] {
         connection
-            .connect(&Request::default(), &route(Shard::Direct(shard), false))
+            .connect(&LbRequest::default(), &route(Shard::Direct(shard), false))
             .await
             .unwrap();
         connection
@@ -111,7 +111,7 @@ async fn two_pc_recovery_subset() {
     )
     .unwrap();
     recovery
-        .connect(&Request::default(), &route(Shard::All, false))
+        .connect(&LbRequest::default(), &route(Shard::All, false))
         .await
         .unwrap();
     let recovered = recovery
@@ -142,7 +142,7 @@ async fn test_connection_upgrade() {
     let params = ParameterStore::new(new_test("test_connection_connect_upgrade"));
 
     connection
-        .connect(&Request::default(), &route(Shard::Direct(0), true))
+        .connect(&LbRequest::default(), &route(Shard::Direct(0), true))
         .await
         .unwrap();
 
@@ -161,7 +161,7 @@ async fn test_connection_upgrade() {
     }
 
     connection
-        .connect(&Request::default(), &route(Shard::Direct(1), true))
+        .connect(&LbRequest::default(), &route(Shard::Direct(1), true))
         .await
         .unwrap();
     assert_eq!(2, connection.connected_servers());
@@ -179,7 +179,7 @@ async fn test_connection_upgrade() {
     }
 
     connection
-        .connect(&Request::default(), &route(Shard::All, false))
+        .connect(&LbRequest::default(), &route(Shard::All, false))
         .await
         .unwrap();
     assert_eq!(3, connection.connected_servers());

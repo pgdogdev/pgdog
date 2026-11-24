@@ -1,4 +1,4 @@
-use super::{Request, Shard};
+use super::{LbRequest, Shard};
 use crate::{
     backend::{Error, Server},
     net::DataRow,
@@ -26,7 +26,7 @@ impl Oids {
     pub(crate) async fn load(&self, shard: &Shard) -> Result<&OidMappings, Error> {
         self.mappings
             .get_or_try_init(|| async {
-                let mut server = shard.primary_or_replica(&Request::default()).await?;
+                let mut server = shard.primary_or_replica(&LbRequest::default()).await?;
                 let oids = load_oids(&mut server).await?;
                 let server_addr = server.addr().clone();
                 drop(server);

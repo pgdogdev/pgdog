@@ -2,6 +2,7 @@ pub mod array;
 pub mod bigint;
 pub mod boolean;
 pub mod data;
+pub mod date;
 pub mod datum;
 pub mod double;
 pub mod error;
@@ -24,6 +25,7 @@ pub mod vector;
 
 pub use array::Array;
 pub use data::Data;
+pub use date::Date;
 pub use datum::{DataType, Datum};
 pub use double::Double;
 pub use error::Error;

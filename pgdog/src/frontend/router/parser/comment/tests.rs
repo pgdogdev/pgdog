@@ -168,11 +168,53 @@ fn test_replica_role_detection() {
 }
 
 #[test]
-fn test_invalid_role_detection() {
-    let schema = test_schema();
-    let query = "SELECT * FROM users /* pgdog_role: invalid */";
-    let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.comment.role, None);
+fn test_label_detection() {
+    let schema = lookup_schema();
+    for label in [
+        "analytics",
+        "primary-us",
+        "replica_2",
+        "eu/west",
+        "a*b",
+        "東京",
+    ] {
+        for query in [
+            format!("/* pgdog_role: {label} */ SELECT 1"),
+            format!("SELECT 1 /* pgdog_role:{label}*/"),
+            format!("/* pgdog_role: {label}\tpgdog_shard: 1 */ SELECT 1"),
+            format!("/* pgdog_role: {label} pgdog_sharding_key: 42 */ SELECT 1"),
+        ] {
+            let result = parse_edge_comment(&query, &schema).expect("valid label directive");
+            assert_eq!(result.comment.role, None, "{query}");
+            assert_eq!(result.comment.label.as_deref(), Some(label), "{query}");
+        }
+    }
+}
+
+#[test]
+fn test_role_value_boundaries() {
+    for (value, role, label) in [
+        ("primary", Some(Role::Primary), None),
+        ("replica", Some(Role::Replica), None),
+        ("", None, None),
+        ("analytics extra", None, Some("analytics")),
+        ("analytics\nextra", None, Some("analytics")),
+    ] {
+        let query = format!("/* pgdog_role:{value}*/ SELECT 1");
+        let result = parse_edge_comment(&query, &test_schema()).expect("valid directive");
+        assert_eq!(result.comment.role, role);
+        assert_eq!(result.comment.label.as_deref(), label);
+    }
+}
+
+#[test]
+fn test_leading_label_takes_precedence() {
+    let result = parse_edge_comment(
+        "/* pgdog_role: analytics */ SELECT 1 /* pgdog_role: reporting */",
+        &test_schema(),
+    )
+    .expect("valid label directives");
+    assert_eq!(result.comment.label.as_deref(), Some("analytics"));
 }
 
 #[test]

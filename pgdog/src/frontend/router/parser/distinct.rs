@@ -34,8 +34,12 @@ impl<'a> Distinct<'a> {
             .distinct_clause()
             .iter()
             .filter_map(|node| match node {
+                // Postgres counts SELECT list positions from 1 and rejects
+                // anything lower itself, so there is no column to record.
                 Node::A_Const(c) => Some(DistinctColumn::Index(
-                    c.val()?.numeric_value::<i32>()? as usize - 1,
+                    usize::try_from(c.val()?.numeric_value::<i32>()?)
+                        .ok()?
+                        .checked_sub(1)?,
                 )),
                 // org_id -> [*org_id*]
                 // t.org_id -> [t, *org_id*]
@@ -51,5 +55,29 @@ impl<'a> Distinct<'a> {
             .collect();
 
         Some(DistinctBy::Columns(columns))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn distinct(sql: &str) -> Option<DistinctBy> {
+        let ast = pg_raw_parse::parse(sql).expect("valid SQL");
+        let Some(Node::SelectStmt(stmt)) = ast.stmts().next() else {
+            panic!("not a select");
+        };
+        Distinct::new(stmt).distinct()
+    }
+
+    #[test]
+    fn test_distinct_on_ordinal_below_one_is_left_to_postgres() {
+        // Postgres rejects both: "DISTINCT ON position 0 is not in select list".
+        for sql in [
+            "SELECT DISTINCT ON (0) id FROM sharded",
+            "SELECT DISTINCT ON (-1) id FROM sharded",
+        ] {
+            assert_eq!(distinct(sql), Some(DistinctBy::Columns(vec![])), "{sql}");
+        }
     }
 }

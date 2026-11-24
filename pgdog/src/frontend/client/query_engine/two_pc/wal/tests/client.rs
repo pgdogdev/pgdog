@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
-use crate::backend::pool::Request;
+use crate::backend::pool::LbRequest;
 use crate::backend::{Cluster, databases::databases};
 use crate::config;
 use crate::frontend::client::query_engine::TwoPcPhase;
@@ -29,7 +29,7 @@ impl TwoPcTestClient {
         let mut conns = vec![];
 
         for shard in self.cluster.shards() {
-            conns.push(shard.primary(&Request::default()).await.unwrap());
+            conns.push(shard.primary(&LbRequest::default()).await.unwrap());
         }
 
         let txn = TwoPcTransaction::new();
@@ -117,7 +117,7 @@ impl TwoPcTestClient {
         let mut transactions = HashSet::new();
 
         for shard in self.cluster.shards() {
-            let mut server = shard.primary(&Request::default()).await.unwrap();
+            let mut server = shard.primary(&LbRequest::default()).await.unwrap();
             let records: Vec<DataRow> = server
                 .fetch_all("SELECT gid FROM pg_prepared_xacts")
                 .await

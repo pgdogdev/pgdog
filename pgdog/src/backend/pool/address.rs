@@ -49,6 +49,11 @@ pub(crate) struct Address {
     /// back to the `[general]` settings.
     #[serde(default)]
     pub(crate) tls: ServerTls,
+    /// Labels.
+    pub(crate) labels: Vec<String>,
+    /// Labels are required for this host to be included in the load balancer
+    /// target list.
+    pub(crate) label_required: bool,
 }
 
 impl Address {
@@ -92,6 +97,8 @@ impl Address {
             database_number,
             configured_role: database.role,
             tls: database.tls.clone(),
+            labels: database.labels.clone(),
+            label_required: database.label_required,
         }
     }
 
@@ -187,6 +194,7 @@ impl Address {
             // The database number will change if we remove a replica.
             other.database_number = self.database_number;
             other.passwords = self.passwords.clone();
+            other.labels = self.labels.clone(); // A change in labels doesn't require a reconnect.
             self == &other
         } else {
             true
@@ -224,6 +232,8 @@ impl Address {
             database_number: 0,
             configured_role: Role::Primary,
             tls: ServerTls::default(),
+            labels: vec![],
+            label_required: false,
         }
     }
 }

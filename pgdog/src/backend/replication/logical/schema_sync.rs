@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use crate::backend::{
     self, Cluster, Schema,
     databases::{databases, reload_from_existing},
-    pool::{Guard, Request},
+    pool::{Guard, LbRequest},
     schema::sync::{PgDump, SchemaSyncError, Statement, pg_dump::PgDumpOutput},
 };
 
@@ -61,7 +61,7 @@ impl SchemaSync {
             |shard| async move {
                 let mut primary = self
                     .destination
-                    .primary(shard, &Request::default())
+                    .primary(shard, &LbRequest::default())
                     .await
                     .ok()?;
                 server_version(&mut primary).await.ok().flatten()
@@ -85,7 +85,10 @@ impl SchemaSync {
 
     /// Take a connection to one destination shard, to apply statements through.
     pub(crate) async fn shard(&self, shard: usize) -> Result<ShardRestore, SchemaSyncError> {
-        let primary = self.destination.primary(shard, &Request::default()).await?;
+        let primary = self
+            .destination
+            .primary(shard, &LbRequest::default())
+            .await?;
 
         info!(
             "syncing schema into shard {} [{}, {}]",
@@ -206,7 +209,7 @@ mod tests {
         cluster.launch();
 
         ShardRestore {
-            primary: cluster.primary(0, &Request::default()).await.unwrap(),
+            primary: cluster.primary(0, &LbRequest::default()).await.unwrap(),
         }
     }
 
