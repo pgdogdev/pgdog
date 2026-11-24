@@ -1,6 +1,6 @@
 use super::prelude::*;
 use crate::{
-    backend::{Cluster, pool::Request},
+    backend::{Cluster, pool::LbRequest},
     expect_message,
     net::{CommandComplete, DataRow, ErrorResponse, ReadyForQuery},
 };
@@ -17,7 +17,7 @@ async fn two_pc_client(auto: bool) -> (TestClient, Cluster) {
 }
 
 async fn execute_on_shard(cluster: &Cluster, shard: usize, query: String) -> String {
-    let mut server = cluster.primary(shard, &Request::default()).await.unwrap();
+    let mut server = cluster.primary(shard, &LbRequest::default()).await.unwrap();
     let messages = server.execute(query).await.unwrap();
     let complete = messages
         .iter()

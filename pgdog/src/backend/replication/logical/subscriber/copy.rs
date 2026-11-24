@@ -458,7 +458,7 @@ mod test {
 
     use crate::{
         backend::{
-            pool::Request, replication::publisher::PublicationTable, server::test::test_server,
+            pool::LbRequest, replication::publisher::PublicationTable, server::test::test_server,
         },
         config::config,
         frontend::router::parser::binary::{Data, header::Header, tuple::Tuple},
@@ -473,7 +473,7 @@ mod test {
     ) -> Result<(), crate::backend::Error> {
         let query: Query = query.into();
         for shard in 0..cluster.shards().len() {
-            let mut server = cluster.primary(shard, &Request::default()).await?;
+            let mut server = cluster.primary(shard, &LbRequest::default()).await?;
             server.execute(query.clone()).await?;
         }
 
@@ -535,7 +535,7 @@ mod test {
             .copy_done(&CancellationToken::new())
             .await
             .unwrap();
-        let mut server = cluster.primary(0, &Request::default()).await.unwrap();
+        let mut server = cluster.primary(0, &LbRequest::default()).await.unwrap();
         let count = server
             .fetch_all::<i64>("SELECT COUNT(*)::BIGINT FROM pgdog.sharded")
             .await

@@ -136,14 +136,29 @@ impl Listener {
 
     async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
+        let comms = comms();
 
         info!(
             "waiting up to {:.3}s for {} clients to finish transactions",
             shutdown_timeout.as_secs_f64(),
-            comms().tracker().len(),
+            comms.tracker().len(),
         );
 
-        let comms = comms();
+        let idle = databases()
+            .all()
+            .values()
+            .map(|cluster| {
+                cluster
+                    .shards()
+                    .iter()
+                    .flat_map(|shard| shard.pool_iter().map(|pool| pool.dump_idle()))
+                    .sum::<usize>()
+            })
+            .sum::<usize>();
+
+        if idle > 0 {
+            info!("closing {} idle server connections", idle);
+        }
 
         if safe_timeout(shutdown_timeout, comms.tracker().wait())
             .await

@@ -1,6 +1,6 @@
 use super::prelude::*;
 use crate::{
-    backend::pool::Request,
+    backend::pool::LbRequest,
     expect_message,
     net::{BindComplete, CommandComplete, ParseComplete, ReadyForQuery},
 };
@@ -41,7 +41,7 @@ async fn bind_transaction_end(sql: &str) {
     client.send_simple(Query::new("ROLLBACK")).await;
     client.read_until('Z').await.unwrap();
 
-    let mut server = cluster.primary(0, &Request::default()).await.unwrap();
+    let mut server = cluster.primary(0, &LbRequest::default()).await.unwrap();
     let cleanup = server
         .execute(format!("DELETE FROM sharded WHERE id = {id}"))
         .await

@@ -95,6 +95,7 @@ pub(crate) fn parse_edge_comment<'a>(
         None => Directive {
             shard_or_lookup: None,
             role: None,
+            label: None,
             sharding_key: None,
             lsn: None,
         },
@@ -106,6 +107,9 @@ pub(crate) fn parse_edge_comment<'a>(
         }
         if directive.role.is_none() {
             directive.role = t_directive.role;
+        }
+        if directive.label.is_none() {
+            directive.label = t_directive.label;
         }
         if directive.sharding_key.is_none() {
             directive.sharding_key = t_directive.sharding_key;
@@ -129,6 +133,7 @@ pub(crate) fn parse_edge_comment<'a>(
             shard: directive.shard_or_lookup,
             role: directive.role,
             lsn: directive.lsn,
+            label: directive.label,
         },
         spans,
     })

@@ -172,7 +172,7 @@ mod test {
     use pgdog_config::MirrorConfig;
 
     use crate::{
-        backend::{Error as BackendError, pool::Request},
+        backend::{Error as BackendError, pool::LbRequest},
         config::{self, PoolerMode, PreparedStatementsLevel},
         net::{Parameter, Parameters, Query},
         util::safe_timeout,
@@ -241,7 +241,7 @@ mod test {
         let cluster = Cluster::new_test(&config());
         cluster.launch();
         let mut mirror = Mirror::spawn("pgdog", &cluster, None).unwrap();
-        let mut conn = cluster.primary(0, &Request::default()).await.unwrap();
+        let mut conn = cluster.primary(0, &LbRequest::default()).await.unwrap();
         conn.execute("DROP TABLE IF EXISTS pgdog.test_mirror")
             .await
             .expect("clear the mirror fixture");

@@ -1,6 +1,8 @@
 use crate::{
     expect_message,
-    net::{CommandComplete, DataRow, Parameters, Query, ReadyForQuery, RowDescription},
+    net::{
+        CommandComplete, DataRow, ErrorResponse, Parameters, Query, ReadyForQuery, RowDescription,
+    },
 };
 
 use rust_decimal::Decimal;
@@ -356,6 +358,34 @@ async fn test_sharded_distinct_on_sharding_key_merges_shards() {
         )))
         .await;
     client.read_until('Z').await.unwrap();
+}
+
+#[tokio::test]
+async fn test_sharded_distinct_on_invalid_ordinal_returns_postgres_error() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    for ordinal in [0, -1] {
+        client
+            .send_simple(Query::new(format!(
+                "SELECT DISTINCT ON ({ordinal}) id FROM sharded"
+            )))
+            .await;
+
+        let error = expect_message!(client.read().await, ErrorResponse);
+        assert_eq!(error.code, "42P10");
+        assert_eq!(
+            error.message,
+            format!("DISTINCT ON position {ordinal} is not in select list")
+        );
+        // Every shard rejects the query, and nothing but errors precede ReadyForQuery.
+        loop {
+            let message = client.read().await;
+            if message.code() == 'Z' {
+                break;
+            }
+            assert_eq!(message.code(), 'E');
+        }
+    }
 }
 
 #[tokio::test]

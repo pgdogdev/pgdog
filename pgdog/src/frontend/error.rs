@@ -77,16 +77,13 @@ impl From<crate::frontend::client::query_engine::multi_step::error::Error> for E
 
 impl Error {
     pub(crate) fn disconnect(&self) -> bool {
-        if let Error::Net(crate::net::Error::Io(err)) = self
-            && err.kind() == ErrorKind::UnexpectedEof
-        {
-            return true;
+        match self {
+            Error::Net(crate::net::Error::UnexpectedEof) => true,
+            Error::Net(crate::net::Error::Io(err)) => matches!(
+                err.kind(),
+                ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+            ),
+            _ => false,
         }
-
-        if let Error::Net(crate::net::Error::UnexpectedEof) = self {
-            return true;
-        }
-
-        false
     }
 }

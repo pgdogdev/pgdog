@@ -11,6 +11,7 @@ pub(in crate::frontend) struct RoutingComment {
     pub(super) role: Option<Role>,
     pub(super) sharding_key: Option<String>,
     pub(super) lsn: Option<Lsn>,
+    pub(super) label: Option<String>,
 }
 
 impl RoutingComment {
@@ -21,6 +22,7 @@ impl RoutingComment {
             role: None,
             sharding_key: None,
             lsn: None,
+            label: None,
         }
     }
 }

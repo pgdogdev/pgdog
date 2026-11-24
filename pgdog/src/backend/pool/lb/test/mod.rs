@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::task::yield_now;
 use tokio::time::{Instant, sleep, timeout};
 
-use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
+use crate::backend::pool::{Address, Config, Error, LbRequest, PoolConfig};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
 use crate::frontend::router::Route;
@@ -14,6 +14,7 @@ use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 use super::*;
 use monitor::Monitor;
 
+mod label;
 mod primary_reads;
 mod role_detection;
 
@@ -95,7 +96,7 @@ impl<S: test_lb_builder::IsComplete> TestLbBuilder<'_, S> {
 }
 
 async fn checkout_shares(lb: &LoadBalancer, checkouts: usize) -> Vec<usize> {
-    let request = Request::default();
+    let request = LbRequest::default();
     let mut shares = vec![0; lb.targets.len()];
     for _ in 0..checkouts {
         let conn = lb.get(&request).await.unwrap();
@@ -144,7 +145,7 @@ async fn test_include_primary_if_replica_banned_only_primary() {
         .rw_split(ReadWriteSplit::IncludePrimaryIfReplicaBanned)
         .launch();
 
-    let conn = lb.get(&Request::default()).await.unwrap();
+    let conn = lb.get(&LbRequest::default()).await.unwrap();
     drop(conn);
 
     lb.shutdown();
@@ -353,7 +354,7 @@ async fn test_replica_ban_clears_idle_connections() {
     let replicas = setup_test_replicas();
 
     // Get a connection and return it to create idle connections
-    let request = Request::default();
+    let request = LbRequest::default();
     let conn = replicas.pools()[0]
         .get(&request)
         .await
@@ -437,7 +438,7 @@ async fn test_read_write_split_exclude_primary() {
         .rw_split(ReadWriteSplit::ExcludePrimary)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Try getting connections multiple times and verify primary is never used
     let mut replica_ids = HashSet::new();
@@ -474,7 +475,7 @@ async fn test_lsn_filtering() {
 
         let mut route = Route::read(ShardWithPriority::default());
         route.lsn = Some(caught_up);
-        let request = Request::new(Default::default(), &route, false, Instant::now());
+        let request = LbRequest::new(Default::default(), &route, false, Instant::now());
 
         // A replica exactly at the requested LSN is eligible; the lagging one is not.
         for _ in 0..4 {
@@ -484,7 +485,7 @@ async fn test_lsn_filtering() {
 
         // Fall back to primary when every replica is behind the requested LSN.
         route.lsn = Some(ahead);
-        let request = Request::new(Default::default(), &route, false, Instant::now());
+        let request = LbRequest::new(Default::default(), &route, false, Instant::now());
         let conn = replicas.get(&request).await.expect("primary fallback");
         assert_eq!(conn.pool.id(), primary_id);
     }
@@ -509,7 +510,7 @@ async fn test_include_primary_if_replica_lag() {
         let mut route = Route::read(ShardWithPriority::default());
         for lsn in [None, Some(200), Some(201)] {
             route.lsn = lsn;
-            let request = Request::new(Default::default(), &route, read_only, Instant::now());
+            let request = LbRequest::new(Default::default(), &route, read_only, Instant::now());
 
             // Round robin must never select the primary while an eligible replica exists.
             for _ in 0..4 {
@@ -526,7 +527,7 @@ async fn test_include_primary_if_replica_lag() {
     replicas.shutdown();
 }
 
-/// Sets the `Request.read_only` (normally derived from `User.read_only`) to true,
+/// Sets the `LbRequest.read_only` (normally derived from `User.read_only`) to true,
 /// then ensures that the primary is not chosen for reads. We have replicas available.
 #[tokio::test]
 async fn test_user_read_only_include_primary() {
@@ -545,12 +546,8 @@ async fn test_user_read_only_include_primary() {
         .launch();
 
     // Notice that we `read` to true and `read_only` to true.
-    let request = Request::new(
-        Default::default(),
-        &Route::read(ShardWithPriority::default()),
-        true,
-        Instant::now(),
-    );
+    let route = Route::read(ShardWithPriority::default());
+    let request = LbRequest::new(Default::default(), &route, true, Instant::now());
 
     // Try getting connections multiple times and verify primary is never used
     let mut replica_ids = HashSet::new();
@@ -570,7 +567,7 @@ async fn test_user_read_only_include_primary() {
     replicas.shutdown();
 }
 
-/// Sets the `Request.read_only` (normally derived from `User.read_only`) to true,
+/// Sets the `LbRequest.read_only` (normally derived from `User.read_only`) to true,
 /// then ensures that the primary IS chosen for reads. We have no usable replicas.
 #[tokio::test]
 async fn test_user_read_only_include_primary_no_replicas() {
@@ -591,12 +588,8 @@ async fn test_user_read_only_include_primary_no_replicas() {
 
     // `read_only` is set to true. This would usually override `IncludePrimary`,
     // but we have no replicas available.
-    let request = Request::new(
-        Default::default(),
-        &Route::read(ShardWithPriority::default()),
-        true,
-        Instant::now(),
-    );
+    let route = Route::read(ShardWithPriority::default());
+    let request = LbRequest::new(Default::default(), &route, true, Instant::now());
 
     // Should only use primary since replica is banned
     let mut used_pool_ids = HashSet::new();
@@ -629,7 +622,7 @@ async fn test_read_write_split_include_primary() {
         .configs(&replica_configs)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Try getting connections multiple times and verify both primary and replica can be used
     let mut used_pool_ids = HashSet::new();
@@ -681,7 +674,7 @@ async fn test_prefer_primary_optin_read_honors_read_write_split() {
             .rw_split(split)
             .launch();
 
-        let request = Request::default();
+        let request = LbRequest::default();
         let mut ids = HashSet::new();
         for _ in 0..50 {
             let conn = lb.get(&request).await.unwrap();
@@ -725,7 +718,7 @@ async fn test_read_write_split_exclude_primary_no_replicas() {
         .rw_split(ReadWriteSplit::ExcludePrimary)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Try getting connections multiple times and we have primary in the set
     let mut used_pool_ids = HashSet::new();
@@ -758,7 +751,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
         .rw_split(ReadWriteSplit::ExcludePrimary)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Should work normally with just replicas
     let mut replica_ids = HashSet::new();
@@ -793,7 +786,7 @@ async fn test_read_write_split_exclude_primary_all_replicas_banned() {
         .ban
         .ban(Error::ServerError, Duration::from_secs(60));
 
-    let result = replicas.get(&Request::default()).await;
+    let result = replicas.get(&LbRequest::default()).await;
     assert!(
         matches!(result, Err(Error::AllReplicasDown)),
         "exclude_primary must not send reads to the primary when all replicas are banned"
@@ -821,7 +814,7 @@ async fn test_read_write_split_exclude_primary_one_replica_banned() {
         .ban(Error::ServerError, Duration::from_secs(60));
 
     let healthy_id = replicas.targets[1].pool.id();
-    let request = Request::default();
+    let request = LbRequest::default();
     for _ in 0..20 {
         let conn = replicas.get(&request).await.unwrap();
         assert_eq!(conn.pool.id(), healthy_id);
@@ -840,7 +833,7 @@ async fn test_read_write_split_include_primary_no_primary() {
 
     let replicas = test_lb().configs(&replica_configs).launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Should work normally with just replicas
     let mut replica_ids = HashSet::new();
@@ -872,7 +865,7 @@ async fn test_read_write_split_with_banned_primary() {
     let primary_ban = &replicas.targets.last().unwrap().ban;
     primary_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Should only use replica even though primary inclusion is enabled
     let mut used_pool_ids = HashSet::new();
@@ -909,7 +902,7 @@ async fn test_read_write_split_with_banned_replicas() {
     let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Should only use primary since replica is banned
     let mut used_pool_ids = HashSet::new();
@@ -946,7 +939,7 @@ async fn test_prefer_primary_with_banned_replicas_falls_back_to_primary() {
     let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     let mut used_pool_ids = HashSet::new();
     for _ in 0..10 {
@@ -980,7 +973,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
         .rw_split(ReadWriteSplit::ExcludePrimary)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Collect pool IDs from multiple requests to verify round-robin behavior
     let mut pool_sequence = Vec::new();
@@ -1186,7 +1179,7 @@ async fn test_include_primary_if_replica_banned_no_bans() {
         .rw_split(ReadWriteSplit::IncludePrimaryIfReplicaBanned)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // When no replicas are banned, primary should NOT be used
     let mut used_pool_ids = HashSet::new();
@@ -1224,7 +1217,7 @@ async fn test_include_primary_if_replica_banned_with_ban() {
     let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // When replica is banned, primary SHOULD be used
     let mut used_pool_ids = HashSet::new();
@@ -1513,7 +1506,7 @@ async fn test_auto_mode_waits_for_primary_election() {
     let lb = test_lb().configs(&[config]).build();
 
     assert!(matches!(
-        lb.get_primary(&Request::default()).await,
+        lb.get_primary(&LbRequest::default()).await,
         Err(Error::CheckoutTimeout)
     ));
 }
@@ -1531,7 +1524,7 @@ async fn test_auto_mode_primary_election_releases_writes() {
         assert!(election.redetect_roles());
     });
 
-    let primary = lb.get_primary(&Request::default()).await.unwrap();
+    let primary = lb.get_primary(&LbRequest::default()).await.unwrap();
     assert_eq!(primary.pool.addr().host, "127.0.0.1");
     drop(primary);
     election.await.unwrap();
@@ -1553,7 +1546,7 @@ async fn test_auto_mode_waits_for_each_new_primary() {
     let spawned = {
         let lb = lb.clone();
 
-        tokio::spawn(async move { lb.get_primary(&Request::default()).await })
+        tokio::spawn(async move { lb.get_primary(&LbRequest::default()).await })
     };
 
     // assert that the background wait is in progress
@@ -1579,7 +1572,7 @@ async fn test_auto_mode_waits_for_each_new_primary() {
     let spawned = {
         let lb = lb.clone();
 
-        tokio::spawn(async move { lb.get_primary(&Request::default()).await })
+        tokio::spawn(async move { lb.get_primary(&LbRequest::default()).await })
     };
 
     yield_now().await;
@@ -1628,7 +1621,7 @@ async fn test_static_replica_only_does_not_wait_for_primary() {
 
     let started = Instant::now();
     assert!(matches!(
-        lb.get_primary(&Request::default()).await,
+        lb.get_primary(&LbRequest::default()).await,
         Err(Error::NoPrimary)
     ));
     assert!(started.elapsed() < Duration::from_millis(100));
@@ -1709,7 +1702,7 @@ async fn test_weighted_round_robin_smooth_distribution() {
         .strategy(LoadBalancingStrategy::WeightedRoundRobin)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     let pool_a = lb.targets[0].pool.id();
     let pool_b = lb.targets[1].pool.id();
@@ -1737,7 +1730,7 @@ async fn test_weighted_round_robin_equal_weights() {
         .strategy(LoadBalancingStrategy::WeightedRoundRobin)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     let pool_a = lb.targets[0].pool.id();
     let pool_b = lb.targets[1].pool.id();
@@ -1843,7 +1836,7 @@ async fn test_get_returns_all_replicas_down_when_all_targets_banned() {
             .bans(&[0, 1])
             .launch();
 
-        let result = lb.get(&Request::default()).await;
+        let result = lb.get(&LbRequest::default()).await;
 
         assert!(
             matches!(result, Err(Error::AllReplicasDown)),
@@ -1880,7 +1873,7 @@ async fn test_least_active_connections_prefers_pool_with_fewer_checked_out() {
         .strategy(LoadBalancingStrategy::LeastActiveConnections)
         .launch();
 
-    let request = Request::default();
+    let request = LbRequest::default();
 
     // Get first connection and hold it
     let conn1 = replicas.get(&request).await.unwrap();
@@ -2406,7 +2399,7 @@ fn test_ban_check_default_threshold_clears_expired_ban_despite_high_lag() {
 async fn test_params_returns_params_from_non_banned_target() {
     let replicas = setup_test_replicas();
 
-    let request = Request::default();
+    let request = LbRequest::default();
     let result = replicas.params(&request).await;
 
     assert!(result.is_ok(), "params() should succeed when targets exist");
@@ -2423,7 +2416,7 @@ async fn test_params_returns_all_replicas_down_when_all_banned() {
         target.ban.ban(Error::ServerError, Duration::from_secs(60));
     }
 
-    let request = Request::default();
+    let request = LbRequest::default();
     let result = replicas.params(&request).await;
 
     assert!(
@@ -2443,7 +2436,7 @@ async fn test_params_skips_banned_targets() {
         .ban
         .ban(Error::ServerError, Duration::from_secs(60));
 
-    let request = Request::default();
+    let request = LbRequest::default();
     let result = replicas.params(&request).await;
 
     assert!(
@@ -2458,7 +2451,7 @@ async fn test_params_skips_banned_targets() {
 async fn test_params_returns_all_replicas_down_when_empty() {
     let replicas = test_lb().configs(&[]).build();
 
-    let request = Request::default();
+    let request = LbRequest::default();
     let result = replicas.params(&request).await;
 
     assert!(
@@ -2572,7 +2565,7 @@ async fn test_get_returns_offline_when_all_targets_banned_and_offline() {
         .build();
     replicas.shutdown();
 
-    let result = replicas.get(&Request::default()).await;
+    let result = replicas.get(&LbRequest::default()).await;
 
     assert!(matches!(result, Err(Error::Offline)));
 }

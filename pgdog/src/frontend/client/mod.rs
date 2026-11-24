@@ -19,7 +19,7 @@ use crate::auth::{AUTH_TOKEN_CACHE, AuthResult, md5, scram::Server};
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
     databases,
-    pool::{Connection, Request},
+    pool::{Connection, LbRequest},
 };
 use crate::backend::{maintenance_mode, passthrough_auth};
 use crate::config::convert::user_from_params;
@@ -33,7 +33,7 @@ use crate::net::{MessageBuffer, ParameterStatus, ProtocolMessage, Stream};
 use crate::parameters::{ParameterStore, Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
-use crate::util::{safe_timeout, user_database_from_params};
+use crate::util::{random_string, safe_timeout, user_database_from_params};
 
 pub(crate) mod query_engine;
 pub(crate) mod sticky;
@@ -213,11 +213,10 @@ impl Client {
                 stream.send_flush(&challenge).await?;
 
                 let scram = Server::new(passwords);
-                let res = scram.handle(stream).await;
-                if matches!(res, Ok(true)) {
-                    AuthResult::Ok
-                } else {
-                    AuthResult::NoPasswordMatch
+                match scram.handle(stream).await {
+                    Ok(true) => AuthResult::Ok,
+                    Err(err) if err.disconnect() => return Err(err),
+                    _ => AuthResult::NoPasswordMatch,
                 }
             }
 
@@ -359,7 +358,18 @@ impl Client {
                     }
                 }
 
-                Err(_) => AuthResult::NoUserOrDatabase,
+                Err(_) => {
+                    // Give readiness probes a challenge they can disconnect on.
+                    // A missing pair must fail even if the exchange succeeds.
+                    let challenge_type = match auth_type {
+                        AuthType::ExternalToken | AuthType::Trust => AuthType::Scram,
+                        other => other,
+                    };
+                    let dummy = PasswordKind::Plain(random_string(32));
+                    Self::check_password(&mut stream, user, &database, &challenge_type, &[dummy])
+                        .await?;
+                    AuthResult::NoUserOrDatabase
+                }
             }
         };
 
@@ -398,7 +408,7 @@ impl Client {
 
         // Get connection parameters. These will be most likely cached,
         // unless the pool was just created.
-        let server_params = match conn.parameters(&Request::unrouted(id)).await {
+        let server_params = match conn.parameters(&LbRequest::unrouted(id)).await {
             Ok(params) => params,
             Err(err) => {
                 if err.no_server() {

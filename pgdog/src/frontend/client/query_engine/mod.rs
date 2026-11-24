@@ -1,5 +1,5 @@
 use crate::{
-    backend::pool::{Connection, Request},
+    backend::pool::{Connection, LbRequest},
     config::config,
     frontend::{
         BufferedQuery, Client, ClientComms, ClientRequest, Command, DiscardTarget, Error, Router,

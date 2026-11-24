@@ -137,7 +137,7 @@ async fn recovery_setup() -> (SpawnedClient, Guard) {
     use crate::{
         backend::{
             databases::{databases, reload_from_existing},
-            pool::Request,
+            pool::LbRequest,
         },
         config::{config, load_test_sharded, set},
     };
@@ -151,7 +151,7 @@ async fn recovery_setup() -> (SpawnedClient, Guard) {
     reload_from_existing().unwrap();
     let client = SpawnedClient::new(Parameters::default()).await;
     let cluster = databases().cluster(("pgdog", "pgdog")).unwrap();
-    let held = cluster.primary(1, &Request::default()).await.unwrap();
+    let held = cluster.primary(1, &LbRequest::default()).await.unwrap();
 
     (client, held)
 }
@@ -211,17 +211,25 @@ async fn lazy_checkout_failure_outside_transaction_keeps_client_usable() {
     let (mut client, held) = recovery_setup().await;
     // A write targets the exhausted primary pool without changing any rows.
     let sql = "/* pgdog_shard: 1 */ UPDATE sharded SET value = value WHERE false";
-    client.send(Query::new(sql)).await;
-    let failed = timeout(Duration::from_secs(5), client.read_until('E'))
-        .await
-        .expect("checkout failure must reach the client");
-    let error = ErrorResponse::try_from(failed.last().unwrap().clone()).unwrap();
-    assert_eq!(error.severity, "ERROR");
-    assert!(error.message.contains("checkout timeout"), "{error:?}");
-    assert_eq!(
-        expect_message!(client.read().await, ReadyForQuery).status,
-        'I'
-    );
+    for (query, expected_error) in [
+        (sql, "checkout timeout"),
+        (
+            "/* pgdog_role: missing pgdog_shard: 1 */ SELECT 1",
+            "no replica with provided label",
+        ),
+    ] {
+        client.send(Query::new(query)).await;
+        let failed = timeout(Duration::from_secs(5), client.read_until('E'))
+            .await
+            .expect("checkout failure must reach the client");
+        let error = ErrorResponse::try_from(failed.last().unwrap().clone()).unwrap();
+        assert_eq!(error.severity, "ERROR");
+        assert!(error.message.contains(expected_error), "{error:?}");
+        assert_eq!(
+            expect_message!(client.read().await, ReadyForQuery).status,
+            'I'
+        );
+    }
 
     drop(held);
 
