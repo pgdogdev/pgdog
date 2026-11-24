@@ -5,10 +5,11 @@ use tracing::info;
 use crate::api::abort_resharding::AbortReshardingTask;
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
+use crate::backend::replication::logical::run::RunMode;
 use crate::backend::replication::resharding_state::ReshardingState;
 use pgdog_stats::CommandKind;
 
-use super::options::{Options, RunMode};
+use super::options::Options;
 use super::prelude::*;
 
 pub(crate) struct Reshard {
@@ -59,14 +60,17 @@ impl Command for Reshard {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let state = ReshardingState::builder()
+        let mut state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
-            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
+            .mode(self.mode)
             .build()?;
         check_abort!(self, state, CommandKind::Reshard);
+        let resumed = state
+            .check_resume(CommandKind::Reshard, self.replication_slot.as_deref())
+            .await?;
         info!(
             r#"resharding "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
@@ -76,6 +80,7 @@ impl Command for Reshard {
             ReshardTask::builder()
                 .state(state)
                 .auto_cutover(true)
+                .maybe_resumed(resumed)
                 .build(),
         )
         .id();
@@ -93,7 +98,7 @@ impl Command for Reshard {
 /// Return from the command with the abort task's reply when the command runs `WITH (abort)`.
 macro_rules! check_abort {
     ($command:expr, $state:expr, $kind:expr) => {
-        if $command.mode == $crate::admin::options::RunMode::Abort {
+        if $command.mode == $crate::backend::replication::logical::run::RunMode::Abort {
             return $crate::admin::reshard::abort($state, $kind, $command.replication_slot.clone())
                 .await;
         }
@@ -139,6 +144,7 @@ mod test {
                 },
             ),
             ("reshard a b pub (abort)", None, RunMode::Abort),
+            ("reshard a b pub (resume)", None, RunMode::Resume),
         ] {
             let cmd = Reshard::parse(sql).unwrap();
             assert_eq!(cmd.publication, "pub", "{sql}");

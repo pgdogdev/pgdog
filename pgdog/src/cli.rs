@@ -10,6 +10,7 @@ use crate::api::task::TaskError;
 use crate::api::{ReshardingError, run_task};
 use crate::backend::databases::databases;
 use crate::backend::replication::logical::Error::ReplicationAborted;
+use crate::backend::replication::logical::run::RunMode;
 use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::comms::comms;
@@ -266,7 +267,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
             .destination(&to_database)
             .publication(&publication)
             .maybe_replication_slot(replication_slot.clone())
-            .cleanup_on_cancel(cleanup_on_cancel)
+            .mode(RunMode::Run { cleanup_on_cancel })
             .build()?;
 
         if abort {

@@ -4,10 +4,11 @@ use tracing::info;
 
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
+use crate::backend::replication::logical::run::RunMode;
 use crate::backend::replication::resharding_state::ReshardingState;
 use pgdog_stats::CommandKind;
 
-use super::options::{Options, RunMode};
+use super::options::Options;
 use super::prelude::*;
 use super::reshard::check_abort;
 
@@ -71,14 +72,17 @@ impl Command for CopyData {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let state = ReshardingState::builder()
+        let mut state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
-            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
+            .mode(self.mode)
             .build()?;
         check_abort!(self, state, CommandKind::Reshard);
+        let resumed = state
+            .check_resume(CommandKind::Reshard, self.replication_slot.as_deref())
+            .await?;
         info!(
             r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
             self.from_database, self.to_database, self.publication, self.tables_only
@@ -90,6 +94,7 @@ impl Command for CopyData {
             ReshardTask::builder()
                 .state(state)
                 .tables_only(self.tables_only)
+                .maybe_resumed(resumed)
                 .build(),
         )
         .id();
@@ -159,6 +164,7 @@ mod test {
                 },
             ),
             ("copy_data a b pub (abort)", None, RunMode::Abort),
+            ("copy_data a b pub (resume)", None, RunMode::Resume),
         ] {
             let cmd = CopyData::parse(sql).unwrap();
             assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");

@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use super::publisher::{Permanent, ReplicationSlot, Table, permanent_slot_name};
 use super::run::{
     ConfigSnapshot, FORMAT_VERSION, ReshardingCommand, ReshardingKey, ReshardingRecord,
-    ReshardingStore, Stage, TaskOwner, existing_slots,
+    ReshardingStore, RunMode, Stage, TaskOwner, existing_slots,
 };
 use super::subscriber::replication_origin::ReplicationOrigin;
 use super::tables_sync::tables_sync;
@@ -36,8 +36,7 @@ pub(crate) struct ReshardingState {
     inner: Arc<Mutex<ReshardingStateInner>>,
     /// Slot name actually used: the supplied one or a generated one.
     slot_name: String,
-    cleanup_on_cancel: bool,
-    resume: bool,
+    mode: RunMode,
 }
 
 #[derive(Debug, Default)]
@@ -115,8 +114,7 @@ impl ReshardingState {
         destination: &str,
         publication: &str,
         replication_slot: Option<String>,
-        #[builder(default = true)] cleanup_on_cancel: bool,
-        #[builder(default)] resume: bool,
+        #[builder(default)] mode: RunMode,
     ) -> Result<Self, Error> {
         let slot_name = replication_slot
             .unwrap_or(format!("__pgdog_repl_{}", random_string(19).to_lowercase()));
@@ -127,8 +125,7 @@ impl ReshardingState {
             publication: publication.to_owned(),
             inner: Arc::new(Mutex::new(ReshardingStateInner::default())),
             slot_name,
-            cleanup_on_cancel,
-            resume,
+            mode,
         })
     }
 }
@@ -381,7 +378,7 @@ impl ReshardingState {
     }
 
     pub(crate) fn cleanup_on_cancel(&self) -> bool {
-        self.cleanup_on_cancel
+        self.mode.cleanup_on_cancel()
     }
 
     pub(crate) async fn open_run(
@@ -390,12 +387,13 @@ impl ReshardingState {
         task_id: TaskId,
     ) -> Result<(), Error> {
         let store = self.lock_run().await?;
-        let row = if self.resume {
+        let resume = self.mode == RunMode::Resume;
+        let row = if resume {
             Box::pin(self.resume_run(&store, command, task_id)).await
         } else {
             Box::pin(self.start_new_run(&store, command, task_id)).await
         };
-        Box::pin(self.accept_run(store, row, task_id, self.resume)).await
+        Box::pin(self.accept_run(store, row, task_id, resume)).await
     }
 
     async fn lock_run(&self) -> Result<ReshardingStore, Error> {
@@ -553,7 +551,7 @@ impl ReshardingState {
             store,
             id,
             stage,
-            keep_on_stop: resumed || !self.cleanup_on_cancel,
+            keep_on_stop: !self.mode.cleanup_on_cancel(),
         });
         Ok(())
     }
@@ -678,16 +676,18 @@ impl ReshardingState {
         Ok(record)
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn check_resume(
         &mut self,
         command: CommandKind,
         slot: Option<&str>,
-    ) -> Result<ReshardingRecord, Error> {
+    ) -> Result<Option<ReshardingId>, Error> {
+        if self.mode != RunMode::Resume {
+            return Ok(None);
+        }
         let record = self.check_record(command, slot).await?;
         Self::resumable(&record)?;
-        self.slot_name = record.slot_name.clone();
-        Ok(record)
+        self.slot_name = record.slot_name;
+        Ok(Some(record.id))
     }
 
     pub(crate) async fn abort_run(
@@ -895,8 +895,7 @@ mod test {
             publication: publication.into(),
             inner: Arc::new(Mutex::new(ReshardingStateInner::default())),
             slot_name: slot_name.to_owned(),
-            cleanup_on_cancel: true,
-            resume: false,
+            mode: RunMode::default(),
         }
     }
 
@@ -1137,7 +1136,9 @@ mod test {
         remove_resumable(&mut publication.server, name).await;
 
         let mut state = state_for(&source, name);
-        state.cleanup_on_cancel = false;
+        state.mode = RunMode::Run {
+            cleanup_on_cancel: false,
+        };
         start(&state, 1).await.unwrap();
         assert!(!state.keeps_slots());
         assert_eq!(
@@ -1179,7 +1180,7 @@ mod test {
 
     fn keyed_state(source: &Cluster, name: &str, cleanup_on_cancel: bool) -> ReshardingState {
         let mut state = state_with_publication(source, name, &format!("{name}_pub"));
-        state.cleanup_on_cancel = cleanup_on_cancel;
+        state.mode = RunMode::Run { cleanup_on_cancel };
         state
     }
 
@@ -1226,7 +1227,7 @@ mod test {
         task_id: u64,
     ) -> Result<(), Error> {
         let mut checked = state.clone();
-        checked.resume = true;
+        checked.mode = RunMode::Resume;
         let slot = checked.slot_name.clone();
         checked.check_resume(command.kind(), Some(&slot)).await?;
         checked.open_run(command, TaskId::new(task_id)).await
@@ -1667,6 +1668,7 @@ mod test {
         state.cancel_run().await.unwrap();
 
         let mut wrong_slot = keyed_state(&source, name, false);
+        wrong_slot.mode = RunMode::Resume;
         let mismatch = wrong_slot
             .check_resume(CommandKind::Replicate, Some("other"))
             .await;
@@ -1680,7 +1682,7 @@ mod test {
 
         let mut checked = keyed_state(&source, name, false);
         checked.slot_name = "other".into();
-        checked.resume = true;
+        checked.mode = RunMode::Resume;
         checked
             .check_resume(CommandKind::Replicate, None)
             .await

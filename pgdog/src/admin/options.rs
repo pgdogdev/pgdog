@@ -1,26 +1,7 @@
 //! Options of admin commands, in Postgres' `WITH (name 'value', flag)` style.
 
 use super::error::Error;
-
-/// What a resharding admin command does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RunMode {
-    /// Start a run. With `cleanup_on_cancel` false, a stop pauses it.
-    Run { cleanup_on_cancel: bool },
-    /// Abort the unfinished run with the same key.
-    Abort,
-}
-
-impl RunMode {
-    pub(crate) fn cleanup_on_cancel(self) -> bool {
-        !matches!(
-            self,
-            Self::Run {
-                cleanup_on_cancel: false
-            }
-        )
-    }
-}
+use crate::backend::replication::logical::run::RunMode;
 
 /// Options after a command's positional arguments. Each command takes the
 /// options it knows, then calls [`Options::finish`] to reject the rest.
@@ -84,12 +65,22 @@ impl<'a> Options<'a> {
 
     pub(crate) fn run_mode(&mut self) -> Result<RunMode, Error> {
         let abort = self.flag("abort")?;
+        let resume = self.flag("resume")?;
         let cleanup_on_cancel = self.take("cleanup_on_cancel");
+        if abort && resume {
+            return Err(Error::InvalidOption("abort with resume".into()));
+        }
         if abort && cleanup_on_cancel.is_some() {
             return Err(Error::InvalidOption("abort with cleanup_on_cancel".into()));
         }
+        if resume && cleanup_on_cancel.is_some() {
+            return Err(Error::InvalidOption("resume with cleanup_on_cancel".into()));
+        }
         if abort {
             return Ok(RunMode::Abort);
+        }
+        if resume {
+            return Ok(RunMode::Resume);
         }
         match cleanup_on_cancel {
             None | Some(None) | Some(Some("true" | "on")) => Ok(RunMode::Run {
@@ -168,6 +159,7 @@ mod test {
             ("reshard a b with (cleanup_on_cancel off)", PAUSE),
             ("reshard a b (cleanup_on_cancel 'false')", PAUSE),
             ("reshard a b (abort)", RunMode::Abort),
+            ("reshard a b with (resume)", RunMode::Resume),
         ] {
             let (_, mut options) = Options::parse(sql).unwrap();
             assert_eq!(options.run_mode().unwrap(), mode, "{sql}");
@@ -189,6 +181,12 @@ mod test {
             (
                 "reshard a b (abort, cleanup_on_cancel true)",
                 "abort with cleanup_on_cancel",
+            ),
+            ("reshard a b (resume true)", "resume"),
+            ("reshard a b (abort, resume)", "abort with resume"),
+            (
+                "reshard a b (resume, cleanup_on_cancel false)",
+                "resume with cleanup_on_cancel",
             ),
         ] {
             let (_, mut options) = Options::parse(sql).unwrap();
