@@ -43,3 +43,12 @@ SELECT count(DISTINCT amount) FROM sql_regression_samples WHERE id < 0;
 
 SELECT grp, count(DISTINCT amount), count(*) FROM sql_regression_samples
 GROUP BY grp HAVING count(*) > 1 ORDER BY grp;
+
+SELECT sum(DISTINCT amount), avg(DISTINCT amount) FROM sql_regression_samples;
+
+SELECT grp, sum(DISTINCT amount), avg(DISTINCT amount), count(DISTINCT amount)
+FROM sql_regression_samples GROUP BY grp ORDER BY grp;
+
+SELECT sum(DISTINCT amount)::int, avg(DISTINCT amount) FILTER (WHERE amount > 5) FROM sql_regression_samples;
+
+SELECT sum(DISTINCT amount), avg(DISTINCT amount) FROM sql_regression_samples WHERE id < 0;

@@ -38,10 +38,7 @@ impl Avg {
         let numeric_scale_hint = self
             .values_and_weights
             .iter()
-            .filter_map(|(value, _)| match value {
-                Datum::Numeric(n) => n.as_decimal().map(|d| d.scale()),
-                _ => None,
-            })
+            .filter_map(|(value, _)| numeric_scale(value))
             .min();
 
         let mut result = self
@@ -49,15 +46,59 @@ impl Avg {
             .into_iter()
             .try_fold(Datum::Null, |acc, (value, weight)| {
                 checked_mul_add(value, Decimal::from(weight) / total_count, acc)
-            });
-        if let Ok(Datum::Numeric(n)) = &mut result
-            && let Some(d) = n.as_decimal_mut()
-            && let Some(scale_hint) = numeric_scale_hint
-        {
-            d.rescale(scale_hint.max(numeric_avg_scale(d)))
-        }
-        result
+            })?;
+        rescale(&mut result, numeric_scale_hint);
+        Ok(result)
     }
+}
+
+/// Scale of a `numeric` value, e.g. 2 for `1.50`.
+pub(super) fn numeric_scale(value: &Datum) -> Option<u32> {
+    match value {
+        Datum::Numeric(n) => n.as_decimal().map(|d| d.scale()),
+        _ => None,
+    }
+}
+
+/// Give a `numeric` average the scale Postgres would, as far as it can be
+/// told from the result and the scale of the shards' averages.
+fn rescale(avg: &mut Datum, scale_hint: Option<u32>) {
+    if let Datum::Numeric(n) = avg
+        && let Some(d) = n.as_decimal_mut()
+        && let Some(scale_hint) = scale_hint
+    {
+        d.rescale(scale_hint.max(numeric_avg_scale(d)))
+    }
+}
+
+/// Average of `count` values from their sum. `scale_hint` is the smallest
+/// scale of the averages the shards computed.
+#[allow(clippy::unnecessary_lazy_evaluations)]
+pub(super) fn divide(
+    mut sum: Datum,
+    count: usize,
+    scale_hint: Option<u32>,
+) -> Result<Datum, Error> {
+    match &mut sum {
+        Datum::Null => {}
+        Datum::Numeric(n) => {
+            // NaN and infinity stay as they are.
+            if let Some(d) = n.as_decimal_mut() {
+                *d = d
+                    .checked_div(Decimal::from(count))
+                    .ok_or_else(|| TypeError::NumericOutOfRange(DataType::Numeric))?;
+            }
+        }
+        Datum::Double(f) => f.0 /= count as f64,
+        other => {
+            return Err(Error::UnsupportedAggregation {
+                function: String::from("avg"),
+                reason: format!("avg({}) is not yet supported", other.data_type()),
+            });
+        }
+    }
+    rescale(&mut sum, scale_hint);
+    Ok(sum)
 }
 
 /// Approximate PostgreSQL's numeric division scale from the quotient.

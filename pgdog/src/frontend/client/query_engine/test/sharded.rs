@@ -389,15 +389,15 @@ async fn test_sharded_distinct_on_invalid_ordinal_returns_postgres_error() {
 }
 
 #[tokio::test]
-async fn test_sharded_count_distinct_counts_values_shards_share() {
+async fn test_sharded_distinct_aggregates_over_values_shards_share() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
     // Both shards have "x", and each has a value of its own.
     let rows = [
         (client.random_id_for_shard(0), "x"),
-        (client.random_id_for_shard(0), "y"),
+        (client.random_id_for_shard(0), "yy"),
         (client.random_id_for_shard(1), "x"),
-        (client.random_id_for_shard(1), "z"),
+        (client.random_id_for_shard(1), "zzz"),
     ];
     let ids = rows.map(|(id, _)| id.to_string()).join(", ");
 
@@ -433,6 +433,25 @@ async fn test_sharded_count_distinct_counts_values_shards_share() {
     assert_eq!(row.get_int(1, true), Some(3));
     assert_eq!(row.get_int(2, true), Some(4));
     assert_eq!(row.get_int(3, true), Some(2));
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SELECT 1"
+    );
+    expect_message!(client.read().await, ReadyForQuery);
+
+    // The lengths are 1 and 2 on one shard, 1 and 3 on the other. The shard
+    // sums, 3 and 4, count the shared 1 twice.
+    client
+        .send_simple(Query::new(format!(
+            "SELECT sum(DISTINCT length(value)), avg(DISTINCT length(value)) \
+             FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    let description = expect_message!(client.read().await, RowDescription);
+    assert_eq!(description.fields.len(), 2, "the value arrays are dropped");
+    let row = expect_message!(client.read().await, DataRow);
+    assert_eq!(row.get_int(0, true), Some(6));
+    assert_eq!(row.get_text(1).as_deref(), Some("2.0000000000000000"));
     assert_eq!(
         expect_message!(client.read().await, CommandComplete).command(),
         "SELECT 1"

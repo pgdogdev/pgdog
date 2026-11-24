@@ -113,8 +113,11 @@ impl AggregatesRewrite {
         mem: make::MemoryToken<'a>,
     ) -> Vec<HelperSpec<'a>> {
         match function {
-            // Each shard returns its distinct values, and PgDog counts their union.
-            AggregateFunction::Count if shared_distinct => {
+            // Each shard returns its distinct values, and PgDog computes the
+            // aggregate over their union.
+            AggregateFunction::Count | AggregateFunction::Sum | AggregateFunction::Avg
+                if shared_distinct =>
+            {
                 vec![HelperSpec {
                     func: Self::copy_and_rename_function(func_call, "array_agg", mem),
                     kind: HelperKind::DistinctValues,
@@ -205,9 +208,9 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_engine_projects_distinct_values_for_count() {
-        let sql =
-            "SELECT COUNT(DISTINCT price) FILTER (WHERE price > 0), COUNT(DISTINCT id) FROM menu";
+    fn rewrite_engine_projects_distinct_values() {
+        let sql = "SELECT COUNT(DISTINCT price) FILTER (WHERE price > 0), COUNT(DISTINCT id), \
+                   SUM(DISTINCT price), AVG(DISTINCT price) FROM menu";
         let ast = pg_raw_parse::parse(sql).unwrap();
         let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
             unreachable!("not a select");
@@ -230,16 +233,20 @@ mod tests {
         assert_eq!(
             pg_raw_parse::deparse(&*select).unwrap().as_str(),
             "SELECT count(DISTINCT price) FILTER (WHERE price > 0), count(DISTINCT id), \
-             array_agg(DISTINCT price) FILTER (WHERE price > 0) AS __pgdog_distinct_col0 FROM menu"
+             sum(DISTINCT price), avg(DISTINCT price), \
+             array_agg(DISTINCT price) FILTER (WHERE price > 0) AS __pgdog_distinct_col0, \
+             array_agg(DISTINCT price) AS __pgdog_distinct_col2, \
+             array_agg(DISTINCT price) AS __pgdog_distinct_col3 FROM menu"
         );
         assert_eq!(
             plan.unwrap().aggregate_helpers,
-            [AggregateHelper {
-                target_column: 0,
+            // The values are all `avg` needs: no count helper is added for it.
+            [0, 2, 3].map(|column| AggregateHelper {
+                target_column: column,
                 distinct: true,
                 kind: HelperKind::DistinctValues,
-                alias: "__pgdog_distinct_col0".into(),
-            }]
+                alias: format!("__pgdog_distinct_col{column}"),
+            })
         );
     }
 
