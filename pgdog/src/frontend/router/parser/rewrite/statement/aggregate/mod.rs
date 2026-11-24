@@ -1,4 +1,7 @@
 mod engine;
+// Used by the DISTINCT aggregate rewrite.
+#[cfg_attr(not(test), expect(dead_code))]
+mod sharding_key;
 
 pub(crate) use super::projection::AggregateHelper;
 
