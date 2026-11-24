@@ -350,7 +350,7 @@ them. At cutover the forward slots are dropped and reverse slots are created, so
 can roll back. Each resharding needs its own slot name: two runs with the same explicit slot name on
 one source share the slots.
 
-Each run also writes a row to `__pgdog.resharding` on destination shard 0 when it starts, with stage
+Each run also writes a row to `pgdog.resharding` on destination shard 0 when it starts, with stage
 `initializing`. While the stage is `initializing`, a stop or an error drops the slots that the run
 created and deletes the row, also with `cleanup_on_cancel false`.
 The cutover deletes the row and releases the lock, so the reverse phase is not resumable: a stop or

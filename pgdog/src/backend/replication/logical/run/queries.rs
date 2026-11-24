@@ -63,7 +63,7 @@ impl Query for SetupSession {
 pub(super) struct TableExists;
 
 impl Query for TableExists {
-    const SQL: &'static str = "SELECT (to_regclass('__pgdog.resharding') IS NOT NULL)::int";
+    const SQL: &'static str = "SELECT (to_regclass('pgdog.resharding') IS NOT NULL)::int";
 
     type Params<'a> = ();
 
@@ -75,8 +75,7 @@ impl Query for TableExists {
 pub(super) struct Lock;
 
 impl Query for Lock {
-    const SQL: &'static str =
-        "SELECT pg_advisory_lock(hashtext('__pgdog.resharding'), hashtext($1))";
+    const SQL: &'static str = "SELECT pg_advisory_lock(hashtext('pgdog.resharding'), hashtext($1))";
 
     type Params<'a> = &'a ReshardingKey;
 
@@ -89,7 +88,7 @@ pub(super) struct Unlock;
 
 impl Query for Unlock {
     const SQL: &'static str =
-        "SELECT pg_advisory_unlock(hashtext('__pgdog.resharding'), hashtext($1))";
+        "SELECT pg_advisory_unlock(hashtext('pgdog.resharding'), hashtext($1))";
 
     type Params<'a> = &'a ReshardingKey;
 
@@ -108,7 +107,7 @@ impl Query for LockHolder {
         WHERE l.locktype = 'advisory'
           AND l.granted
           AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-          AND l.classid = (hashtext('__pgdog.resharding')::bigint & 4294967295)::oid
+          AND l.classid = (hashtext('pgdog.resharding')::bigint & 4294967295)::oid
           AND l.objid = (hashtext($1)::bigint & 4294967295)::oid
           AND l.objsubid = 2";
 
@@ -135,7 +134,7 @@ macro_rules! columns {
     };
 }
 
-/// The result columns of a `__pgdog.resharding` record, in order.
+/// The result columns of a `pgdog.resharding` record, in order.
 macro_rules! record_columns {
     ($mode:ident) => {
         columns!($mode {
@@ -166,7 +165,7 @@ impl Query for SelectRow {
         "SELECT",
         record_columns!(sql_select),
         "
-        FROM __pgdog.resharding
+        FROM pgdog.resharding
         WHERE source_db = $1
           AND destination_db = $2
           AND publication = $3"
@@ -186,7 +185,7 @@ impl Query for ListRows {
         "SELECT",
         record_columns!(sql_select),
         "
-        FROM __pgdog.resharding
+        FROM pgdog.resharding
         ORDER BY source_db, destination_db, publication"
     );
 
@@ -201,7 +200,7 @@ pub(super) struct InsertRow;
 
 impl Query for InsertRow {
     const SQL: &'static str = "
-        INSERT INTO __pgdog.resharding (
+        INSERT INTO pgdog.resharding (
             source_db, destination_db, publication, command, slot_name,
             stage, config, instance_id, run_id, task_id, format_version, id,
             started_at
@@ -240,7 +239,7 @@ pub(super) struct StageUpdate {
 
 impl Query for UpdateStage {
     const SQL: &'static str = "
-        UPDATE __pgdog.resharding
+        UPDATE pgdog.resharding
         SET stage = $2
         WHERE id = $1::uuid";
 
@@ -264,7 +263,7 @@ pub(super) struct ResumeUpdate<'a> {
 
 impl Query for ResumeRow {
     const SQL: &'static str = "
-        UPDATE __pgdog.resharding
+        UPDATE pgdog.resharding
         SET instance_id = $2, run_id = $3::uuid, task_id = $4::bigint,
             resumed_at = $5::timestamp
         WHERE id = $1::uuid";
@@ -297,7 +296,7 @@ impl Query for Heartbeat {
 pub(super) struct DeleteRow;
 
 impl Query for DeleteRow {
-    const SQL: &'static str = "DELETE FROM __pgdog.resharding WHERE id = $1::uuid";
+    const SQL: &'static str = "DELETE FROM pgdog.resharding WHERE id = $1::uuid";
 
     type Params<'a> = ReshardingId;
 
@@ -312,7 +311,7 @@ pub(super) struct DeleteKey;
 #[cfg(test)]
 impl Query for DeleteKey {
     const SQL: &'static str = "
-        DELETE FROM __pgdog.resharding
+        DELETE FROM pgdog.resharding
         WHERE source_db = $1 AND destination_db = $2 AND publication = $3";
 
     type Params<'a> = &'a ReshardingKey;

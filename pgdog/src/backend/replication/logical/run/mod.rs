@@ -32,11 +32,9 @@ pub(crate) async fn state_address(destination: &Cluster) -> Result<Address, Erro
         .clone())
 }
 
-/// Schema of the internal resharding state. Schema sync and the publication
-/// table list skip it as a whole, so it must hold only pgdog objects.
-pub(crate) const STATE_SCHEMA: &str = "__pgdog";
+pub(crate) const RESHARDING_TABLE: &str = "resharding";
 
-/// Version of the data in `__pgdog.resharding`. Increase it on breaking changes.
+/// Version of the data in [`RESHARDING_TABLE`]. Increase it on breaking changes.
 pub(crate) const FORMAT_VERSION: i32 = 1;
 
 /// Identifier of the specific resharding.

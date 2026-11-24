@@ -165,7 +165,7 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
     }
     let _ = connection_sqlx_direct_db("shard_0")
         .await
-        .execute("DROP SCHEMA IF EXISTS __pgdog CASCADE")
+        .execute("DROP TABLE IF EXISTS pgdog.resharding")
         .await;
 
     let _ = direct

@@ -1049,7 +1049,7 @@ mod test {
     async fn resharding_rows(server: &mut Server, name: &str) -> i64 {
         let rows: Vec<i64> = server
             .fetch_all(format!(
-                "SELECT count(*) FROM __pgdog.resharding WHERE slot_name = '{name}'"
+                "SELECT count(*) FROM pgdog.resharding WHERE slot_name = '{name}'"
             ))
             .await
             .unwrap();
@@ -1071,8 +1071,8 @@ mod test {
             .unwrap();
         server
             .execute_checked(format!(
-                "DO $$ BEGIN IF to_regclass('__pgdog.resharding') IS NOT NULL THEN \
-                DELETE FROM __pgdog.resharding WHERE slot_name = '{name}'; END IF; END $$"
+                "DO $$ BEGIN IF to_regclass('pgdog.resharding') IS NOT NULL THEN \
+                DELETE FROM pgdog.resharding WHERE slot_name = '{name}'; END IF; END $$"
             ))
             .await
             .unwrap();
@@ -1468,7 +1468,7 @@ mod test {
     async fn stored_stage(server: &mut Server, name: &str) -> String {
         server
             .fetch_all::<String>(format!(
-                "SELECT stage FROM __pgdog.resharding WHERE slot_name = '{name}'"
+                "SELECT stage FROM pgdog.resharding WHERE slot_name = '{name}'"
             ))
             .await
             .unwrap()
@@ -1579,7 +1579,7 @@ mod test {
         let owners: Vec<i64> = publication
             .server
             .fetch_all(format!(
-                "SELECT task_id FROM __pgdog.resharding \
+                "SELECT task_id FROM pgdog.resharding \
                  WHERE slot_name = '{name}' AND resumed_at IS NOT NULL"
             ))
             .await
@@ -1696,7 +1696,7 @@ mod test {
             loop {
                 let locked: Vec<String> = server
                     .fetch_all(format!(
-                        "SELECT pg_try_advisory_lock(hashtext('__pgdog.resharding'), hashtext('{}'))::text",
+                        "SELECT pg_try_advisory_lock(hashtext('pgdog.resharding'), hashtext('{}'))::text",
                         lock_name(key)
                     ))
                     .await
@@ -1714,7 +1714,7 @@ mod test {
     async fn release_lock(server: &mut Server, key: &ReshardingKey) {
         server
             .execute_checked(format!(
-                "SELECT pg_advisory_unlock(hashtext('__pgdog.resharding'), hashtext('{}'))",
+                "SELECT pg_advisory_unlock(hashtext('pgdog.resharding'), hashtext('{}'))",
                 lock_name(key)
             ))
             .await

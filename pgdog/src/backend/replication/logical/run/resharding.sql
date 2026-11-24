@@ -2,11 +2,11 @@ BEGIN;
 
 SET LOCAL client_min_messages = warning;
 
-SELECT pg_advisory_xact_lock(hashtext('__pgdog.resharding'));
+SELECT pg_advisory_xact_lock(hashtext('pgdog.resharding'));
 
-CREATE SCHEMA IF NOT EXISTS __pgdog;
+CREATE SCHEMA IF NOT EXISTS pgdog;
 
-CREATE TABLE IF NOT EXISTS __pgdog.resharding (
+CREATE TABLE IF NOT EXISTS pgdog.resharding (
     id UUID PRIMARY KEY,
     source_db TEXT NOT NULL,
     destination_db TEXT NOT NULL,

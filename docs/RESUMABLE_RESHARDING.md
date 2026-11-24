@@ -21,13 +21,11 @@ This section gives a short picture of the design: the parts, how they connect, t
 
 ## How it works
 
-Every resharding run (RESHARD, COPY_DATA, REPLICATE) writes one row to the table `__pgdog.resharding` on destination shard 0. The row holds the facts that Postgres does not store: the command and its options, the slot name, the stage, a snapshot of the sharding config, and the owner task. Postgres already stores the slots, the origins and the replication progress, so the row does not copy them.
-
-All pgdog state tables live in the internal schema `__pgdog`. It holds only pgdog objects, so schema sync and the publication table list skip the whole schema. User tables can't land there by accident: the default search path (`"$user", public`) never resolves to `__pgdog`. The user-facing `pgdog` schema (sharded sequences, shard functions) is a different schema and is copied as before.
+Every resharding run (RESHARD, COPY_DATA, REPLICATE) writes one row to the table `pgdog.resharding` on destination shard 0. The row holds the facts that Postgres does not store: the command and its options, the slot name, the stage, a snapshot of the sharding config, and the owner task. Postgres already stores the slots, the origins and the replication progress, so the row does not copy them.
 
 The run owns its row through a session advisory lock on the run key (source, destination, publication). The lock lives on a dedicated state connection. All state reads and writes use this connection. A held lock means that the run is running. A row with a free lock means that the run is paused or crashed.
 
-The copy (Stage 3) adds the table `__pgdog.resharding_copy` on every destination shard. Each copied part writes its marker row to this table in the same 2PC transaction as its rows, so the destination itself records which parts are done.
+The copy (Stage 3) adds the table `pgdog.resharding_copy` on every destination shard. Each copied part writes its marker row to this table in the same 2PC transaction as its rows, so the destination itself records which parts are done.
 
 The option `cleanup_on_cancel` decides what a stop does. With `true` (the default), a stop drops the slots that the run created and all its origins, and deletes the row, as before. With `false`, a stop after `initializing` keeps the slots, the origins and the row, so the run can resume later or the operator can abort it.
 
@@ -49,9 +47,9 @@ flowchart LR
         DATA[("Source tables")]
     end
     subgraph dest["Destination cluster"]
-        TABLE[("Shard 0:<br/>__pgdog.resharding<br/>+ advisory lock")]
+        TABLE[("Shard 0:<br/>pgdog.resharding<br/>+ advisory lock")]
         ORIGINS[("Replication origins")]
-        SHARD[("Every destination shard<br/>one 2PC transaction per part:<br/>copied rows of the table<br/>+ __pgdog.resharding_copy: marker row<br/>(table, source shard, copy LSN)")]
+        SHARD[("Every destination shard<br/>one 2PC transaction per part:<br/>copied rows of the table<br/>+ pgdog.resharding_copy: marker row<br/>(table, source shard, copy LSN)")]
     end
     CP["Control plane (EE)"]
 
@@ -76,8 +74,8 @@ flowchart LR
 | Table copy | Copies each part from its own source snapshot. In Stage 3, commits each part with 2PC on all destination shards, together with its marker row. |
 | `ReshardingState` | Shared by all tasks of one run. Holds the slots, the origins and the current run. Decides what a stop keeps or drops. |
 | `ReshardingStore` | Owns the state connection and the lock. Reconnects and takes the lock again after a lost connection. Runs the heartbeat while the run lives. |
-| `__pgdog.resharding` | One row for each unfinished run, on destination shard 0. |
-| `__pgdog.resharding_copy` (Stage 3) | One table on each destination shard, with one marker row for each copied part (table, source shard, copy LSN). Every part writes its marker on every destination shard, so all shards hold the same rows. The marker is written in the same transaction as the part's rows, so it commits or rolls back with them. |
+| `pgdog.resharding` | One row for each unfinished run, on destination shard 0. |
+| `pgdog.resharding_copy` (Stage 3) | One table on each destination shard, with one marker row for each copied part (table, source shard, copy LSN). Every part writes its marker on every destination shard, so all shards hold the same rows. The marker is written in the same transaction as the part's rows, so it commits or rolls back with them. |
 | `SHOW RESHARDING` | Reads the rows of every configured database and shows each run as running or paused, from the lock state. |
 | Control plane | Gets the task definitions and status, as for other tasks. It is not the store of the state. |
 
@@ -126,7 +124,7 @@ The goal: a run that can stop, resume and survive a crash, in every phase.
 
 |Topic|Selected input|
 |---|---|
-|State store|The Postgres table `__pgdog.resharding` on destination shard 0 (SM1). The control plane Raft (SM2) was rejected. See "Storage mode".|
+|State store|The Postgres table `pgdog.resharding` on destination shard 0 (SM1). The control plane Raft (SM2) was rejected. See "Storage mode".|
 |Stored data|Only facts that Postgres does not store. Slots, origins and replication progress come from the catalogs.|
 |Stop mode|The option `cleanup_on_cancel`, default `true`, keeps today's behavior. With `cleanup_on_cancel false`, the run is resumable. A resumable run never drops its slots on stop, error or crash. `WITH (abort)` cleans up.|
 |Resume trigger|Manual command only. There is no startup scan. `SHOW RESHARDING` reports unfinished runs, and a new resharding logs the other runs on its destination.|
@@ -209,7 +207,7 @@ Rule: store a fact only when Postgres does not store it and resume needs it.
 
 ## Storage mode
 
-Selected: SM1, a table in the internal `__pgdog` schema on destination shard 0. It works in open source, enterprise and the CLI.
+Selected: SM1, a table in the `pgdog` schema on destination shard 0. It works in open source, enterprise and the CLI.
 
 ### Rejected: control plane Raft (SM2)
 
@@ -245,7 +243,7 @@ Where SM2 would be better, and why it matters little:
 
 |SM2 benefit|Why it matters little|
 |---|---|
-|No state table in user databases: no DDL, no dump exclusion.|The state lives in its own internal schema `__pgdog`, which schema sync skips as a whole. Shard markers stay on the destination in both modes.|
+|No state table in user databases: no DDL, no dump exclusion.|pgdog already installs a `pgdog` schema on the shards. Shard markers stay on the destination in both modes.|
 |A record of the run survives the loss of the destination.|No restore is possible. The copied data, origins and reverse slots are on the destination. The run must start again in both modes.|
 |Maintenance mode already persists in Raft. After a crash, resume knows the real traffic state.|This works today without SM2. Resume can read it with no new storage.|
 |One shared view of the run for all pgdog instances and the UI.|pgdog already pushes task updates to the control plane.|
@@ -284,11 +282,11 @@ erDiagram
   }
 ```
 
-Stage 3 records which table parts are copied in the table `__pgdog.resharding_copy` (`RESHARDING_COPY`), one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `RESHARDING`. It refers to the run by `resharding_id`. A marker from an earlier run with the same key has another id, so a new run never reads it as its own.
+Stage 3 records which table parts are copied in the table `pgdog.resharding_copy` (`RESHARDING_COPY`), one on each destination shard. Each shard inserts its marker inside its own copy transaction, so the marker commits or rolls back with the copied rows. It has no FK, because it lives on other databases than `RESHARDING`. It refers to the run by `resharding_id`. A marker from an earlier run with the same key has another id, so a new run never reads it as its own.
 
 The primary key of `RESHARDING` is `id`, a UUID v7 that pgdog generates when it creates the row. A resume keeps the id. The key (source, destination, publication) is `UNIQUE`: lookup and the advisory lock use it, and it allows one unfinished run per key. Stage updates, resume and delete find the row by `id` only. A stale owner thus cannot change the row of a newer run with the same key. The owner columns (`instance_id`, `run_id`, `task_id`) name the root task of the attempt that wrote the row.
 
-`RESHARDING` is the table `__pgdog.resharding`. It has one row per unfinished resharding, on destination shard 0. The row describes the resharding and every object it keeps.
+`RESHARDING` is the table `pgdog.resharding`. It has one row per unfinished resharding, on destination shard 0. The row describes the resharding and every object it keeps.
 
 Stage values: `initializing`, `copy_tables`, `replication`. The row is inserted when the run starts, with `initializing`. The copy path writes `copy_tables` after all forward slots exist. Replication writes `replication` after all forward slots and origins exist. While the stage is `initializing`, a stop or an error drops the slots that the run created and all its origins, and deletes the row, also with `cleanup_on_cancel false`. Cutover deletes the row, so the reverse phase has no row and is never resumed. A resume refuses a row in `initializing`, so a resume never creates a slot: a missing slot is an error.
 
@@ -296,7 +294,7 @@ All slots use the stored name: one forward slot per source shard. Reverse slots 
 
 The state store holds only `RESHARDING`.
 
-The state store creates its schema and tables at run start with idempotent DDL. The existing `pgdog` schema setup does not run for every resharding run, so it is not enough.
+The state store creates its tables at run start with idempotent DDL. The existing `pgdog` schema setup does not run for every resharding run, so it is not enough.
 
 ### Format changes
 
@@ -411,7 +409,7 @@ In this stage, "resumable run" means a run with `cleanup_on_cancel false`. "Canc
 ### Approach
 
 1. Parse `cleanup_on_cancel`. The default is `true`. The flag decides only what happens on stop or error. Every run is recorded.
-2. Open a dedicated state connection to destination shard 0. Create `__pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication) with `pg_advisory_lock`. The connection's `lock_timeout` is `[resharding] state_heartbeat_interval` (default 5 s), so a run waits that long for an old session to end, then fails. Fail if the key has a row.
+2. Open a dedicated state connection to destination shard 0. Create `pgdog.resharding` with idempotent DDL. Take the session advisory lock on the key (source, destination, publication) with `pg_advisory_lock`. The connection's `lock_timeout` is `[resharding] state_heartbeat_interval` (default 5 s), so a run waits that long for an old session to end, then fails. Fail if the key has a row.
 3. Probe the slots before the run creates them. If all slots exist, the run reuses them, and a live run keeps them on stop. If only some slots exist, refuse.
 4. Capture the config snapshot: the shard counts and sharding rules of both clusters.
 5. Insert the row right after the key check: command with its options, publication, slot name, stage `initializing`, config snapshot, owner task (instance id, run id, task id), format version, start time. While the stage is `initializing`, a stop or error always drops the slots that the run created and all its origins, deletes the row and releases the lock, also with `cleanup_on_cancel false`. After a crash in `initializing`, the row stays, and abort drops every slot with the run's name.
@@ -441,8 +439,8 @@ Exclude the state table from the schema dump. A later run can use this destinati
 - New `SHOW RESHARDING`. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `instance`, `task_id`, `replication_slot`, `started_at`, `resumed_at`. `task_id` is null while the run is paused. `resumed_at` is null until the first resume. A row that this version cannot read shows its key and `unsupported: <error>` in `state`. A state table that cannot be read shows `error: <error>` in `state`, the database names that share it in `destination`, and null in the other columns.
 - No startup scan. `SHOW RESHARDING` lists each unfinished resharding. A new resharding logs each other unfinished resharding on its destination.
 - Control plane: a new field `cleanup_on_cancel` on the reshard and replication definitions. A missing field reads as `true`. A new definition kind `abort_resharding`. The abort task reports the generic task status. All changes are additive.
-- New internal schema `__pgdog` with the table `__pgdog.resharding` on destination shard 0. `pg_dump` in schema sync and the publication table list skip the whole schema.
-- The state connection uses `application_name` `pgdog_resharding:<instance_id>`. It holds the advisory lock `(hashtext('__pgdog.resharding'), hashtext('<source>/<destination>/<publication>'))`. The first half is the namespace of all resharding locks.
+- New table `pgdog.resharding` on destination shard 0. `pg_dump` in schema sync excludes it.
+- The state connection uses `application_name` `pgdog_resharding:<instance_id>`. It holds the advisory lock `(hashtext('pgdog.resharding'), hashtext('<source>/<destination>/<publication>'))`. The first half is the namespace of all resharding locks.
 - Before the cutover, STOP_TASK on a resumable run pauses it and keeps its slots and origins. STOP_TASK on a run with `cleanup_on_cancel true` drops its slots and origins as today, then deletes its row. After the cutover, STOP_TASK drops the reverse slots and origins for every run.
 - Every run, also with the default `cleanup_on_cancel true`, writes a row and takes the lock. A second run with the same key is refused while the first one runs or has a row.
 
@@ -553,7 +551,7 @@ Goal: COPY_DATA and RESHARD survive a stop or crash during copy and table sync. 
 - The copy always uses 2PC on a multi-shard destination, independent of the client 2PC setting. The destination needs `max_prepared_transactions > 0`.
 - The resumable copy runs `PREPARE TRANSACTION` and `COMMIT PREPARED` directly. It does not register with the 2PC `Manager`. The transaction name is `__pgdog_rsh_<run>_<part>_<attempt>_<shard>`. `Manager` recovery must not touch this prefix, and the resume rules must not touch `Manager` names.
 - A single-shard destination commits each copy with synchronous commit on.
-- Copy progress is stored in the table `__pgdog.resharding_copy` on each destination shard (shard marker).
+- Copy progress is stored in the table `pgdog.resharding_copy` on each destination shard (shard marker).
 - A start command with `WITH (resume)` accepts runs stopped in copy, table sync and replication, also RESHARD runs.
 - `WITH (abort)` also rolls back the prepared transactions of the run.
 
@@ -646,7 +644,7 @@ Each shard inserts a marker (source table, source shard, copy LSN) in its copy t
 
 Without truncate, a part that a failover lost cannot be copied again, because its rows on other shards stay. Resume can only detect the loss and refuse. The operator then decides.
 
-The table `__pgdog.resharding_copy` is a new object on each shard. It is in the `__pgdog` schema, so the dump and the publication table list skip it with no extra rule. A `FOR ALL TABLES` publication still sends its changes, and apply skips them because the table is not in its list.
+The table `pgdog.resharding_copy` is a new object on each shard. Exclude it from the dump and from `FOR ALL TABLES` publications.
 
 Rules:
 
@@ -682,6 +680,10 @@ On stop, pgdog commits or rolls back its own prepared transactions. After a cras
 Unit tests: the resolve rule for each mix of prepared, committed and missing shards. Shard markers commit and roll back with the data.
 
 Result: a copy crash never copies complete parts again, never truncates, leaves no prepared transactions, and RESHARD runs resume in replication.
+
+### Open questions
+
+- Schema exclusion: the publication table list and `pg_dump` exclude `pgdog.resharding`. A `FOR ALL TABLES` publication still sends its changes, and apply skips them because the table is not in its list. Stage 3 must exclude `pgdog.resharding_copy` the same way.
 
 ## Stage 4. Schema phase resume
 
