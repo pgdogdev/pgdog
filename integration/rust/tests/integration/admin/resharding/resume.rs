@@ -1,4 +1,4 @@
-use crate::setup::{admin_sqlx, connection_sqlx_direct};
+use crate::setup::{admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db};
 use pgdog_stats::TaskProgress;
 use sqlx::{Executor, Pool, Postgres};
 
@@ -33,6 +33,21 @@ async fn wait_for_replicating(admin: &Pool<Postgres>, task_id: i64, desc: &str) 
     .await;
 }
 
+async fn start_resumable(admin: &Pool<Postgres>, direct: &Pool<Postgres>) -> i64 {
+    let task_id = run_task_command(
+        admin,
+        unsafe_sql!(
+            "REPLICATE pgdog pgdog_sharded {TEST_PUB} {SLOT} WITH (cleanup_on_cancel false)"
+        ),
+    )
+    .await;
+    wait_for_replicating(admin, task_id, "replication ready").await;
+    wait_for_source_slot(admin, task_id, Some(SLOT)).await;
+    insert(direct, 1, "before").await;
+    wait_for_values(admin, task_id, &[(1, "before")]).await;
+    task_id
+}
+
 #[tokio::test]
 async fn test_resume_continues_a_paused_replication() {
     let direct = connection_sqlx_direct().await;
@@ -41,18 +56,12 @@ async fn test_resume_continues_a_paused_replication() {
 
     with_cleanup(&admin, &direct, async {
         prepare_replication(&admin, &direct).await;
+        assert_eq!(
+            admin_error(&admin, &resume("REPLICATE", "")).await,
+            format!("no unfinished resharding pgdog -> pgdog_sharded ({TEST_PUB})")
+        );
 
-        let task_id = run_task_command(
-            &admin,
-            unsafe_sql!(
-                "REPLICATE pgdog pgdog_sharded {TEST_PUB} {SLOT} WITH (cleanup_on_cancel false)"
-            ),
-        )
-        .await;
-        wait_for_replicating(&admin, task_id, "replication ready").await;
-        wait_for_source_slot(&admin, task_id, Some(SLOT)).await;
-        insert(&direct, 1, "before").await;
-        wait_for_values(&admin, task_id, &[(1, "before")]).await;
+        let task_id = start_resumable(&admin, &direct).await;
 
         let locked = admin_error(&admin, &resume("REPLICATE", "")).await;
         assert!(
@@ -73,16 +82,20 @@ async fn test_resume_continues_a_paused_replication() {
 
         stop_task(&admin, task_id, TaskProgress::Cancelled).await;
         insert(&direct, 2, "paused").await;
+        for database in ["shard_0", "shard_1"] {
+            connection_sqlx_direct_db(database)
+                .await
+                .execute(unsafe_sql!(
+                    "DELETE FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1"
+                ))
+                .await
+                .expect("destination delete must succeed");
+        }
 
         let resumed_id = run_task_command(&admin, unsafe_sql!("{}", resume("REPLICATE", ""))).await;
         wait_for_replicating(&admin, resumed_id, "resumed replication ready").await;
         insert(&direct, 3, "after").await;
-        wait_for_values(
-            &admin,
-            resumed_id,
-            &[(1, "before"), (2, "paused"), (3, "after")],
-        )
-        .await;
+        wait_for_values(&admin, resumed_id, &[(2, "paused"), (3, "after")]).await;
         wait_for_replicating(&admin, resumed_id, "resumed replication still running").await;
 
         assert_eq!(

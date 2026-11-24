@@ -37,9 +37,9 @@ abort_fails_with() {
 
 resume_replication() {
     local task_id
-    task_id=$(psql admin -tAc 'REPLICATE source destination pgdog WITH (resume)')
-    wait_admin_task_inner_status "${task_id}" 'replicating' >&2
-    wait_for_value "replicate|running|${SLOT}" resharding >&2
+    task_id=$(psql admin -tAc 'REPLICATE source destination pgdog WITH (resume)') || return 1
+    wait_admin_task_inner_status "${task_id}" 'replicating' >&2 || return 1
+    wait_for_value "replicate|running|${SLOT}" resharding >&2 || return 1
     echo "${task_id}"
 }
 
@@ -78,8 +78,8 @@ TASK_ID=$(resume_replication)
 start_pgbench
 sleep 5
 
-stop_pgbench
 kill_pgdog
+stop_pgbench
 start_pgdog
 wait_for_pgdog_admin
 wait_for_value "replicate|paused|${SLOT}" resharding

@@ -9,7 +9,7 @@ The Overview gives a short picture of the design. Part 1 gives the plan. Part 2 
 |Stage|Status|
 |---|---|
 |1. State foundation and pause|Implemented.|
-|2. Replication resume|Not implemented. Parts of the resume logic exist in the shared run state, but no command starts a resume. `WITH (resume)` and `data-sync --resume` do not exist yet.|
+|2. Replication resume|Implemented for REPLICATE runs and replicate-only RESHARD runs. Runs that copied data are refused until Stage 3.|
 |3. Copy and table sync resume|Planned.|
 |4. Schema phase resume|Planned.|
 |5. Cutover recovery|Planned.|
@@ -91,7 +91,7 @@ stateDiagram-v2
     Running --> Paused: stop with cleanup_on_cancel false, lock released
     Running --> Paused: pgdog crash, Postgres frees the lock
     Paused --> [*]: WITH (abort), objects dropped, row deleted
-    Paused --> Running: resume (Stage 2, not implemented)
+    Paused --> Running: WITH (resume), slots and origins loaded
 ```
 
 A crash in `initializing` also leaves a paused row. Abort then drops every slot with the run's name.
@@ -343,10 +343,10 @@ flowchart LR
 |Take the lock, check the key, insert the row|The first step of the reshard or replication task takes the lock and refuses a key with a row. Then it inserts the row with stage `initializing`. The start command replies with the task id first, so a duplicate key fails the task with `ReshardingExists`, visible in `SHOW TASKS`. The task puts the resumable state into the shared run state.|
 |Hold the lock and the state connection|The shared run state. The lock lives until the run ends or pauses, not until the last copy of the state is dropped.|
 |Skip finished phases|The resharding pipeline reads the stored stage. A row at `copy_tables` cannot resume until copy progress exists (Stage 3).|
-|Skip done parts, adopt slots, keep origins|Each phase task reads its part of the resumable state.|
+|Adopt slots, keep origins|Before it takes the row, the resume loads the stored slots and their origins into the shared run state. Replication then finds them and creates nothing.|
 |Stop, error or lock loss → pause|The existing cleanup paths check the resumable state (Stage 1).|
-|Validation|The first step of the task with `WITH (resume)`, before any phase runs. The validator also checks the config snapshot. One error per failed check.|
-|"Resumed" flag in the UI|The task definition carries the flag. Subtasks show it too.|
+|Validation|The command checks the row, the command kind, the slot and the lock before it registers the task, so errors return at once. The task then validates again under the lock: the full command, the slot, the config snapshot, the stage, every slot and every origin.|
+|"Resumed" marker in the UI|The task definitions `reshard` and `replication` carry `resumed`: the run id that the task continues. It is empty for a new run.|
 
 Standalone COPY_DATA and REPLICATE runs get the same behavior, because they receive the same shared run state.
 
@@ -382,7 +382,7 @@ For each side effect, the state records what resume needs before the effect, or 
 |RESHARD, COPY_DATA, REPLICATE `WITH (abort)`. CLI `data-sync --abort`.|The key is (source, destination, publication). The command kind must match the stored row: RESHARD and COPY_DATA are one kind, REPLICATE is another. The options of the command are not compared. The slot must match when it is given. The config snapshot is not checked. Abort only cleans up a paused or crashed run before the cutover. After the cutover, the run has no row, and abort fails. If the run holds the lock, abort refuses with an error and the run continues. Stop the run first with `STOP_TASK` on the instance that owns it. The abort runs as a registered task, `abort <command> <source> -> <destination>` in `SHOW TASKS`. It drops every slot with the run's name, all its origins and the row. Destination data stays. Admin returns the task id. The CLI waits for the task.|1|
 |`SHOW TASKS`|Existing command. No change.|1|
 |`SHOW RESHARDING`|New command. It lists every unfinished resharding from the state tables. Columns: `source`, `destination`, `command`, `publication`, `stage`, `state`, `instance`, `task_id`, `replication_slot`, `started_at`, `resumed_at`. Stage 6 adds slot WAL status and retained bytes.|1|
-|RESHARD, COPY_DATA, REPLICATE `WITH (resume)`. CLI `data-sync --resume`.|Not implemented yet. Continues the unfinished resharding with the same key (source, destination, publication). The command and its arguments must match the stored row, or it refuses. It refuses on a critical config mismatch. Takes the lock, validates, reconciles, continues. No new command.|2|
+|RESHARD, COPY_DATA, REPLICATE `WITH (resume)`. CLI `data-sync --resume`.|Continues the paused or crashed resharding with the same key (source, destination, publication). The command kind and the slot must match the stored row. Without a slot argument, the stored slot is used. A running run refuses with the lock owner. The task then checks the full command and the config snapshot. `resume` together with `abort` or `cleanup_on_cancel` is refused. The reply does not change. COPY_DATA replies with the stored slot.|2|
 |CUTOVER|No change.|5|
 
 Abort and resume search shard 0 of the destination. A cutover deletes the row, so no row is on the source side after the config swap. Stage 5 adds the search on the source side.
@@ -390,7 +390,8 @@ Abort and resume search shard 0 of the destination. A cutover deletes the row, s
 ## Known limits
 
 - Sharding changes during a pause are detected through the config snapshot. DDL changes are not detected.
-- Runs with the default `cleanup_on_cancel true` cannot resume. After a crash, their row stays, and abort drops their slots and origins.
+- A run with the default `cleanup_on_cancel true` that crashed keeps its row, slots and origins, and it can resume. A run with `cleanup_on_cancel true` that stopped normally deleted its row and cannot resume.
+- Only REPLICATE runs and replicate-only RESHARD runs (for example `data-sync --replicate-only`) resume. Other RESHARD and COPY_DATA runs are refused with "copied tables, and a copy cannot resume yet" until Stage 3.
 - Each resharding needs its own slot name. Two reshardings with the same explicit slot name on one source share the slots: one run can consume changes the other needs, and abort or cleanup of one drops the slots of the other. Their origins also share names on a destination server, so they share apply progress. Generated slot names never collide.
 - `data-sync --abort` always aborts a RESHARD row. Abort a REPLICATE run with the admin command `REPLICATE ... WITH (abort)`.
 - Abort builds the slot and origin names from the current shard counts. If the shard count changed during a pause, drop the remaining slots and origins by hand.
@@ -475,12 +476,12 @@ Nothing from the old process survives: no task tree, no in-memory state, no open
 
 How resume rebuilds the run:
 
-1. Find the run row and take the lock. If another instance holds the lock, refuse. Write the new owner and `resumed_at`.
-2. Validate: known format, config snapshot with no critical mismatch, matching shard counts, every slot present with its WAL.
-3. Build the shared run state from the stored data: same publication, slot name and command options. A resumed run is always resumable: a stop or an error keeps its slots, origins and row, whatever `cleanup_on_cancel` is. Only abort and the normal run end drop them.
-4. Adopt the slots by name. The row exists only when all slots exist, so a missing slot is an error and is never created. Create missing origins and never reset the progress of an existing origin.
-5. Load the publication tables. Set each table's watermark from its stored copy LSN (Stage 3). A REPLICATE run has no copy, so its watermarks start at zero.
-6. Start a new task with the "resumed" flag, at the stored stage.
+1. The command builds the run state in resume mode. Before it registers the task, it reads the row and checks the command kind, the slot and the lock. A held lock refuses with the lock owner. Without a slot argument, the run takes the stored slot.
+2. The task takes the lock and reads the row again. It validates the full command, the slot, the config snapshot and the stage.
+3. It loads the slots and the origins in parallel. Every slot must exist and still have its WAL. Every origin must exist. The resume never creates a slot or an origin, and never resets origin progress.
+4. Only after these checks, the task writes the new owner and `resumed_at`. A failed check leaves the row unchanged and releases the lock.
+5. The loaded slots and origins go into the shared run state. Replication finds them and skips creation. A resumed run is always resumable: a stop or an error keeps its slots, origins and row.
+6. A REPLICATE run has no copy, so its table watermarks start at zero. A replicate-only RESHARD run runs its pre-data and post-data schema sync again. Both skip existing objects.
 
 How replication continues without duplicates:
 
@@ -489,31 +490,33 @@ How replication continues without duplicates:
 - Each shard updates its origin in the same transaction as the applied changes. Origin progress and data therefore always agree on each shard.
 - Changes for a table at or below its copy LSN are skipped, because the copy already has them.
 
-A resume refuses a row in `initializing`, so a resume never needs to create a slot.
+A resume refuses a row in `initializing`. The stage `replication` is written only after all forward slots and origins exist. So a missing slot or origin at resume means that someone dropped it, and the run cannot continue safely.
 
 ### Interface changes
 
-- RESHARD, COPY_DATA and REPLICATE accept `WITH (resume)`. No new command. The command, the publication and the slot name must match the stored row, or the command refuses. `resume` together with `cleanup_on_cancel` is refused.
-- CLI `data-sync --resume`.
+- RESHARD, COPY_DATA and REPLICATE accept `WITH (resume)`. No new command. `resume` together with `abort` or `cleanup_on_cancel` is refused.
+- CLI `data-sync --resume`. It conflicts with `--abort` and `--cleanup-on-cancel`. Without `--replication-slot`, the stored slot is used.
 - Origins of resumable runs keep their progress across restarts.
-- A resumed task shows a "resumed" flag in the UI. Its subtasks show it too.
+- The task definitions `reshard` and `replication` get the field `resumed`, the run id that the task continues. A missing field reads as empty.
+- New errors: `replication slot "…" lost its WAL and cannot be used`, and `resharding … copied tables, and a copy cannot resume yet; abort it with WITH (abort) and start again`.
 
 ### Rules
 
-- Slot: must exist. Refuse if it is missing or its WAL is lost.
-- Origin: create if missing. Never reset the progress of an existing origin.
-- Validator: the lock is free, the format version is known, the config snapshot has no critical mismatch, shard counts match, all slots exist. On failure, only abort is possible.
+- Slot: must exist. Refuse if it is missing or its WAL is lost (`wal_status = lost`). Abort still drops a slot that lost its WAL.
+- Origin: must exist. Refuse if it is missing. A new empty origin has no progress, so a replay could apply changes twice or lose them. Never reset the progress of an existing origin.
+- Validator: the lock is free, the format version is known, the config snapshot has no critical mismatch, shard counts match, the stage is `replication`, all slots and origins exist. On failure, only abort is possible.
 
-A RESHARD run needs copy LSNs as watermarks. Stage 3 stores them. Until then, only REPLICATE runs resume.
+A RESHARD run that copied data needs copy LSNs as watermarks. Stage 3 stores them. Until then, only REPLICATE runs and replicate-only RESHARD runs resume.
 
 ### Tests
 
 |#|Scenario|Expected result|
 |---|---|---|
-|4|SIGKILL during REPLICATE replication. Restart. Resume.|Paused before resume. Origin progress does not go back. No duplicate keys. Data check passes.|
-|5|A second instance resumes an owned run.|Refused with the lock holder.|
+|4|SIGKILL during REPLICATE replication. Restart. Resume.|Paused before resume. No duplicate keys. Data check passes. Covered by `integration/resharding/resumable.sh`.|
+|5|Resume of a running run.|Refused with the lock holder. Covered by the Rust test `admin::resharding::resume`.|
+|6|Resume after a destination row was deleted during the pause.|The deleted row does not come back, so no change is applied twice. Covered by `admin::resharding::resume`.|
 
-Unit tests: creating an existing origin keeps its progress. The validator refuses a missing slot and lost WAL.
+Unit tests on a real Postgres: a resume loads the stored slots and all origins before replication, and keeps origin progress. A missing slot or origin refuses the resume and leaves the row unchanged. Runs that copied data are refused. A check without a slot takes the stored slot.
 
 Result: forward replication resumes after stop or crash with no duplicates.
 

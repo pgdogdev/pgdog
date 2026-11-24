@@ -128,6 +128,12 @@ pub(crate) enum Commands {
             conflicts_with_all = ["cleanup_on_cancel", "replicate_only", "tables_only", "sync_only", "skip_schema_sync"]
         )]
         abort: bool,
+
+        /// Resume the paused or crashed resharding from source to destination.
+        /// The other options must match the stored run. Without
+        /// `--replication-slot`, the stored slot is used.
+        #[arg(long, conflicts_with_all = ["cleanup_on_cancel", "abort"])]
+        resume: bool,
     },
 
     /// Copy schema from source to destination cluster.
@@ -260,14 +266,20 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         skip_schema_sync,
         cleanup_on_cancel,
         abort,
+        resume,
     } = commands
     {
-        let state = ReshardingState::builder()
+        let mode = if resume {
+            RunMode::Resume
+        } else {
+            RunMode::Run { cleanup_on_cancel }
+        };
+        let mut state = ReshardingState::builder()
             .source(&from_database)
             .destination(&to_database)
             .publication(&publication)
             .maybe_replication_slot(replication_slot.clone())
-            .mode(RunMode::Run { cleanup_on_cancel })
+            .mode(mode)
             .build()?;
 
         if abort {
@@ -283,6 +295,8 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
             return Ok(());
         }
 
+        let resumed =
+            Box::pin(state.check_resume(CommandKind::Reshard, replication_slot.as_deref())).await?;
         let result = run_task(
             ReshardTask::builder()
                 .state(state)
@@ -290,6 +304,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
                 .skip_schema_sync(skip_schema_sync)
                 .replicate_only(replicate_only)
                 .sync_only(sync_only)
+                .maybe_resumed(resumed)
                 .build(),
         )
         .await;
@@ -456,6 +471,29 @@ mod test {
                 ],
                 vec!["--publication", "p", "--abort", "--replicate-only"],
                 vec!["--publication", "p", "--abort", "--tables-only"],
+            ] {
+                assert!(parse(&args).is_err(), "{args:?}");
+            }
+        }
+
+        #[test]
+        fn test_resume() {
+            let Commands::DataSync { resume, .. } =
+                parse(&["--publication", "p", "--replicate-only", "--resume"]).unwrap()
+            else {
+                panic!("not a data sync command");
+            };
+            assert!(resume);
+
+            for args in [
+                vec!["--publication", "p", "--resume", "--abort"],
+                vec![
+                    "--publication",
+                    "p",
+                    "--resume",
+                    "--cleanup-on-cancel",
+                    "false",
+                ],
             ] {
                 assert!(parse(&args).is_err(), "{args:?}");
             }
