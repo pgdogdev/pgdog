@@ -25,11 +25,104 @@ struct Walk<'a> {
     tables: Vec<Table<'a>>,
     advisory_locks: AdvisoryLocks,
     projection: Option<ProjectionState<'a>>,
-    /// Names introduced by `WITH` clauses. An unqualified reference to one
-    /// of these is the CTE, not a table.
-    cte_names: HashSet<&'a str>,
     mutates: bool,
     cross_shard: bool,
+}
+
+/// The CTEs that table references in some FROM clause is able to refer to, i.e.,
+/// - the CTEs in the WITH of that statement
+/// - the CTEs in the WITHs of the parent of that statemnet
+///
+/// Notably, in the same WITH clause, the body of a particular CTE can only refer the CTEs preceeding it
+/// (unless the CTE is recursive, in which it can reference any CTEs in the WITH clause)
+/// E.g., in WITH a AS (..), b AS (..) SELECT .. FROM (WITH c AS (..) SELECT ..) s
+/// - CTE b can refer to a
+/// - derived table s can refer to a, b and c
+#[derive(Debug, Default, Clone, Copy)]
+struct CteScope<'parent, 'a> {
+    /// WITH belonging to the statement
+    with_clause: Option<&'a nodes::WithClause>,
+    /// Scope of the statement around the statement
+    parent: Option<&'parent CteScope<'parent, 'a>>,
+    /// If the statement is the body of a particular CTE in the WITH clause of `parent`, then this represents that CTE.
+    body_of: Option<&'a nodes::CommonTableExpr>,
+}
+
+impl<'parent, 'a> CteScope<'parent, 'a> {
+    fn of_top_level_statement(stmt: Node<'a>) -> Self {
+        Self {
+            with_clause: with_clause_of(stmt),
+            parent: None,
+            body_of: None,
+        }
+    }
+
+    /// Returns the scope of a nested statement, `stmt`, which could be something like a subquery or a derived table inside the statement of `self`
+    /// As it's a nested statement, parent of `stmt` is `self`
+    fn of_nested_statement(&'parent self, stmt: Node<'a>) -> Self {
+        Self {
+            with_clause: with_clause_of(stmt),
+            parent: Some(self),
+            body_of: None,
+        }
+    }
+
+    /// Returns scope of the body of `cte` (CTE in the WITH clause of `self`)
+    /// E.g., if we consider b in WITH a AS (..), b AS (..), the table references in the body of b can refer to a but not to b (itself)
+    fn of_cte_body(&'parent self, cte: &'a nodes::CommonTableExpr) -> Self {
+        Self {
+            with_clause: with_clause_of(cte.ctequery()),
+            parent: Some(self),
+            body_of: Some(cte),
+        }
+    }
+
+    /// Returns CTE that `table` refers to (e.g., the CTE users for users in WITH users AS (..) SELECT .. FROM users)
+    /// Returns None if `table` refers to a table
+    fn cte_referred_to_by(&self, table: Table<'_>) -> Option<&'a nodes::CommonTableExpr> {
+        // Table references with a schema attached (e.g., public.users) can't possibly refer to a CTE
+        match table.schema {
+            Some(_) => None,
+            None => self.cte_named(table.name, None),
+        }
+    }
+
+    /// Returns CTE in `self.with_clause` (or in the WITHs around `self.with_clause`) that `name` refers to
+    /// E.g., for a in the body of b in WITH a AS (..), b AS (..), we return the CTE a (and `seen_from_body_of` is the CTE b)
+    fn cte_named(
+        &self,
+        name: &str,
+        seen_from_body_of: Option<&nodes::CommonTableExpr>,
+    ) -> Option<&'a nodes::CommonTableExpr> {
+        let in_with_clause = self.with_clause.and_then(|with_clause| {
+            with_clause
+                .ctes()
+                .into_iter()
+                .take_while(|cte| {
+                    with_clause.recursive
+                        || seen_from_body_of.is_none_or(|body_of| !ptr::eq(*cte, body_of))
+                })
+                .find(|cte| cte.ctename() == Some(name))
+        });
+
+        in_with_clause.or_else(|| {
+            self.parent
+                .and_then(|parent| parent.cte_named(name, self.body_of))
+        })
+    }
+}
+
+/// If a SELECT / INSERT / UPDATE / DELETE, and if there's a WITH clause attached,
+/// returns the WITH clause.
+fn with_clause_of(stmt: Node<'_>) -> Option<&nodes::WithClause> {
+    match stmt {
+        Node::SelectStmt(stmt) => stmt.with_clause(),
+        Node::InsertStmt(stmt) => stmt.with_clause(),
+        Node::UpdateStmt(stmt) => stmt.with_clause(),
+        Node::DeleteStmt(stmt) => stmt.with_clause(),
+        Node::MergeStmt(stmt) => stmt.with_clause(),
+        _ => None,
+    }
 }
 
 /// Cursor over the client-visible SELECT targets, before any star expansion.
@@ -69,7 +162,7 @@ enum Relation<'a> {
 
 /// Context for searching a SELECT statement, tracking table aliases.
 #[derive(Debug, Default, Clone)]
-struct SearchContext<'a> {
+struct SearchContext<'parent, 'a> {
     /// Stores `Relations` encountered
     /// E.g., for FROM users u JOIN orders ON .., we have u -> Table(users)
     /// Key is alias (u) or the name of CTEs without an alias (c in WITH c AS (..) SELECT .. FROM c)
@@ -81,11 +174,13 @@ struct SearchContext<'a> {
     tables: Vec<Table<'a>>,
     /// Column equalities that can carry a key from one side of a join to the other.
     joined_columns: Vec<(Column<'a>, Column<'a>)>,
+    /// CTEs that the statement can refer to
+    cte_scope: CteScope<'parent, 'a>,
 }
 
-impl<'a> SearchContext<'a> {
+impl<'parent, 'a> SearchContext<'parent, 'a> {
     /// Build context from a FROM clause, extracting table aliases.
-    fn from_from_clause(nodes: &'a list::NodeList, cte_names: &HashSet<&'a str>) -> Self {
+    fn from_from_clause(nodes: &'a list::NodeList, cte_scope: CteScope<'parent, 'a>) -> Self {
         let table = nodes
             .into_iter()
             .exactly_one()
@@ -94,10 +189,11 @@ impl<'a> SearchContext<'a> {
 
         let mut ctx = Self {
             table,
+            cte_scope,
             ..Default::default()
         };
         for node in nodes {
-            ctx.extract_table_from_node(node, cte_names);
+            ctx.extract_table_from_node(node);
             ctx.extract_joined_columns(node);
         }
         ctx
@@ -172,15 +268,15 @@ impl<'a> SearchContext<'a> {
         });
     }
 
-    fn extract_table_from_node(&mut self, node: Node<'a>, cte_names: &HashSet<&'a str>) {
+    fn extract_table_from_node(&mut self, node: Node<'a>) {
         match node {
             Node::RangeVar(rv) => {
                 let table = Table::from(rv);
-                // Why check `cte_names`? Because CTEs can have the same name as a table
+                // Why check `cte_scope`? Because CTEs can have the same name as a table
                 // E.g., if we consider the CTE WITH users AS (..) SELECT .. FROM users)
                 // - for FROM users, Postgres then uses the CTE users (instead of the table users)
-                // Names with a schema (e.g., public.users) can't be CTEs (so those are always tables)
-                if table.schema.is_none() && cte_names.contains(table.name) {
+                // Table references with a schema (e.g., public.users) can't be CTEs (so those are always tables)
+                if self.cte_scope.cte_referred_to_by(table).is_some() {
                     self.relations
                         .insert(table.alias.unwrap_or(table.name), Relation::Cte);
                 } else {
@@ -193,8 +289,8 @@ impl<'a> SearchContext<'a> {
             }
 
             Node::JoinExpr(join) => {
-                self.extract_table_from_node(join.larg(), cte_names);
-                self.extract_table_from_node(join.rarg(), cte_names);
+                self.extract_table_from_node(join.larg());
+                self.extract_table_from_node(join.rarg());
             }
 
             Node::RangeSubselect(subselect) if let Some(alias) = subselect.alias() => {
@@ -511,23 +607,16 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             },
             ..Walk::default()
         };
-        self.walk_stmt(self.stmt, &mut walk);
-
-        // A CTE name shadows an unqualified table of the same name for the
-        // rest of the statement, so `FROM cte` is not a table reference.
-        // Schema-qualified names always refer to the real table. CTE names
-        // are collected across the whole statement rather than per scope;
-        // a nested `WITH` reusing an outer table's name is not distinguished.
-        if !walk.cte_names.is_empty() {
-            let cte_names = &walk.cte_names;
-            walk.tables
-                .retain(|table| table.schema.is_some() || !cte_names.contains(table.name));
-        }
+        self.walk_stmt(
+            self.stmt,
+            &mut walk,
+            &CteScope::of_top_level_statement(self.stmt),
+        );
 
         walk
     }
 
-    fn walk_stmt(&self, stmt: Node<'a>, walk: &mut Walk<'a>) {
+    fn walk_stmt(&self, stmt: Node<'a>, walk: &mut Walk<'a>, cte_scope: &CteScope<'_, 'a>) {
         let values_columns = match stmt {
             Node::SelectStmt(s) => collect_values_columns(s),
             _ => None,
@@ -537,7 +626,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // set of VALUES columns.
             Node::SelectStmt(_) => {
                 let projection = walk.projection.take();
-                self.walk_stmt(node, walk);
+                self.walk_stmt(node, walk, &cte_scope.of_nested_statement(node));
                 walk.projection = projection;
                 Recurse::no()
             }
@@ -601,17 +690,24 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                 Recurse::yes()
             }
 
+            // TODO: this doesn't handle data-modifying CTEs right (which I don't think we support yet, but noting this for later)
             Node::RangeVar(r) => {
-                walk.tables.push(Table::from(r));
+                let table = Table::from(r);
+
+                // We leave out table references that refer to CTEs (e.g., users in WITH users AS (..) SELECT .. FROM users)
+                if cte_scope.cte_referred_to_by(table).is_none() {
+                    walk.tables.push(table);
+                }
+
                 Recurse::yes()
             }
 
             Node::CommonTableExpr(cte) => {
-                if let Some(name) = cte.ctename() {
-                    walk.cte_names.insert(name);
-                }
                 walk.mutates |= !matches!(cte.ctequery(), Node::SelectStmt(_));
-                Recurse::yes()
+                let projection = walk.projection.take();
+                self.walk_stmt(cte.ctequery(), walk, &cte_scope.of_cte_body(cte));
+                walk.projection = projection;
+                Recurse::no()
             }
 
             Node::LockingClause(_) => {
@@ -624,11 +720,20 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     }
 
     fn shard_stmt(&mut self, stmt: Node<'a>) -> Result<Option<Shard>, Error> {
-        self.search_stmt(stmt).break_value().transpose()
+        self.search_stmt(stmt, CteScope::of_top_level_statement(stmt))
+            .break_value()
+            .transpose()
     }
 
-    fn context_from_relation(&self, relation: Option<&'a nodes::RangeVar>) -> SearchContext<'a> {
-        let mut ctx = SearchContext::default();
+    fn context_from_relation<'parent>(
+        &self,
+        relation: Option<&'a nodes::RangeVar>,
+        cte_scope: CteScope<'parent, 'a>,
+    ) -> SearchContext<'parent, 'a> {
+        let mut ctx = SearchContext {
+            cte_scope,
+            ..Default::default()
+        };
         if let Some(range_var) = relation {
             let table = Table::from(range_var);
             ctx.table = Some(table);
@@ -826,15 +931,17 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         std::mem::take(&mut self.pending_lookups)
     }
 
-    fn search_stmt(&mut self, stmt: Node<'a>) -> ControlFlow<Result<Shard, Error>> {
+    fn search_stmt(
+        &mut self,
+        stmt: Node<'a>,
+        cte_scope: CteScope<'_, 'a>,
+    ) -> ControlFlow<Result<Shard, Error>> {
         let ctx = match stmt {
-            Node::SelectStmt(s) => {
-                SearchContext::from_from_clause(s.from_clause(), &self.walk().cte_names)
-            }
-            Node::UpdateStmt(s) => self.context_from_relation(s.relation()),
-            Node::DeleteStmt(s) => self.context_from_relation(s.relation()),
+            Node::SelectStmt(s) => SearchContext::from_from_clause(s.from_clause(), cte_scope),
+            Node::UpdateStmt(s) => self.context_from_relation(s.relation(), cte_scope),
+            Node::DeleteStmt(s) => self.context_from_relation(s.relation(), cte_scope),
             Node::InsertStmt(s) => {
-                return match self.search_insert_stmt(s).break_err()? {
+                return match self.search_insert_stmt(s, cte_scope).break_err()? {
                     Some(shard) => ControlFlow::Break(Ok(shard)),
                     None => ControlFlow::Continue(()),
                 };
@@ -855,14 +962,21 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn search_node(
         &mut self,
         stmt: Node<'a>,
-        ctx: &SearchContext<'a>,
+        ctx: &SearchContext<'_, 'a>,
     ) -> ControlFlow<Result<Shard, Error>> {
         use nodes::{A_Expr_Kind, BoolExprType, JoinType};
 
         let result = walk::walk_manual(stmt, |node| match node {
             Node::SelectStmt(_) => {
                 if !self.ignore_subqueries {
-                    self.search_stmt(node)?;
+                    self.search_stmt(node, ctx.cte_scope.of_nested_statement(node))?;
+                }
+                Recurse::no()
+            }
+
+            Node::CommonTableExpr(cte) if matches!(cte.ctequery(), Node::SelectStmt(_)) => {
+                if !self.ignore_subqueries {
+                    self.search_stmt(cte.ctequery(), ctx.cte_scope.of_cte_body(cte))?;
                 }
                 Recurse::no()
             }
@@ -1030,7 +1144,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn search_joined_key(
         &mut self,
         node: Node<'a>,
-        ctx: &SearchContext<'a>,
+        ctx: &SearchContext<'_, 'a>,
     ) -> ControlFlow<Result<Shard, Error>> {
         match node {
             Node::BoolExpr(expr) if expr.boolop == nodes::BoolExprType::AND_EXPR => {
@@ -1105,7 +1219,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn search_expr(
         &mut self,
         node: Node<'a>,
-        ctx: &SearchContext<'a>,
+        ctx: &SearchContext<'_, 'a>,
     ) -> ControlFlow<Result<Shard, Error>, Option<SearchResult<'a>>> {
         match node {
             // Value types - these are leaf nodes representing actual values
@@ -1163,7 +1277,8 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                 let result = walk::walk_manual(node, |node| match node {
                     Node::SelectStmt(_) => {
                         if !self.ignore_subqueries {
-                            self.search_stmt(node).map_continue(|_| Recurse::No)
+                            self.search_stmt(node, ctx.cte_scope.of_nested_statement(node))
+                                .map_continue(|_| Recurse::No)
                         } else {
                             Recurse::no()
                         }
@@ -1275,7 +1390,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     fn get_insert_columns(
         &self,
         stmt: &'a nodes::InsertStmt,
-        ctx: &SearchContext<'a>,
+        ctx: &SearchContext<'_, 'a>,
     ) -> Result<Vec<&'a str>, Error> {
         // First try to get columns from the INSERT statement itself
         let cols = stmt
@@ -1305,8 +1420,12 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         }
     }
 
-    fn search_insert_stmt(&mut self, stmt: &'a nodes::InsertStmt) -> Result<Option<Shard>, Error> {
-        let ctx = self.context_from_relation(stmt.relation());
+    fn search_insert_stmt(
+        &mut self,
+        stmt: &'a nodes::InsertStmt,
+        cte_scope: CteScope<'_, 'a>,
+    ) -> Result<Option<Shard>, Error> {
+        let ctx = self.context_from_relation(stmt.relation(), cte_scope);
 
         // Schema-based routing takes priority for INSERTs
         if let Some(table) = ctx.table
@@ -1357,7 +1476,11 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         // behavior?
         let result = walk::walk_manual(Node::InsertStmt(stmt), |node| match node {
             Node::SelectStmt(_) => {
-                self.search_stmt(node)?;
+                self.search_stmt(node, ctx.cte_scope.of_nested_statement(node))?;
+                Recurse::no()
+            }
+            Node::CommonTableExpr(cte) if matches!(cte.ctequery(), Node::SelectStmt(_)) => {
+                self.search_stmt(cte.ctequery(), ctx.cte_scope.of_cte_body(cte))?;
                 Recurse::no()
             }
             _ => Recurse::yes(),
@@ -3280,5 +3403,137 @@ mod test {
 
         assert!(run_test_column_only(table, None).unwrap().is_some());
         assert_eq!(run_test_column_only(derived_table, None).unwrap(), None);
+    }
+
+    // In the top level statements here, all the table references refer to tables.
+    // This is because CTEs with the same names as those tables aren't in scope
+    // We want to make sure that it properly routes them based on detecting the table (not the CTE)
+    #[test]
+    fn test_table_references_of_ctes_out_of_scope_refer_to_tables() {
+        // CTEs that aren't recursive can't refer to themselves. Therefore, items in the body references table items
+        let table_in_the_body_of_a_cte_with_the_same_name = "WITH items AS (SELECT id, tenant_id FROM items WHERE tenant_id = 1) SELECT * FROM items";
+        assert_eq!(
+            run_test_column_only(table_in_the_body_of_a_cte_with_the_same_name, None).unwrap(),
+            Some(Shard::Direct(2))
+        );
+
+        // a can't refer to b (b comes after a). Therefore, name b that's referenced the body of a represents the table b.
+        let earlier_cte_reads_a_table = "WITH a AS (SELECT * FROM b WHERE tenant_id = 1), b AS (SELECT 1 AS tenant_id) SELECT * FROM a";
+        assert_eq!(
+            run_test_column_only(earlier_cte_reads_a_table, None).unwrap(),
+            Some(Shard::Direct(2))
+        );
+
+        // WITH inside IN (..) only applies (in terms of scope) inside IN (..)
+        // Therefore, when we reference items in the outer FROM clause (outside the scope), that can only possibly be the table items
+        let cte_in_a_subquery = "SELECT * FROM items WHERE tenant_id = 1 AND id IN (WITH items AS (SELECT 1 AS id) SELECT id FROM items)";
+        assert_eq!(
+            run_test_column_only(cte_in_a_subquery, None).unwrap(),
+            Some(Shard::Direct(2))
+        );
+
+        // Table references with a schema specified can't possibly refer to CTEs.
+        // Therefore, we know public.items is the table items.
+        let name_with_a_schema =
+            "WITH items AS (SELECT 1 AS tenant_id) SELECT * FROM public.items WHERE tenant_id = 1";
+        assert_eq!(
+            run_test_column_only(name_with_a_schema, None).unwrap(),
+            Some(Shard::Direct(2))
+        );
+    }
+
+    // In these statements, the table references refer to CTEs (not the tables with the same names)
+    //
+    // We shouldn't treat the columns from the CTEs as sharding keys
+    #[test]
+    fn test_table_references_of_ctes_in_scope_refer_to_ctes() {
+        // b is allowed to refer to a since a comes before b
+        let later_cte_reads_an_earlier_cte = "WITH a AS (SELECT 1 AS tenant_id), b AS (SELECT * FROM a WHERE tenant_id = 1) SELECT * FROM b";
+        assert_eq!(
+            run_test_column_only(later_cte_reads_an_earlier_cte, None).unwrap(),
+            None
+        );
+
+        // items can refer to items itself since the WITH clause is RECURSIVE
+        let recursive_cte_reads_itself = "WITH RECURSIVE items AS (SELECT 1 AS tenant_id UNION ALL SELECT tenant_id FROM items WHERE tenant_id = 1) SELECT * FROM items";
+        assert_eq!(
+            run_test_column_only(recursive_cte_reads_itself, None).unwrap(),
+            None
+        );
+
+        // a can refer to b (CTE b ordered after CTE a) since WITH is RECURSIVE here
+        let recursive_cte_reads_a_later_cte = "WITH RECURSIVE a AS (SELECT * FROM b WHERE tenant_id = 1), b AS (SELECT owner_id AS tenant_id FROM items) SELECT * FROM a";
+        assert_eq!(
+            run_test_column_only(recursive_cte_reads_a_later_cte, None).unwrap(),
+            None
+        );
+
+        // a can refer to the CTEs in the WITH clause of the statement belonging to a WITH a AS (WITH b AS (..))
+        let nested_with_in_the_body_of_a_cte = "WITH a AS (WITH b AS (SELECT 1 AS tenant_id) SELECT * FROM b WHERE tenant_id = 1) SELECT * FROM a";
+        assert_eq!(
+            run_test_column_only(nested_with_in_the_body_of_a_cte, None).unwrap(),
+            None
+        );
+
+        // SELECT within the derived table s can refer to the CTEs in the WITH of that SELECT stmt
+        let cte_in_a_derived_table = "SELECT * FROM (WITH items AS (SELECT 1 AS tenant_id) SELECT tenant_id FROM items WHERE tenant_id = 1) s";
+        assert_eq!(
+            run_test_column_only(cte_in_a_derived_table, None).unwrap(),
+            None
+        );
+
+        // subquery that WHERE clause compares note with is allowed to refer to the CTEs belonging to the outer statement as they're in scope
+        let subquery_in_a_comparison = "WITH items AS (SELECT 1 AS tenant_id) SELECT * FROM logs WHERE note = (SELECT 'x' FROM items WHERE tenant_id = 1)";
+        assert_eq!(
+            run_test_column_only(subquery_in_a_comparison, None).unwrap(),
+            None
+        );
+    }
+
+    // `is_sharded` returns true if the statement refers to sharded tables to ensure that we send statements without sharding keys to all shards (omnisharded)
+    //
+    // In this config,
+    // - users is omnisharded
+    // - orders is sharded by tenant_id
+    #[test]
+    fn test_is_sharded_leaves_out_the_table_references_of_ctes() {
+        // In orders CTE, there's a reference to the orders table
+        let table_in_the_body_of_a_cte_with_the_same_name =
+            "WITH orders AS (SELECT * FROM orders) SELECT * FROM orders";
+        assert!(run_is_sharded_test(
+            table_in_the_body_of_a_cte_with_the_same_name
+        ));
+
+        // subquery refers to the CTE 'orders' (not the table 'orders')
+        let cte_in_a_subquery = "WITH orders AS (SELECT 1 AS tenant_id) SELECT * FROM users WHERE tenant_id IN (SELECT tenant_id FROM orders)";
+        assert!(!run_is_sharded_test(cte_in_a_subquery));
+    }
+
+    // In these statements, 'items' referenced in the subqueries is the items CTE.
+    // This means that the columns belonging to CTEs aren't sharding keys
+    #[test]
+    fn test_subqueries_of_insert_update_delete_refer_to_their_ctes() {
+        // SELECT within INSERT stmt can refer to the CTEs belonging to the INSERT stmt
+        let insert = "WITH items AS (SELECT 1 AS tenant_id) INSERT INTO logs (note) SELECT 'x' FROM items WHERE tenant_id = 1";
+        assert_eq!(run_test_column_only(insert, None).unwrap(), None);
+
+        // Subqueries in WHERE of the UPDATE stmt can refer to the CTEs in the UPDATE
+        let update = "WITH items AS (SELECT 1 AS tenant_id) UPDATE logs SET note = 'x' WHERE note IN (SELECT 'x' FROM items WHERE tenant_id = 1)";
+        assert_eq!(run_test_column_only(update, None).unwrap(), None);
+
+        // Subqueries in WHERE of the DELETE stmt can refer to the CTEs in the DELETE
+        let delete = "WITH items AS (SELECT 1 AS tenant_id) DELETE FROM logs WHERE note IN (SELECT 'x' FROM items WHERE tenant_id = 1)";
+        assert_eq!(run_test_column_only(delete, None).unwrap(), None);
+    }
+
+    // Body of the 'items' CTE references 'FROM items', however, CTEs can't be self referential.
+    // Therefore, we know it's the table items.
+    #[test]
+    fn test_cte_body_of_an_insert_refers_to_a_table() {
+        let insert = "WITH items AS (SELECT tenant_id FROM items WHERE tenant_id = 1) INSERT INTO logs (tenant_id, note) SELECT tenant_id, 'x' FROM items";
+        assert_eq!(
+            run_test_column_only(insert, None).unwrap(),
+            Some(Shard::Direct(2))
+        );
     }
 }
