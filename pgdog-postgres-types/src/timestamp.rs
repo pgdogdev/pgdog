@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // PostgreSQL epoch is 2000-01-01 00:00:00 UTC, which is 946684800 seconds after Unix epoch
-const POSTGRES_EPOCH_MICROS: i64 = 946684800000000; // microseconds
+pub(crate) const POSTGRES_EPOCH_MICROS: i64 = 946684800000000; // microseconds
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Timestamp {

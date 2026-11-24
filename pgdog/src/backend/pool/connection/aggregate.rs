@@ -669,6 +669,64 @@ mod test {
     }
 
     #[test]
+    fn aggregate_max_min_compare_dates_by_day() {
+        let aggregate = parse("SELECT MAX(born), MIN(born) FROM samples");
+        let binary = |days: i32| Bytes::copy_from_slice(&days.to_be_bytes());
+
+        // (format, date on each shard, MAX, MIN)
+        for (format, shards, max, min) in [
+            // Dates before 2000 are negative day numbers, whose bytes sort last.
+            (
+                Format::Binary,
+                [binary(-1), binary(9_000)],
+                binary(9_000),
+                binary(-1),
+            ),
+            (
+                Format::Binary,
+                [binary(i32::MIN), binary(-3_000)],
+                binary(-3_000),
+                binary(i32::MIN),
+            ),
+            // As text, a BC date and a five digit year sort by their first digits.
+            (
+                Format::Text,
+                [Bytes::from("2024-01-01 BC"), Bytes::from("0001-01-01")],
+                Bytes::from("0001-01-01"),
+                Bytes::from("2024-01-01 BC"),
+            ),
+            (
+                Format::Text,
+                [Bytes::from("10000-01-01"), Bytes::from("9999-12-31")],
+                Bytes::from("10000-01-01"),
+                Bytes::from("9999-12-31"),
+            ),
+        ] {
+            let field = |name| {
+                let mut field = integer_field(name);
+                field.type_oid = 1082;
+                field.format = format as i16;
+                field
+            };
+            let decoder = Decoder::from(RowDescription::new(&[field("max"), field("min")]));
+
+            let rows = shards
+                .into_iter()
+                .map(|value| DataRow::from_columns(vec![value.clone(), value]))
+                .collect::<VecDeque<_>>();
+            let mut result = Aggregates::new(&rows, &decoder, &aggregate, None)
+                .unwrap()
+                .aggregate()
+                .unwrap();
+
+            assert_eq!(result.len(), 1);
+            let row = result.pop_front().unwrap();
+            assert_eq!(row.column(0), Some(max), "MAX in {format:?}");
+            assert_eq!(row.column(1), Some(min), "MIN in {format:?}");
+        }
+    }
+
+    #[test]
     fn aggregate_group_by_money_inet_merges_equal_values() {
         let aggregate = parse("SELECT key, COUNT(*) FROM samples GROUP BY 1");
 
