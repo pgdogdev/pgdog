@@ -32,7 +32,7 @@ pub enum VaultAuthMethod {
 /// PgDog logs into Vault using the configured auth method and fetches
 /// database credentials from the per-user `server_vault_path`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Vault {
     /// Vault server URL, e.g. `https://vault.internal:8200`.
     pub url: String,

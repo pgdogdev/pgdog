@@ -3042,6 +3042,7 @@ dependencies = [
  "derive_more",
  "indexmap 2.14.0",
  "once_cell",
+ "pgdog-util",
  "pgdog-vector",
  "rand 0.10.1",
  "schemars 1.2.1",
@@ -3160,6 +3161,12 @@ dependencies = [
 [[package]]
 name = "pgdog-util"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "toml",
+]
 
 [[package]]
 name = "pgdog-vector"
@@ -4001,6 +4008,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

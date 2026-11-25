@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
     JsonSchema,
     derive_more::Display,
 )]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(rename_all = "snake_case")]
 #[display(rename_all = "snake_case")]
 pub enum PostDataValidationStage {
     Off,
@@ -25,7 +25,8 @@ pub enum PostDataValidationStage {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields, rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+#[schemars(deny_unknown_fields)]
 pub struct Resharding {
     #[serde(default)]
     pub post_data_validation: PostDataValidationStage,

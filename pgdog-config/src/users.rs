@@ -1,3 +1,4 @@
+use pgdog_util::deserialize::{UnknownFields, WithUnknownFields};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt::Display;
@@ -17,7 +18,7 @@ use schemars::JsonSchema;
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/plugins/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Plugin {
     /// Name of the plugin to load. This is used by PgDog to look up the shared library object in `LD_LIBRARY_PATH`. For example, if your plugin name is `router`, PgDog will look for `librouter.so` on Linux, `librouter.dll` on Windows, and `librouter.dylib` on Mac OS.
     ///
@@ -35,7 +36,7 @@ pub struct Plugin {
 ///
 /// <https://docs.pgdog.dev/configuration/users.toml/users/>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Users {
     /// Admin database configuration.
     pub admin: Option<Admin>,
@@ -44,6 +45,15 @@ pub struct Users {
     /// <https://docs.pgdog.dev/configuration/users.toml/users/>
     #[serde(default)]
     pub users: Vec<User>,
+}
+
+impl WithUnknownFields for Users {
+    fn unknown_fields(&self) -> impl Iterator<Item = String> + '_ {
+        self.users.iter().enumerate().flat_map(|(index, user)| {
+            user.unknown_fields()
+                .map(move |field| format!("users.{index}.{field}"))
+        })
+    }
 }
 
 impl Users {
@@ -288,7 +298,7 @@ impl Display for PasswordKind {
 #[derive(
     Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd, JsonSchema,
 )]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct User {
     /// User identity used for mTLS.
     pub identity: Option<String>,
@@ -443,6 +453,17 @@ pub struct User {
 
     /// Read-write split algorithm to use for this user.
     pub read_write_split: Option<ReadWriteSplit>,
+
+    /// Keys that no field of this struct recognized.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub unknown: UnknownFields,
+}
+
+impl WithUnknownFields for User {
+    fn unknown_fields(&self) -> impl Iterator<Item = String> + '_ {
+        self.unknown.unknown_fields()
+    }
 }
 
 impl User {
@@ -513,7 +534,7 @@ impl User {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/admin/>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Admin {
     /// Admin database name.
     ///

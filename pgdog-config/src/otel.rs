@@ -22,7 +22,7 @@ pub enum OtelTemporality {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/otel/>
 #[derive(JsonSchema, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
 pub struct Otel {
     /// Full URL of the OTLP metrics ingest endpoint
     /// (e.g. `https://otlp.us5.datadoghq.com/v1/metrics`).
