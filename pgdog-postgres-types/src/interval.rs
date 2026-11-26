@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    fmt::{self, Display},
     hash::{Hash, Hasher},
     num::ParseIntError,
     ops::{Add, AddAssign},
@@ -115,7 +116,7 @@ macro_rules! parser {
 parser!(bigint, i64);
 parser!(int32, i32);
 
-fn parse_fractional_micros(s: &str) -> Result<i32, Error> {
+pub(crate) fn parse_fractional_micros(s: &str) -> Result<i32, Error> {
     if s.is_empty() || s.len() > 6 || !s.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Error::UnexpectedPayload);
     }
@@ -124,16 +125,23 @@ fn parse_fractional_micros(s: &str) -> Result<i32, Error> {
     Ok(micros * 10_i32.pow(6 - s.len() as u32))
 }
 
-fn format_fractional_micros(micros: i32) -> String {
-    if micros == 0 {
-        return "0".into();
-    }
+/// Fractional seconds as Postgres prints them: trailing zeros trimmed, `0` when zero.
+pub(crate) struct FractionalMicros(pub(crate) i32);
 
-    let mut digits = format!("{:06}", micros.abs());
-    while digits.ends_with('0') {
-        digits.pop();
+impl Display for FractionalMicros {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut micros = self.0.unsigned_abs();
+        if micros == 0 {
+            return f.write_str("0");
+        }
+
+        let mut digits = 6;
+        while micros.is_multiple_of(10) {
+            micros /= 10;
+            digits -= 1;
+        }
+        write!(f, "{micros:0digits$}")
     }
-    digits
 }
 
 impl FromDataType for Interval {
@@ -266,7 +274,7 @@ impl FromDataType for Interval {
                         hours,
                         minutes,
                         seconds,
-                        format_fractional_micros(remaining_micros)
+                        FractionalMicros(remaining_micros)
                     )
                     .as_bytes(),
                 ))
