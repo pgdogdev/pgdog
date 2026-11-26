@@ -5,9 +5,11 @@ use tracing::info;
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
 use crate::backend::replication::resharding_state::ReshardingState;
+use pgdog_stats::CommandKind;
 
-use super::options::Options;
+use super::options::{Options, RunMode};
 use super::prelude::*;
+use super::reshard::check_abort;
 
 pub(crate) struct CopyData {
     pub(crate) from_database: String,
@@ -16,6 +18,7 @@ pub(crate) struct CopyData {
     pub(crate) replication_slot: Option<String>,
     /// `tables_only` option: copy only the publication's tables, without cutover.
     pub(crate) tables_only: bool,
+    pub(crate) mode: RunMode,
 }
 
 #[async_trait]
@@ -51,7 +54,11 @@ impl Command for CopyData {
             (slot, option) => slot.or(option).map(str::to_owned),
         };
         let tables_only = options.flag("tables_only")?;
+        let mode = options.run_mode()?;
         options.finish()?;
+        if mode == RunMode::Abort && tables_only {
+            return Err(Error::InvalidOption("abort with tables_only".into()));
+        }
 
         Ok(Self {
             from_database: from_database.to_owned(),
@@ -59,21 +66,23 @@ impl Command for CopyData {
             publication: publication.to_owned(),
             replication_slot,
             tables_only,
+            mode,
         })
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        info!(
-            r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
-            self.from_database, self.to_database, self.publication, self.tables_only
-        );
-
         let state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
+            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
             .build()?;
+        check_abort!(self, state, CommandKind::Reshard);
+        info!(
+            r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
+            self.from_database, self.to_database, self.publication, self.tables_only
+        );
 
         let slot_name = state.replication_slot().to_owned();
 
@@ -136,6 +145,28 @@ mod test {
         assert!(matches!(
             CopyData::parse("copy_data a b pub slot extra"),
             Err(Error::Syntax)
+        ));
+    }
+
+    #[test]
+    fn parses_run_mode() {
+        for (sql, slot, mode) in [
+            (
+                "copy_data a b pub slot with (cleanup_on_cancel false)",
+                Some("slot"),
+                RunMode::Run {
+                    cleanup_on_cancel: false,
+                },
+            ),
+            ("copy_data a b pub (abort)", None, RunMode::Abort),
+        ] {
+            let cmd = CopyData::parse(sql).unwrap();
+            assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
+            assert_eq!(cmd.mode, mode, "{sql}");
+        }
+        assert!(matches!(
+            CopyData::parse("copy_data a b pub (abort, tables_only)"),
+            Err(Error::InvalidOption(n)) if n == "abort with tables_only"
         ));
     }
 }

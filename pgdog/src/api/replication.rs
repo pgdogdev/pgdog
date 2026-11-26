@@ -24,6 +24,7 @@ use crate::backend::replication::logical::publisher::replication_stream::{
 };
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::run::ReshardingCommand;
 use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
@@ -87,6 +88,7 @@ impl Task for ReplicationTask {
         ReplicationDefinition {
             databases: self.state.databases(),
             auto_cutover: self.cutover == CutoverMode::Auto,
+            cleanup_on_cancel: self.state.cleanup_on_cancel(),
         }
     }
 
@@ -168,24 +170,31 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
     /// and the operator ended the rollback window. The same signal during a
     /// forward phase returns [`Error::ReplicationAborted`].
     async fn run(mut self, ctx: &TaskContext<T>) -> Result<(), Error> {
+        let cancel = ctx.cancellation_token();
+        if !self.state.has_run() {
+            let command = ReshardingCommand::Replicate {
+                auto_cutover: self.cutover == CutoverMode::Auto,
+            };
+            self.state.start_run(command, ctx.root_id()).await?;
+        }
         let state = self.state.clone();
         let result = self.replicate_loop(ctx, self.cutover).await;
         self.resume_traffic().await;
 
-        let cancelled = ctx.cancellation_token().is_cancelled();
+        let cancelled = cancel.is_cancelled();
         let stopped_in_rollback_window = cancelled
             && self.state.direction() == ReshardingDirection::Reverse
             && matches!(result, Err(Error::ReplicationAborted));
         let completed = result.is_ok() || stopped_in_rollback_window;
 
         let cleanup = if completed {
-            state.drop_slots().await
+            state.complete_run().await
         } else {
-            state.drop_slots_if_owned().await
+            state.cancel_run().await
         };
 
         if let Err(err) = cleanup {
-            warn!("failed to clean up replication slots: {err}");
+            warn!("failed to clean up the resharding run: {err}");
         }
 
         if stopped_in_rollback_window {
@@ -462,11 +471,8 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         warn!("cutting over");
         ctx.set_status(ReplicationStatus::PreparingReverseReplication.into());
 
-        // remove slots on the current source
-        Box::pin(self.state.drop_slots()).await?;
-        // create replication slots on the destination to allow rollback
         self.state
-            .create_reverse_slots(&ctx.cancellation_token())
+            .prepare_reverse_replication(&ctx.cancellation_token())
             .await?;
         ctx.set_status(
             match self.state.direction() {

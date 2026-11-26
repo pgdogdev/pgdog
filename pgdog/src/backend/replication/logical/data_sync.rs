@@ -13,7 +13,7 @@ use crate::backend::replication::copy_statement::TableColumnSplit;
 use crate::backend::replication::publisher::ReplicationSlot;
 use crate::backend::replication::subscriber::copy::BackgroundSubscriber;
 use crate::backend::replication::{CopyStatement, publisher};
-use crate::backend::{Cluster, ConnectReason, Server, ServerOptions};
+use crate::backend::{Cluster, Server};
 use crate::config;
 use crate::frontend::router::parser::binary::header::Header;
 use crate::net::prelude::Protocol;
@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 use super::Error;
 use super::ensure_validation;
 use super::publisher::Table;
-use super::subscriber::{CopySubscriber, connect_primary};
+use super::subscriber::{CopySubscriber, connect_address, connect_primary};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CopyProgress {
@@ -254,13 +254,7 @@ impl DataSync<'_> {
         stmt: &CopyStatement,
         slot_snapshot: &str,
     ) -> Result<Server, Error> {
-        let mut server = Server::connect(
-            address,
-            ServerOptions::default(),
-            ConnectReason::Resharding,
-            Default::default(),
-        )
-        .await?;
+        let mut server = connect_address(address).await?;
 
         // Sets it to use the same snapshot as the slot (thus, maintaining the same view
         // as the table)
@@ -291,13 +285,7 @@ pub(crate) async fn estimate_table(
          FROM pg_class c WHERE c.oid = {}::regclass",
         source_regclass(table)
     );
-    let mut server = Server::connect(
-        address,
-        ServerOptions::default(),
-        ConnectReason::Resharding,
-        Default::default(),
-    )
-    .await?;
+    let mut server = connect_address(address).await?;
     let row: DataRow = server
         .fetch_all(sql)
         .await?

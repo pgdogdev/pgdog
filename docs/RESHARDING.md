@@ -342,12 +342,24 @@ returned by any task surfaces via `table?` and aborts the manager's loop. Remain
 completion or abort via their own `AbortSignal`, but their results are ignored once the channel
 is dropped.
 
-On a failed or aborted migration, `ReshardTask::run` ([`api/resharding.rs`](../pgdog/src/api/resharding.rs))
-obtains a guard via `Orchestrator::publication_guard()` and calls `PublicationGuard::cleanup()`, which
-locks the publisher and has `Publisher::cleanup()` drop the permanent WAL slot via
-`DROP_REPLICATION_SLOT "name" WAIT`. On success the slot is kept so reverse replication can roll
-back. If the process crashes before this runs, the slot survives and keeps accumulating WAL on the
-source — drop it manually before retrying.
+On a failed or stopped migration, `ReshardTask::run` ([`api/resharding.rs`](../pgdog/src/api/resharding.rs))
+calls `ReshardingState::cancel_run()`. With `cleanup_on_cancel true`, it drops the permanent slots that
+the run created via `DROP_REPLICATION_SLOT "name" WAIT` and all origins of the run, then deletes the
+row. Slots that existed before the run stay. With `cleanup_on_cancel false`, the run pauses and keeps
+them. At cutover the forward slots are dropped and reverse slots are created, so reverse replication
+can roll back. Each resharding needs its own slot name: two runs with the same explicit slot name on
+one source share the slots.
+
+Each run also writes a row to `pgdog.resharding` on destination shard 0 when it starts, with stage
+`initializing`. While the stage is `initializing`, a stop or an error drops the slots that the run
+created and deletes the row, also with `cleanup_on_cancel false`.
+The cutover deletes the row and releases the lock, so the reverse phase is not resumable: a stop or
+an error during reverse replication drops the reverse slots and origins. If the process crashes
+before the cutover, the slot survives and keeps accumulating WAL on the source, and the row stays. A new run with the
+same source, destination and publication then fails with `ReshardingExists`. Run the same command
+`WITH (abort)`, or `data-sync --abort`, to drop the slots and origins of the run and its row, then
+retry. A run with `cleanup_on_cancel false` keeps its slots, origins and row on failure too. See
+[RESUMABLE_RESHARDING.md](./RESUMABLE_RESHARDING.md).
 
 ### Temporary replication slots
 

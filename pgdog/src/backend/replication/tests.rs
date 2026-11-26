@@ -12,7 +12,7 @@ use super::logical::publisher::replication_progress::ReplicationProgress;
 use super::logical::resharding_state::ReshardingState;
 use crate::{
     api::{
-        MigrationError,
+        ReshardingError,
         copy_data::{CopyDataTask, TableDataSyncTask},
         replication::{ReplicationClusterStop, ReplicationClusterTask, ReplicationTask},
         resharding::ReshardTask,
@@ -798,7 +798,7 @@ async fn wait_for_reshard_status(
 async fn copy_data_task(
     schema: &str,
     destination: &str,
-) -> Result<(TaskWaiter<(), MigrationError>, ReshardingState), Box<dyn std::error::Error>> {
+) -> Result<(TaskWaiter<(), ReshardingError>, ReshardingState), Box<dyn std::error::Error>> {
     let state = ReshardingState::builder()
         .source(schema)
         .destination(destination)

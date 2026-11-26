@@ -12,7 +12,7 @@ PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
 PGDOG_CONFIG="${SCRIPT_DIR}/pgdog.toml"
 USERS_CONFIG="${SCRIPT_DIR}/users.toml"
 PGDOG_PORT=${PGDOG_PORT:-6440}
-export PGPASSWORD=pgdog
+export PGPASSWORD=pgdog PSQL_PAGER=cat
 
 # Replication retry is fixed 1000ms x 20 attempts (resharding_replication_retry_* in pgdog.toml),
 # a ~20s budget per failure, so a slow shard restart (stop, start, crash recovery) fits. 120s covers the COPY of

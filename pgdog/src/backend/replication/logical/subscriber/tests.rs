@@ -33,7 +33,7 @@ use crate::{
 };
 
 use super::{
-    Error, connect_primary, primary, replication_origin::ReplicationOrigin,
+    Error, connect_address, connect_primary, primary, replication_origin::ReplicationOrigin,
     stream::StreamSubscriber,
 };
 use std::time::{Duration, Instant};
@@ -61,6 +61,36 @@ fn resharding_test_cluster(user: &str) -> Cluster {
         Default::default(),
         Default::default(),
     ))
+}
+
+#[tokio::test]
+async fn connect_address_times_out_on_silent_server() {
+    let mut updated = (*config()).clone();
+    updated.config.general.connect_timeout = 200;
+    crate::config::set(updated).unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let silent = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+
+    let err = connect_address(&Address {
+        port,
+        ..Address::new_test()
+    })
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            Error::Backend(BackendError::Pool(
+                crate::backend::pool::Error::ConnectTimeout
+            ))
+        ),
+        "{err:?}"
+    );
+    assert!(err.is_retryable());
+    drop(silent.await.unwrap());
 }
 
 #[tokio::test]
@@ -355,7 +385,7 @@ pub(super) async fn test_origins(cluster: &Cluster) -> Vec<ReplicationOrigin> {
             .address(primary(pools).unwrap().addr())
             .shard(shard)
             .build();
-        origin.recreate_origin().await.unwrap();
+        origin.recreate().await.unwrap();
         origins.push(origin);
     }
     origins
