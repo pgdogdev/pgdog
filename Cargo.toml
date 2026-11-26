@@ -17,6 +17,10 @@ members = [
 
 [workspace.package]
 edition = "2024"
+homepage = "https://pgdog.dev"
+repository = "https://github.com/pgdogdev/pgdog"
+license = "AGPL-3.0-only"
+authors = ["PgDog <hi@pgdog.dev>"]
 
 [workspace.dependencies]
 pgdog-plugin = { path = "./pgdog-plugin", version = "0.5.0", default-features = false }
