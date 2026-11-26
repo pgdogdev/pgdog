@@ -8,8 +8,8 @@ use std::{
 
 use crate::{
     frontend::router::parser::{
-        Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
-        rewrite::statement::projection::ProjectionRewritePlan,
+        Aggregate, Limit, OrderBy,
+        rewrite::statement::{distinct_on::DistinctColumn, projection::ProjectionRewritePlan},
     },
     net::{
         Decoder,
@@ -195,14 +195,8 @@ impl Buffer {
 
     /// Remove duplicate rows of a plain `DISTINCT`. Runs on the rows the
     /// client gets, after the helper columns are dropped.
-    pub(super) fn distinct(&mut self, distinct: &Option<DistinctBy>, decoder: &Decoder) {
-        match distinct {
-            Some(DistinctBy::Row) => {
-                self.buffer.retain(|row| self.distinct.insert(row.clone()));
-            }
-            Some(DistinctBy::Columns(columns)) => self.distinct_on(columns, decoder),
-            None => {}
-        }
+    pub(super) fn distinct(&mut self) {
+        self.buffer.retain(|row| self.distinct.insert(row.clone()));
     }
 
     /// Keep the first row of every `DISTINCT ON` key. Runs on sorted rows
@@ -213,7 +207,9 @@ impl Buffer {
             .iter()
             .map(|column| match column {
                 DistinctColumn::Index(index) => Some(*index),
-                DistinctColumn::Name(name) => decoder.row_description().field_index(name),
+                DistinctColumn::Name(name) | DistinctColumn::Hidden(name) => {
+                    decoder.row_description().field_index(name)
+                }
             })
             .collect::<Option<Vec<_>>>()
         else {
@@ -695,7 +691,7 @@ mod test {
         }
 
         let mut distinct_row = buf.clone();
-        distinct_row.distinct(&Some(DistinctBy::Row), &decoder);
+        distinct_row.distinct();
 
         assert_eq!(distinct_row.buffer.len(), 15);
 
@@ -704,7 +700,7 @@ mod test {
             DistinctColumn::Name("id".to_string()),
         ] {
             let mut distinct_id = buf.clone();
-            distinct_id.distinct(&Some(DistinctBy::Columns(vec![distinct])), &decoder);
+            distinct_id.distinct_on(&[distinct], &decoder);
             assert_eq!(distinct_id.buffer.len(), 5);
         }
 
@@ -713,7 +709,7 @@ mod test {
             DistinctColumn::Name("email".to_string()),
         ] {
             let mut distinct_id = buf.clone();
-            distinct_id.distinct(&Some(DistinctBy::Columns(vec![distinct])), &decoder);
+            distinct_id.distinct_on(&[distinct], &decoder);
             assert_eq!(distinct_id.buffer.len(), 3);
         }
 
@@ -734,7 +730,7 @@ mod test {
         }
 
         assert_eq!(buf.buffer.len(), 15);
-        buf.distinct(&Some(DistinctBy::Row), &decoder);
+        buf.distinct();
 
         assert_eq!(buf.buffer.len(), 3);
     }

@@ -42,7 +42,7 @@ pub(crate) use comment::parse_edge_comment;
 pub(crate) use context::QueryParserContext;
 pub(crate) use copy::{CopyFormat, CopyParser};
 pub(crate) use csv::CsvStream;
-pub(crate) use distinct::{Distinct, DistinctBy, DistinctColumn};
+pub(crate) use distinct::{Distinct, DistinctBy};
 pub(crate) use error::Error;
 pub(crate) use from_clause::FromClause;
 use function::Function;

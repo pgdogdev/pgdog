@@ -178,11 +178,7 @@ impl ProjectionRewritePlan {
                     .iter()
                     .flat_map(|plan| plan.aliases().iter().map(String::as_str)),
             )
-            .chain(
-                self.distinct_on
-                    .iter()
-                    .flat_map(|plan| plan.aliases().iter().map(String::as_str)),
-            )
+            .chain(self.distinct_on.iter().flat_map(|plan| plan.aliases()))
             .filter_map(|alias| row_description.field_index(alias))
             .collect()
     }
@@ -605,9 +601,9 @@ mod tests {
 
     #[test]
     fn distinct_on_keys_are_columns_of_the_shard_rows() {
-        use crate::frontend::router::parser::DistinctColumn::{Index, Name};
+        use super::distinct_on::DistinctColumn::{Hidden, Index, Name};
 
-        let hidden = |position: usize| Name(format!("__pgdog_distinct_on_col{position}"));
+        let hidden = |position: usize| Hidden(format!("__pgdog_distinct_on_col{position}"));
 
         // (query, shard query, key columns)
         for (sql, shard_sql, columns) in [
@@ -659,6 +655,18 @@ mod tests {
                 "{sql}"
             );
         }
+
+        // Postgres rejects positions below 1 itself: there is no column to record.
+        let ast = pg_raw_parse::parse("SELECT DISTINCT ON (0, -1) id FROM a").unwrap();
+        let rewrite = build(&ast, &Schema::default(), &ShardedTables::default(), false)
+            .unwrap()
+            .unwrap();
+        let plan = rewrite.plan.as_deref().expect("plan");
+        assert!(
+            plan.distinct_on
+                .as_deref()
+                .is_some_and(|keys| keys.columns().is_empty())
+        );
 
         // A plain DISTINCT compares the rows the client gets.
         let ast = pg_raw_parse::parse("SELECT DISTINCT title FROM a ORDER BY title").unwrap();

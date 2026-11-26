@@ -8,7 +8,6 @@
 use pg_raw_parse::{ConstValue, Node, make, nodes};
 
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::DistinctColumn;
 
 use super::Error;
 use super::order_by::{contains_aggregate, unique_output_name};
@@ -16,11 +15,21 @@ use super::projection::HiddenAliases;
 
 const ALIAS_PREFIX: &str = "__pgdog_distinct_on_col";
 
+/// A result column that is part of the `DISTINCT ON` key.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum DistinctColumn {
+    /// SELECT list position, counted from 0.
+    Index(usize),
+    /// A column of the result, by its name.
+    Name(String),
+    /// A column added for the key, which the client doesn't get.
+    Hidden(String),
+}
+
 /// Where the merged rows have their `DISTINCT ON` key.
 #[derive(Debug, PartialEq)]
 pub(crate) struct DistinctOnRewrite {
     columns: Vec<DistinctColumn>,
-    aliases: Vec<String>,
 }
 
 impl DistinctOnRewrite {
@@ -29,9 +38,12 @@ impl DistinctOnRewrite {
         &self.columns
     }
 
-    /// Hidden columns added for the key, which the client doesn't get.
-    pub(crate) fn aliases(&self) -> &[String] {
-        &self.aliases
+    /// Hidden columns added for the key.
+    pub(crate) fn aliases(&self) -> impl Iterator<Item = &str> {
+        self.columns.iter().filter_map(|column| match column {
+            DistinctColumn::Hidden(alias) => Some(alias.as_str()),
+            _ => None,
+        })
     }
 }
 
@@ -57,7 +69,6 @@ pub(super) fn rewrite_select<'a>(
     }
 
     let mut columns = Vec::with_capacity(select.distinct_clause().len());
-    let mut aliases = Vec::new();
     let mut helpers = Vec::new();
     // Only needed when a key has to be added.
     let mut hidden_aliases = None;
@@ -96,8 +107,7 @@ pub(super) fn rewrite_select<'a>(
             .get_or_insert_with(|| HiddenAliases::new(ALIAS_PREFIX, select.target_list()))
             .next_alias();
         helpers.push(mem.make_res_target(Some(&alias), mem.empty(), mem.make_unique(key).uncast()));
-        columns.push(DistinctColumn::Name(alias.clone()));
-        aliases.push(alias);
+        columns.push(DistinctColumn::Hidden(alias));
     }
 
     if !helpers.is_empty() {
@@ -106,5 +116,5 @@ pub(super) fn rewrite_select<'a>(
             .extend(mem, mem.make_list(&helpers));
     }
 
-    Ok(Some(DistinctOnRewrite { columns, aliases }))
+    Ok(Some(DistinctOnRewrite { columns }))
 }
