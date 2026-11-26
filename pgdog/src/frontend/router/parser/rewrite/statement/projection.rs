@@ -383,14 +383,26 @@ fn build(
     // The merge adds up the aggregates in the SELECT list, but not the helper column, so we would sort by Shard A's count (2) instead of the total (5).
     // We can't sort by an expression with DISTINCT either, as the helper column would change which rows are distinct.
     // With complete groups on every shard nothing is merged, so the helper column already holds the final aggregate.
-    let has_unsupported_sort_key = select.sort_clause().iter().any(|sort_by| {
-        order_by::is_computed_sort_key(sort_by.node())
-            && ((!groups_on_one_shard && order_by::contains_aggregate(sort_by.node(), schema))
-                || !select.distinct_clause().is_empty())
-    });
-
-    if has_unsupported_sort_key {
-        return Err(Error::OrderByExpressionUnsupported);
+    // An aggregate equal to a SELECT-list entry sorts by that merged entry instead, as Postgres
+    // resolves `ORDER BY count(*)` to an equal SELECT-list entry.
+    let mut selected_aggregate_sorts = SmallVec::<[(usize, String); 2]>::new();
+    for (sort_position, sort_by) in select.sort_clause().iter().enumerate() {
+        let sort_key = sort_by.node();
+        if !order_by::is_computed_sort_key(sort_key) {
+            continue;
+        }
+        if !select.distinct_clause().is_empty() {
+            return Err(Error::OrderByExpressionUnsupported);
+        }
+        if groups_on_one_shard || !order_by::contains_aggregate(sort_key, schema) {
+            continue;
+        }
+        let Some(output_name) =
+            order_by::selected_aggregate(select, sort_key, schema).filter(|_| !has_having)
+        else {
+            return Err(Error::OrderByExpressionUnsupported);
+        };
+        selected_aggregate_sorts.push((sort_position, output_name));
     }
 
     let mut plan = ProjectionRewritePlan {
@@ -436,7 +448,12 @@ fn build(
             );
             plan.aggregate_helpers = aggregate_plan.aggregate_helpers;
         }
-        order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
+        order_by::rewrite_select(
+            &mut select.as_mut(),
+            mem,
+            &mut plan,
+            &selected_aggregate_sorts,
+        );
         if remove_limit {
             offset::remove_select(&mut select.as_mut(), mem);
         } else if rewrite_offset && !has_having {
@@ -702,6 +719,69 @@ mod tests {
             rewrite_result,
             Err(Error::OrderByExpressionUnsupported)
         ));
+    }
+
+    #[test]
+    fn sorts_by_equal_selected_aggregate() {
+        // (query, output column PgDog sorts by)
+        for (sql, output_name) in [
+            (
+                "SELECT value, count(*) FROM items GROUP BY value ORDER BY count(*) DESC",
+                "count",
+            ),
+            (
+                "SELECT value, COUNT( * ) AS c FROM items GROUP BY value ORDER BY count(*)",
+                "c",
+            ),
+            (
+                "SELECT value, sum(price) FROM items GROUP BY value ORDER BY SUM(price), value",
+                "sum",
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let rewrite = build(&ast, &Schema::default(), &ShardedTables::default(), false)
+                .unwrap()
+                .unwrap();
+
+            // The merged SELECT-list entry is the sort key; no helper column.
+            assert!(!rewrite.sql.contains("__pgdog_order"), "{}", rewrite.sql);
+            let plan = rewrite.plan.unwrap();
+            assert_eq!(
+                plan.order_by_helpers,
+                [OrderByHelper {
+                    sort_position: 0,
+                    source: OrderBySource::Column("__pgdog_order_col0".into()),
+                    alias: output_name.into(),
+                    injected: false,
+                }],
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_aggregate_sort_key_without_unique_selected_match() {
+        for sql in [
+            // Not in the SELECT list.
+            "SELECT value FROM items GROUP BY value ORDER BY sum(price)",
+            // Different arguments.
+            "SELECT value, sum(price) FROM items GROUP BY value ORDER BY sum(cost)",
+            // An expression over the aggregate isn't merged.
+            "SELECT value, count(*) + 1 FROM items GROUP BY value ORDER BY count(*) + 1",
+            // Two output columns named `count`.
+            "SELECT value, count(*), count(id) FROM items GROUP BY value ORDER BY count(*)",
+            // Star expansion hides the output names.
+            "SELECT *, count(*) FROM items GROUP BY value ORDER BY count(*)",
+            // HAVING merges through its own rewrite.
+            "SELECT value, count(*) FROM items GROUP BY value HAVING count(*) > 1 ORDER BY count(*)",
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let result = build(&ast, &Schema::default(), &ShardedTables::default(), false);
+            assert!(
+                matches!(result, Err(Error::OrderByExpressionUnsupported)),
+                "{sql}"
+            );
+        }
     }
 
     #[test]

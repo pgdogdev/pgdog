@@ -1,4 +1,5 @@
-use crate::setup::connections_sqlx;
+use super::numeric_infinity::text_rows;
+use crate::setup::{admin_tokio, connections_sqlx, connections_tokio};
 use sqlx::{Executor, Row};
 
 #[tokio::test]
@@ -69,4 +70,49 @@ async fn rejects_count_sort_key_and_keeps_connection_open() {
         .unwrap();
 
     assert_eq!(still_connected, 1);
+}
+
+/// `ORDER BY count(*)` sorts by the merged SELECT-list count, not by one
+/// shard's partial count (ClickBench Q08).
+#[tokio::test]
+async fn sorts_by_selected_aggregate_across_shards() -> Result<(), Box<dyn std::error::Error>> {
+    let connections = connections_tokio().await;
+    let sharded = &connections[1];
+    sharded
+        .batch_execute("DROP TABLE IF EXISTS order_by_count_test")
+        .await?;
+    sharded
+        .batch_execute("CREATE TABLE order_by_count_test (customer_id BIGINT, kind TEXT)")
+        .await?;
+    admin_tokio().await.batch_execute("RELOAD").await?;
+
+    // Shard 0 alone ranks 'a' first; across both shards 'b' has more rows.
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 0 */ INSERT INTO order_by_count_test VALUES
+             (1, 'a'), (2, 'a'), (3, 'a'), (4, 'b')",
+        )
+        .await?;
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 1 */ INSERT INTO order_by_count_test VALUES
+             (101, 'b'), (102, 'b'), (103, 'b'), (104, 'c')",
+        )
+        .await?;
+
+    for query in [
+        "SELECT kind, COUNT(*) FROM order_by_count_test GROUP BY kind ORDER BY COUNT(*) DESC",
+        "SELECT kind, count(*) AS c FROM order_by_count_test GROUP BY kind ORDER BY count(*) DESC",
+    ] {
+        assert_eq!(
+            text_rows(sharded, query).await?,
+            [["b", "4"], ["a", "3"], ["c", "1"]],
+            "{query}"
+        );
+    }
+
+    sharded
+        .batch_execute("DROP TABLE order_by_count_test")
+        .await?;
+    Ok(())
 }

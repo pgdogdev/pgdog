@@ -5,7 +5,8 @@ use crate::frontend::router::parser::aggregate::AggregateFunction;
 use crate::frontend::router::parser::{Column, Function, OrderBy};
 
 use super::projection::{
-    OrderByHelper, OrderBySource, ProjectionRewritePlan, column_name, is_star, target_output_name,
+    OrderByHelper, OrderBySource, ProjectionRewritePlan, column_name, expands_star, is_star,
+    target_output_name,
 };
 
 impl OrderBySource {
@@ -159,16 +160,104 @@ pub(super) fn contains_aggregate(sort_key: Node, schema: &Schema) -> bool {
     found_aggregate
 }
 
+/// SQL of a bare expression. The deparser only takes statements, so the
+/// expression is wrapped in `SELECT`.
+fn expression_sql(expression: Node<'_>) -> Option<String> {
+    let select = make::owned(|mem| {
+        let mut select = mem.make_node::<nodes::SelectStmt>();
+        let target = mem.make_res_target(None, mem.empty(), mem.make_unique(expression).uncast());
+        select
+            .as_mut()
+            .target_list_mut()
+            .extend(mem, mem.make_list(&[target]));
+        select
+    });
+    pg_raw_parse::deparse(&*select)
+        .ok()
+        .map(|sql| sql.as_str().to_owned())
+}
+
+/// Postgres names an unaliased function call after the function.
+fn figured_output_name(target: &nodes::ResTarget) -> Option<&str> {
+    target_output_name(target).or_else(|| {
+        Function::extract_func_call(target.val())?
+            .funcname()
+            .iter()
+            .filter_map(Node::as_str)
+            .next_back()
+    })
+}
+
+/// Output name of the SELECT-list aggregate an `ORDER BY` aggregate resolves to.
+///
+/// Postgres sorts `ORDER BY count(*)` by an equal SELECT-list entry
+/// (`findTargetlistEntrySQL99()`). That entry is merged across shards, so
+/// sorting by it gives the final order. Equality compares deparsed SQL, which
+/// ignores case, spacing and source locations, like Postgres's `equal()`.
+///
+/// `None` when the sort key isn't a whole aggregate call, no entry is equal, or
+/// the entry's name isn't unique in the result.
+pub(super) fn selected_aggregate(
+    select: &nodes::SelectStmt,
+    sort_key: Node<'_>,
+    schema: &Schema,
+) -> Option<String> {
+    let Node::FuncCall(call) = sort_key else {
+        return None;
+    };
+    let function = call
+        .funcname()
+        .iter()
+        .filter_map(Node::as_str)
+        .next_back()?;
+    AggregateFunction::from_name(function, schema)?;
+    // Star expansion adds names only Postgres knows.
+    if expands_star(select) {
+        return None;
+    }
+
+    let sort_sql = expression_sql(sort_key)?;
+    let target = select.target_list().iter().find(|target| {
+        matches!(target.val(), Node::FuncCall(_))
+            && expression_sql(target.val()).as_deref() == Some(sort_sql.as_str())
+    })?;
+    let output_name = target.name().unwrap_or(function);
+    let same_name = select
+        .target_list()
+        .iter()
+        .filter(|target| figured_output_name(target) == Some(output_name))
+        .count();
+
+    (same_name == 1).then(|| output_name.to_owned())
+}
+
 /// Project missing or ambiguous sort values so PgDog can merge shard results.
 /// Helpers use aliases rather than AST target positions because `*` expands
 /// only in Postgres.
+///
+/// `selected_aggregates` are sort positions resolved by [`selected_aggregate`],
+/// with the output name to sort by.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
     plan: &mut ProjectionRewritePlan,
+    selected_aggregates: &[(usize, String)],
 ) {
     let mut helpers = Vec::new();
     for (current_sort_position, sort) in select.sort_clause().into_iter().enumerate() {
+        if let Some((_, output_name)) = selected_aggregates
+            .iter()
+            .find(|(position, _)| *position == current_sort_position)
+        {
+            push_helper(
+                plan,
+                current_sort_position,
+                OrderBySource::Column(OrderBy::helper_column_name(current_sort_position)),
+                output_name.clone(),
+                false,
+            );
+            continue;
+        }
         let node = sort.node();
         let source = match node {
             Node::ColumnRef(column) => {
@@ -259,7 +348,7 @@ mod tests {
                 panic!("expected SELECT");
             };
             let mut select = mem.make_unique(select);
-            rewrite_select(&mut select.as_mut(), mem, &mut plan);
+            rewrite_select(&mut select.as_mut(), mem, &mut plan, &[]);
             select
         });
         (
