@@ -411,7 +411,6 @@ impl ReshardingState {
             return Err(Error::ReshardingExists {
                 key: key.to_string(),
                 stage: record.stage.to_string(),
-                command: record.command.kind(),
             });
         }
         let existing = existing_slots(&self.source, &self.publication, &self.slot_name)

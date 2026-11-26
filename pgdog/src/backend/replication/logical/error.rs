@@ -11,15 +11,6 @@ use crate::{
 };
 
 use super::run::snapshot::ConfigMismatch;
-use pgdog_stats::CommandKind;
-
-fn abort_hint(command: CommandKind) -> &'static str {
-    match command {
-        CommandKind::Reshard => "abort it with WITH (abort) or data-sync --abort",
-        CommandKind::Replicate => "abort it with REPLICATE ... WITH (abort)",
-        CommandKind::Unknown => "abort it with the command that started it, WITH (abort)",
-    }
-}
 
 #[derive(Debug, Display, Error)]
 pub(crate) enum RecordMismatch {
@@ -310,12 +301,8 @@ pub(crate) enum Error {
     #[error("unsupported resharding state: {0}")]
     ReshardingFormat(String),
 
-    #[error("resharding {key} is unfinished at stage {stage}; {}", abort_hint(*command))]
-    ReshardingExists {
-        key: String,
-        stage: String,
-        command: CommandKind,
-    },
+    #[error("resharding {key} is unfinished at stage {stage}; resume or abort it")]
+    ReshardingExists { key: String, stage: String },
 
     #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
     ReshardingSlotsPartial(String),

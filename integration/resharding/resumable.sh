@@ -4,15 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/shared.sh"
 
-PGDOG_ARGS=(--config "${SCRIPT_DIR}/pgdog.toml" --users "${SCRIPT_DIR}/users.toml")
-SYNC_ARGS=(--from-database source --to-database destination --publication pgdog)
 SLOT=resharding_resume
-
-pgdog_cli() {
-    local command="$1"
-    shift
-    "${PGDOG_BIN}" "${PGDOG_ARGS[@]}" "${command}" "${SYNC_ARGS[@]}" "$@"
-}
 
 task_status() {
     local row

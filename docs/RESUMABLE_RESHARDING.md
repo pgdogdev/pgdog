@@ -342,7 +342,7 @@ flowchart LR
 |---|---|
 |Take the lock, check the key, insert the row|The first step of the reshard or replication task takes the lock and refuses a key with a row. Then it inserts the row with stage `initializing`. The start command replies with the task id first, so a duplicate key fails the task with `ReshardingExists`, visible in `SHOW TASKS`. The task puts the resumable state into the shared run state.|
 |Hold the lock and the state connection|The shared run state. The lock lives until the run ends or pauses, not until the last copy of the state is dropped.|
-|Skip finished phases|The resharding pipeline reads the stored stage. A row at `copy_tables` cannot resume until copy progress exists (Stage 3).|
+|Skip finished phases|Stage 3: the resharding pipeline reads the stored stage. Today it chooses its phases from the command options only. A row at `copy_tables` cannot resume until copy progress exists (Stage 3).|
 |Adopt slots, keep origins|Before it takes the row, the resume loads the stored slots and their origins into the shared run state. Replication then finds them and creates nothing.|
 |Stop, error or lock loss → pause|The existing cleanup paths check the resumable state (Stage 1).|
 |Validation|The command checks the row, the command kind, the slot and the lock before it registers the task, so errors return at once. The task then validates again under the lock: the full command, the slot, the config snapshot, the stage, every slot and every origin.|
@@ -664,6 +664,7 @@ Rules:
 5. Copy the parts with no progress. Commit each part with 2PC and record its progress.
 6. Give the copy LSNs of all complete parts to table sync and replication.
 7. Create missing origins. Write `table_sync`. Run table sync.
+8. A run stored at `replication` skips copy and table sync. It loads the copy LSNs from the markers and starts replication. The check that refuses a run that copied data uses the stored stage, not the `replicate_only` option. The command kind must still match.
 
 A redone part gets a later copy LSN. The forward slot is older, so replay covers every change.
 
