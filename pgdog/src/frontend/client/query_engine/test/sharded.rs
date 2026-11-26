@@ -467,7 +467,6 @@ async fn test_sharded_distinct_aggregates_over_values_shards_share() {
     client.read_until('Z').await.unwrap();
 }
 
-/// Regression for https://github.com/pgdogdev/pgdog/issues/2100.
 #[tokio::test]
 async fn test_sharded_distinct_on_key_missing_from_select_list() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
