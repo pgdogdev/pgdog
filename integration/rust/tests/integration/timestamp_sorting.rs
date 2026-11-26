@@ -1,4 +1,5 @@
-use crate::setup::connections_sqlx;
+use super::numeric_infinity::text_rows;
+use crate::setup::{admin_tokio, connections_sqlx, connections_tokio};
 use chrono::{Duration, Utc};
 use sqlx::{Executor, Row};
 
@@ -353,4 +354,74 @@ async fn test_timestamp_sorting_sqlx_text_protocol() {
         .unwrap();
 
     sharded_conn.close().await;
+}
+
+/// Timestamps merged across shards are re-encoded by PgDog; their text
+/// must match Postgres, which omits a zero fraction and trims trailing zeros.
+#[tokio::test]
+async fn timestamp_text_matches_postgres_across_shards() -> Result<(), Box<dyn std::error::Error>> {
+    let connections = connections_tokio().await;
+    let sharded = &connections[1];
+    sharded.batch_execute("SET TimeZone TO 'UTC'").await?;
+    sharded
+        .batch_execute("DROP TABLE IF EXISTS timestamp_text_test")
+        .await?;
+    sharded
+        .batch_execute(
+            "CREATE TABLE timestamp_text_test (customer_id BIGINT, t TIMESTAMP, tz TIMESTAMPTZ)",
+        )
+        .await?;
+    admin_tokio().await.batch_execute("RELOAD").await?;
+
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 0 */ INSERT INTO timestamp_text_test VALUES
+             (1, '2013-07-01 10:00:00', '2013-07-01 10:00:00+00'),
+             (2, '2013-07-01 10:00:00.5', '2013-07-01 10:00:00.5+00')",
+        )
+        .await?;
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 1 */ INSERT INTO timestamp_text_test VALUES
+             (101, '2013-07-01 10:00:00', '2013-07-01 10:00:00+00'),
+             (102, '2013-07-01 10:00:00.000001', '2013-07-01 10:00:00.000001+00'),
+             (103, '2013-07-02 23:59:59.12', '2013-07-02 23:59:59.12+00')",
+        )
+        .await?;
+
+    assert_eq!(
+        text_rows(
+            sharded,
+            "SELECT MIN(t), MAX(t), MIN(tz), MAX(tz) FROM timestamp_text_test",
+        )
+        .await?,
+        [[
+            "2013-07-01 10:00:00",
+            "2013-07-02 23:59:59.12",
+            "2013-07-01 10:00:00+00",
+            "2013-07-02 23:59:59.12+00",
+        ]]
+    );
+    assert_eq!(
+        text_rows(
+            sharded,
+            "SELECT t, tz, COUNT(*) FROM timestamp_text_test GROUP BY t, tz ORDER BY t",
+        )
+        .await?,
+        [
+            ["2013-07-01 10:00:00", "2013-07-01 10:00:00+00", "2"],
+            [
+                "2013-07-01 10:00:00.000001",
+                "2013-07-01 10:00:00.000001+00",
+                "1"
+            ],
+            ["2013-07-01 10:00:00.5", "2013-07-01 10:00:00.5+00", "1"],
+            ["2013-07-02 23:59:59.12", "2013-07-02 23:59:59.12+00", "1"],
+        ]
+    );
+
+    sharded
+        .batch_execute("DROP TABLE timestamp_text_test")
+        .await?;
+    Ok(())
 }

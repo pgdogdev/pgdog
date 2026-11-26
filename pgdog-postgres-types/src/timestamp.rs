@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use super::*;
 
-use super::interval::bigint;
+use super::interval::{FractionalMicros, bigint, parse_fractional_micros};
 use bytes::{Buf, Bytes};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use schemars::JsonSchema;
@@ -68,9 +68,14 @@ impl Display for Timestamp {
 
         write!(
             f,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second, self.micros
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            self.year, self.month, self.day, self.hour, self.minute, self.second
         )?;
+
+        // Postgres omits a zero fraction.
+        if self.micros != 0 {
+            write!(f, ".{}", FractionalMicros(self.micros))?;
+        }
 
         if let Some(offset) = self.offset {
             write!(f, "{:+03}", offset)?;
@@ -217,26 +222,23 @@ impl FromDataType for Timestamp {
                     assign!(result, minute, parts);
 
                     if let Some(seconds) = parts.next() {
+                        // Postgres omits a zero fraction, so the offset can
+                        // directly follow the seconds: "10:00:00+00".
+                        let (seconds, offset) = match seconds.find(['+', '-']) {
+                            Some(at) => seconds.split_at(at),
+                            None => (seconds, ""),
+                        };
                         let mut parts = seconds.split(".");
                         assign!(result, second, parts);
-                        let micros = parts.next();
-                        if let Some(micros) = micros {
-                            let neg = micros.find('-').is_some();
-                            let mut parts = micros.split(&['-', '+']);
-                            #[allow(clippy::unnecessary_lazy_evaluations)]
-                            let fraction = parts.next().ok_or_else(|| Error::InvalidTimestamp)?;
-                            if fraction.is_empty() || fraction.len() > 6 {
-                                return Err(Error::InvalidTimestamp);
-                            }
-                            result.micros =
-                                fraction.parse::<i32>()? * 10_i32.pow(6 - fraction.len() as u32);
-                            if let Some(offset) = parts.next() {
-                                let offset: i8 = bigint(offset)?
-                                    .try_into()
-                                    .map_err(|_| Error::InvalidTimestamp)?;
-                                let offset = if neg { -offset } else { offset };
-                                result.offset = Some(offset);
-                            }
+                        if let Some(fraction) = parts.next() {
+                            result.micros = parse_fractional_micros(fraction)
+                                .map_err(|_| Error::InvalidTimestamp)?;
+                        }
+                        if !offset.is_empty() {
+                            let offset: i8 = bigint(offset)?
+                                .try_into()
+                                .map_err(|_| Error::InvalidTimestamp)?;
+                            result.offset = Some(offset);
                         }
                     }
                 }
@@ -322,6 +324,26 @@ mod test {
                     "{input}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_timestamp_text_fraction_matches_postgres() {
+        for (input, expected) in [
+            ("2025-03-05 14:51:42", "2025-03-05 14:51:42"),
+            ("2025-03-05 14:51:42.000000", "2025-03-05 14:51:42"),
+            ("2025-03-05 14:51:42.5", "2025-03-05 14:51:42.5"),
+            ("2025-03-05 14:51:42.010", "2025-03-05 14:51:42.01"),
+            ("2025-03-05 14:51:42.000001", "2025-03-05 14:51:42.000001"),
+            ("2025-03-05 14:51:42.123450", "2025-03-05 14:51:42.12345"),
+            ("2025-03-05 14:51:42.123456", "2025-03-05 14:51:42.123456"),
+            ("2025-03-05 14:51:42.100000+00", "2025-03-05 14:51:42.1+00"),
+            ("2025-03-05 14:51:42-08", "2025-03-05 14:51:42-08"),
+        ] {
+            let timestamp = Timestamp::decode(input.as_bytes(), Format::Text)
+                .expect("valid PostgreSQL timestamp");
+            let encoded = timestamp.encode(Format::Text).expect("text encoding");
+            assert_eq!(encoded, expected.as_bytes(), "{input}");
         }
     }
 
@@ -749,7 +771,7 @@ mod test {
             offset: Some(5),
             special: None,
         };
-        assert_eq!(ts_positive.to_string(), "2024-01-15 12:30:45.000000+05");
+        assert_eq!(ts_positive.to_string(), "2024-01-15 12:30:45+05");
 
         let ts_negative = Timestamp {
             year: 2024,
@@ -762,7 +784,7 @@ mod test {
             offset: Some(-8),
             special: None,
         };
-        assert_eq!(ts_negative.to_string(), "2024-01-15 12:30:45.000000-08");
+        assert_eq!(ts_negative.to_string(), "2024-01-15 12:30:45-08");
 
         let ts_no_offset = Timestamp {
             year: 2024,
@@ -775,7 +797,7 @@ mod test {
             offset: None,
             special: None,
         };
-        assert_eq!(ts_no_offset.to_string(), "2024-01-15 12:30:45.000000");
+        assert_eq!(ts_no_offset.to_string(), "2024-01-15 12:30:45");
     }
 
     #[test]
@@ -798,7 +820,7 @@ mod test {
         let encoded = datum.encode(Format::Text).unwrap();
         assert_eq!(
             std::str::from_utf8(&encoded).unwrap(),
-            "2024-06-15 10:30:00.000000"
+            "2024-06-15 10:30:00"
         );
     }
 

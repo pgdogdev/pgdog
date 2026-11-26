@@ -120,8 +120,20 @@ mod test {
         let encoded = ts.encode(Format::Text).unwrap();
         assert_eq!(
             std::str::from_utf8(&encoded).unwrap(),
-            "2024-01-15 12:30:45.000000+00"
+            "2024-01-15 12:30:45+00"
         );
+    }
+
+    #[test]
+    fn test_timestamptz_without_fraction_roundtrip() {
+        for text in ["2024-06-15 10:30:00+05", "2024-06-15 10:30:00-08"] {
+            let ts = TimestampTz::decode(text.as_bytes(), Format::Text).expect("valid timestamptz");
+            assert_eq!(ts.micros, 0, "{text}");
+            assert_eq!(
+                ts.encode(Format::Text).expect("text encoding"),
+                text.as_bytes()
+            );
+        }
     }
 
     #[test]
@@ -135,7 +147,7 @@ mod test {
         let encoded = datum.encode(Format::Text).unwrap();
         assert_eq!(
             std::str::from_utf8(&encoded).unwrap(),
-            "2024-06-15 10:30:00.000000+05"
+            "2024-06-15 10:30:00+05"
         );
     }
 

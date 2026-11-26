@@ -101,7 +101,7 @@ async fn numeric_infinities_merge_across_shards() -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-async fn text_rows(client: &Client, query: &str) -> Result<Vec<Vec<String>>, Error> {
+pub(super) async fn text_rows(client: &Client, query: &str) -> Result<Vec<Vec<String>>, Error> {
     Ok(client
         .simple_query(query)
         .await?
