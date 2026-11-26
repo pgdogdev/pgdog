@@ -217,29 +217,32 @@ impl FromDataType for Timestamp {
                 }
 
                 if let Some(time) = time {
-                    let mut parts = time.split(":");
+                    // Split the offset off first: it can follow the seconds
+                    // directly ("10:00:00+00") and can contain ':' ("+05:30").
+                    let (clock, offset) = match time.find(['+', '-']) {
+                        Some(at) => time.split_at(at),
+                        None => (time, ""),
+                    };
+
+                    let mut parts = clock.split(":");
                     assign!(result, hour, parts);
                     assign!(result, minute, parts);
 
                     if let Some(seconds) = parts.next() {
-                        // Postgres omits a zero fraction, so the offset can
-                        // directly follow the seconds: "10:00:00+00".
-                        let (seconds, offset) = match seconds.find(['+', '-']) {
-                            Some(at) => seconds.split_at(at),
-                            None => (seconds, ""),
-                        };
                         let mut parts = seconds.split(".");
                         assign!(result, second, parts);
                         if let Some(fraction) = parts.next() {
                             result.micros = parse_fractional_micros(fraction)
                                 .map_err(|_| Error::InvalidTimestamp)?;
                         }
-                        if !offset.is_empty() {
-                            let offset: i8 = bigint(offset)?
-                                .try_into()
-                                .map_err(|_| Error::InvalidTimestamp)?;
-                            result.offset = Some(offset);
-                        }
+                    }
+
+                    // Offsets are whole hours; "+05:30" fails to parse here.
+                    if !offset.is_empty() {
+                        let offset: i8 = bigint(offset)?
+                            .try_into()
+                            .map_err(|_| Error::InvalidTimestamp)?;
+                        result.offset = Some(offset);
                     }
                 }
 
@@ -344,6 +347,17 @@ mod test {
                 .expect("valid PostgreSQL timestamp");
             let encoded = timestamp.encode(Format::Text).expect("text encoding");
             assert_eq!(encoded, expected.as_bytes(), "{input}");
+        }
+    }
+
+    #[test]
+    fn test_timestamp_rejects_offset_with_minutes() {
+        // Not representable as whole hours; must not be truncated to +05.
+        for input in ["2025-01-15 10:00:15+05:30", "2025-01-15 10:00:15.5+05:30"] {
+            assert!(
+                Timestamp::decode(input.as_bytes(), Format::Text).is_err(),
+                "{input}"
+            );
         }
     }
 
