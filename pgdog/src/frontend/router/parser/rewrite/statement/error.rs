@@ -20,6 +20,9 @@ pub(crate) enum Error {
     #[error("cross-shard GROUP BY is unsupported: {0}")]
     UnsupportedGroupBy(&'static str),
 
+    #[error("cross-shard DISTINCT ON is unsupported: {0}")]
+    UnsupportedDistinctOn(&'static str),
+
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 

@@ -466,3 +466,89 @@ async fn test_sharded_distinct_aggregates_over_values_shards_share() {
         .await;
     client.read_until('Z').await.unwrap();
 }
+
+/// Regression for https://github.com/pgdogdev/pgdog/issues/2100.
+#[tokio::test]
+async fn test_sharded_distinct_on_key_missing_from_select_list() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    // One row per shard, and a third that repeats the first one's value.
+    let mut rows = [
+        (client.random_id_for_shard(0), "don_a"),
+        (client.random_id_for_shard(1), "don_b"),
+        (client.random_id_for_shard(1), "don_a"),
+    ];
+    rows.sort_unstable();
+    let ids = rows.map(|(id, _)| id.to_string()).join(", ");
+
+    // Cleanup first
+    client
+        .send_simple(Query::new(format!(
+            "DELETE FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    for (id, value) in rows {
+        client
+            .send_simple(Query::new(format!(
+                "INSERT INTO sharded (id, value) VALUES ({id}, '{value}')"
+            )))
+            .await;
+        client.read_until('Z').await.unwrap();
+    }
+
+    // Every id is its own key, selected or not, under its name or another.
+    for select in [
+        "value",
+        "id AS key, value",
+        "sharded.value, sharded.id AS id2",
+    ] {
+        client
+            .send_simple(Query::new(format!(
+                "SELECT DISTINCT ON (sharded.id) {select} FROM sharded \
+                 WHERE id IN ({ids}) ORDER BY sharded.id"
+            )))
+            .await;
+        let description = expect_message!(client.read().await, RowDescription);
+        assert_eq!(
+            description.fields.len(),
+            select.split(',').count(),
+            "the key helper is dropped: {select}"
+        );
+        for _ in rows {
+            expect_message!(client.read().await, DataRow);
+        }
+        assert_eq!(
+            expect_message!(client.read().await, CommandComplete).command(),
+            "SELECT 3",
+            "{select}"
+        );
+        expect_message!(client.read().await, ReadyForQuery);
+    }
+
+    // Rows that share a key are still reduced to the first one, across shards.
+    client
+        .send_simple(Query::new(format!(
+            "SELECT DISTINCT ON (upper(value)) id FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    let description = expect_message!(client.read().await, RowDescription);
+    assert_eq!(description.fields.len(), 1, "the key helper is dropped");
+    for _ in 0..2 {
+        expect_message!(client.read().await, DataRow);
+    }
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SELECT 2"
+    );
+    expect_message!(client.read().await, ReadyForQuery);
+
+    // Cleanup
+    client
+        .send_simple(Query::new(format!(
+            "DELETE FROM sharded WHERE id IN ({ids})"
+        )))
+        .await;
+    client.read_until('Z').await.unwrap();
+}

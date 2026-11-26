@@ -288,10 +288,18 @@ impl MultiShard {
                         return Err(err.into());
                     }
                 }
+                // The DISTINCT ON key can be a helper column.
+                let distinct_on = plan.and_then(|plan| plan.distinct_on.as_deref());
+                if let Some(distinct_on) = distinct_on {
+                    self.buffer
+                        .distinct_on(distinct_on.columns(), &self.decoder);
+                }
                 self.buffer.drop_helper_columns(plan, &self.decoder);
                 // With HAVING, the query engine applies these to the groups that pass.
                 if self.having_inputs.is_none() {
-                    self.buffer.distinct(self.route.distinct(), &self.decoder);
+                    if distinct_on.is_none() {
+                        self.buffer.distinct(self.route.distinct(), &self.decoder);
+                    }
                     self.buffer.limit(self.route.limit());
                 }
             }

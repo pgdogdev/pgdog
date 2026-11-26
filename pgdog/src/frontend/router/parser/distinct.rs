@@ -47,9 +47,8 @@ impl<'a> Distinct<'a> {
                 Node::ColumnRef(c) => Some(DistinctColumn::Name(
                     c.fields().into_iter().next_back()?.as_str()?.to_owned(),
                 )),
-                // FIXME: We should return an error to the client name if they
-                // sent a form we don't support and the query is routed
-                // cross-shard
+                // Expressions have no name. Cross-shard, the projection
+                // rewrite gives every key a column of its own.
                 _ => None,
             })
             .collect();

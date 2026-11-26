@@ -8,6 +8,7 @@ use super::Error;
 use super::aggregate::{
     AggregatesRewrite, HelperKind, disjoint_distinct, groups_stay_on_one_shard,
 };
+use super::distinct_on::{self, DistinctOnRewrite};
 use super::group_by::{self, GroupByRewrite};
 use super::having;
 use super::offset::{self, OffsetPlan};
@@ -67,6 +68,7 @@ pub(crate) struct ProjectionRewritePlan {
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
     pub(crate) having: Option<Box<HavingRewriteResult>>,
     pub(crate) group_by: Option<Box<GroupByRewrite>>,
+    pub(crate) distinct_on: Option<Box<DistinctOnRewrite>>,
     /// SELECT list positions of `DISTINCT` aggregates over the sharding key.
     /// Shards never share a key, so these merge like the plain aggregate.
     pub(crate) disjoint_distinct: Positions,
@@ -140,6 +142,7 @@ impl ProjectionRewritePlan {
             && self.order_by_helpers.is_empty()
             && self.having.is_none()
             && self.group_by.is_none()
+            && self.distinct_on.is_none()
             && self.disjoint_distinct.is_empty()
             && !self.groups_on_one_shard
     }
@@ -172,6 +175,11 @@ impl ProjectionRewritePlan {
             )
             .chain(
                 self.group_by
+                    .iter()
+                    .flat_map(|plan| plan.aliases().iter().map(String::as_str)),
+            )
+            .chain(
+                self.distinct_on
                     .iter()
                     .flat_map(|plan| plan.aliases().iter().map(String::as_str)),
             )
@@ -357,6 +365,7 @@ fn build(
             && select.group_clause().is_empty()
             && select.sort_clause().is_empty()
             && !rewrite_offset
+            && !distinct_on::is_distinct_on(select)
         {
             return Ok(None);
         }
@@ -427,7 +436,8 @@ fn build(
             .aggregate()
             .or(aggregate.as_ref())
             .expect("non-HAVING aggregate parsed before projection rewrite");
-        if !aggregate.is_empty() {
+        let merges_aggregates = !aggregate.is_empty();
+        if merges_aggregates {
             let aggregate_plan = AggregatesRewrite::rewrite_select(
                 &mut select.as_mut(),
                 mem,
@@ -437,6 +447,9 @@ fn build(
             plan.aggregate_helpers = aggregate_plan.aggregate_helpers;
         }
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
+        plan.distinct_on =
+            distinct_on::rewrite_select(&mut select.as_mut(), mem, schema, merges_aggregates)?
+                .map(Box::new);
         if remove_limit {
             offset::remove_select(&mut select.as_mut(), mem);
         } else if rewrite_offset && !has_having {
@@ -588,6 +601,81 @@ mod tests {
                 .unwrap_or_default();
             assert_eq!(marked, Positions::from_iter(expected), "{sql}");
         }
+    }
+
+    #[test]
+    fn distinct_on_keys_are_columns_of_the_shard_rows() {
+        use crate::frontend::router::parser::DistinctColumn::{Index, Name};
+
+        let hidden = |position: usize| Name(format!("__pgdog_distinct_on_col{position}"));
+
+        // (query, shard query, key columns)
+        for (sql, shard_sql, columns) in [
+            // The key isn't selected. The sort helper has it.
+            (
+                "SELECT DISTINCT ON (a.id) a.title FROM a JOIN b ON b.a_id = a.id ORDER BY a.id",
+                "SELECT DISTINCT ON (a.id) a.title, a.id AS __pgdog_order_col0 \
+                 FROM a JOIN b ON b.a_id = a.id ORDER BY a.id",
+                vec![Name("__pgdog_order_col0".into())],
+            ),
+            // The key is selected under another name.
+            (
+                "SELECT DISTINCT ON (a.id) a.id AS a_id, a.title FROM a JOIN b ON b.a_id = a.id",
+                "SELECT DISTINCT ON (a.id) a.id AS a_id, a.title FROM a JOIN b ON b.a_id = a.id",
+                vec![Name("a_id".into())],
+            ),
+            // Not selected and not sorted by.
+            (
+                "SELECT DISTINCT ON (a.id) a.title FROM a JOIN b ON b.a_id = a.id",
+                "SELECT DISTINCT ON (a.id) a.title, a.id AS __pgdog_distinct_on_col0 \
+                 FROM a JOIN b ON b.a_id = a.id",
+                vec![hidden(0)],
+            ),
+            // Another table's column has the key's name.
+            (
+                "SELECT DISTINCT ON (a.id) b.id, a.title FROM a JOIN b ON b.a_id = a.id",
+                "SELECT DISTINCT ON (a.id) b.id, a.title, a.id AS __pgdog_distinct_on_col0 \
+                 FROM a JOIN b ON b.a_id = a.id",
+                vec![hidden(0)],
+            ),
+            // An expression, a SELECT list position and a selected column.
+            (
+                "SELECT DISTINCT ON (lower(title), 2, id) id, region FROM a",
+                "SELECT DISTINCT ON (lower(title), 2, id) id, region, \
+                 lower(title) AS __pgdog_distinct_on_col0 FROM a",
+                vec![hidden(0), Index(1), Name("id".into())],
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let rewrite = build(&ast, &Schema::default(), &ShardedTables::default(), false)
+                .unwrap()
+                .unwrap();
+            let plan = rewrite.plan.as_deref().expect("plan");
+
+            assert_eq!(rewrite.sql.as_ref(), shard_sql, "{sql}");
+            assert_eq!(
+                plan.distinct_on.as_deref().expect("distinct on").columns(),
+                columns,
+                "{sql}"
+            );
+        }
+
+        // A plain DISTINCT compares the rows the client gets.
+        let ast = pg_raw_parse::parse("SELECT DISTINCT title FROM a ORDER BY title").unwrap();
+        let plan = build(&ast, &Schema::default(), &ShardedTables::default(), false)
+            .unwrap()
+            .and_then(|rewrite| rewrite.plan);
+        assert!(plan.is_none_or(|plan| plan.distinct_on.is_none()));
+
+        // Each shard would count only its own rows.
+        let ast = pg_raw_parse::parse(
+            "SELECT DISTINCT ON (count(*)) region, count(*) FROM a GROUP BY region",
+        )
+        .unwrap();
+        assert!(matches!(
+            build(&ast, &Schema::default(), &ShardedTables::default(), false),
+            Err(Error::UnsupportedDistinctOn(_))
+        ));
     }
 
     #[test]

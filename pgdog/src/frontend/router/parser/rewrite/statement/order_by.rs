@@ -72,7 +72,7 @@ fn explicit_output_name(
 
 /// Cross-shard sort looks up a RowDescription name. Reuse a projected column
 /// only when that name is unique; stars and duplicate names get a helper.
-fn unique_output_name(
+pub(super) fn unique_output_name(
     select: &nodes::SelectStmtMut<'_, '_>,
     column: &nodes::ColumnRef,
 ) -> Option<String> {
