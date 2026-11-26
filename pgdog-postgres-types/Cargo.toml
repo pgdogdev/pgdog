@@ -1,7 +1,12 @@
 [package]
 name = "pgdog-postgres-types"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+license = "MIT"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 chrono = "0.4"

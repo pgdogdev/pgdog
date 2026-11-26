@@ -1,14 +1,14 @@
 [package]
 name = "pgdog"
 version = "0.1.66"
-edition = "2024"
+edition.workspace = true
 description = "Modern PostgreSQL proxy, pooler, load balancer and database sharder."
-authors = ["PgDog <hi@pgdog.dev>"]
-license = "AGPL-3.0"
-homepage = "https://pgdog.dev"
-repository = "https://github.com/pgdogdev/pgdog"
-readme = "README.md"
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 default-run = "pgdog"
+publish = false
 
 [features]
 fips = ["tokio-rustls/fips"]

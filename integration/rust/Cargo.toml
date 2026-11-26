@@ -1,7 +1,12 @@
 [package]
 name = "integration_tests_rust"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish = false
 
 [lib]
 test = true
