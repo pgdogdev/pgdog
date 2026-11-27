@@ -184,4 +184,55 @@ mod tests {
             "Waiter should be removed on timeout"
         );
     }
+
+    #[tokio::test]
+    async fn test_dropped_waiter_after_hand_off_checks_in_server() {
+        let pool = Pool::new_test();
+        pool.lock().online = true;
+
+        let request = Request::unrouted(FrontendPid::new());
+        let mut waiting = Waiting::new(pool.clone(), &request).unwrap();
+
+        {
+            let mut wait = Box::pin(waiting.wait());
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+
+            pool.lock()
+                .put(Box::new(crate::backend::Server::default()), Instant::now());
+            assert_eq!(pool.lock().checked_out(), 1);
+        }
+        drop(waiting);
+
+        let guard = pool.lock();
+        assert!(guard.waiting.is_empty());
+        assert_eq!(
+            guard.checked_out(),
+            0,
+            "server handed to a dropped waiter must not stay checked out"
+        );
+        assert_eq!(guard.idle(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dropped_waiter_after_immediate_hand_off_checks_in_server() {
+        let pool = Pool::new_test();
+        pool.lock().online = true;
+        pool.lock()
+            .put(Box::new(crate::backend::Server::default()), Instant::now());
+        assert_eq!(pool.lock().idle(), 1);
+
+        let request = Request::unrouted(FrontendPid::new());
+        let waiting = Waiting::new(pool.clone(), &request).unwrap();
+        assert_eq!(pool.lock().checked_out(), 1);
+        drop(waiting);
+
+        let guard = pool.lock();
+        assert!(guard.waiting.is_empty());
+        assert_eq!(
+            guard.checked_out(),
+            0,
+            "server handed to a waiter that never polled must not stay checked out"
+        );
+        assert_eq!(guard.idle(), 1);
+    }
 }
