@@ -24,10 +24,11 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use tracing::info;
 
-use crate::auth::vault::{StaticSecretResponse, error, fetch_secret};
-use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
+use crate::auth::vault::{StaticSecretResponse, error, fetch_secret, watch_reloads};
+use crate::backend::databases::Databases;
+use crate::backend::pool::token_cache::{Credentials, FetchedCredentials, TokenCache};
 use crate::backend::{Error, pool::Address};
-use crate::config::config;
+use crate::config::{ServerAuth, config};
 use pgdog_config::vault::DEFAULT_REFRESH_PERCENT;
 
 #[derive(Deserialize)]
@@ -108,7 +109,7 @@ pub(crate) async fn credentials(addr: Address) -> Result<FetchedCredentials, Err
 /// This floor guards against hammering Vault when the
 /// observed TTL is very small — e.g. read close to the rotation boundary,
 /// or Vault's actual rotation lagging slightly behind the TTL it reported.
-const STATIC_ROLE_MIN_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
+const STATIC_ROLE_MIN_REFRESH_BACKOFF: Duration = Duration::from_millis(250);
 
 /// Fetch the current password for a Vault static database role, for use as
 /// a backend (server-side) connection password.
@@ -126,6 +127,7 @@ const STATIC_ROLE_MIN_REFRESH_BACKOFF: Duration = Duration::from_secs(1);
 pub(crate) async fn static_backend_credentials(addr: Address) -> Result<(String, Instant), Error> {
     let (vault, path) = vault_and_path(&addr)?;
 
+    watch_reloads();
     let secret: StaticSecretResponse = fetch_secret(&vault, path).await?;
 
     info!(
@@ -139,6 +141,22 @@ pub(crate) async fn static_backend_credentials(addr: Address) -> Result<(String,
         (now + Duration::from_secs(secret.data.ttl)).max(now + STATIC_ROLE_MIN_REFRESH_BACKOFF);
 
     Ok((secret.data.password, refresh_at))
+}
+
+/// Drop the cached static role password of every `vault_static` pool in
+/// `databases`, so their next connection fetches a fresh one.
+///
+/// Run on reload by [`watch_reloads`].
+pub(crate) fn evict_static_backend_credentials(databases: &Databases) {
+    for cluster in databases.all().values() {
+        for shard in cluster.shards() {
+            for pool in shard.pool_iter() {
+                if pool.addr().server_auth == ServerAuth::VaultStatic {
+                    TokenCache::global().evict(pool.addr());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -438,5 +456,63 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("500"), "expected 500 in: {msg}");
         assert!(msg.contains("internal error"), "expected body in: {msg}");
+    }
+
+    #[test]
+    fn test_evict_static_backend_credentials_only_evicts_vault_static_pools() {
+        use crate::backend::databases::from_config;
+        use crate::config::{Database, User, Users};
+
+        let host = "evict-static.internal";
+        let port = 15501;
+        let mut config = ConfigAndUsers::default();
+        config.config.databases = vec![Database {
+            name: "vault_db".into(),
+            host: host.into(),
+            port,
+            ..Default::default()
+        }];
+        config.users = Users {
+            users: vec![
+                User {
+                    name: "static_user".into(),
+                    database: "vault_db".into(),
+                    server_auth: ServerAuth::VaultStatic,
+                    server_vault_path: Some("database/static-creds/role".into()),
+                    ..Default::default()
+                },
+                User {
+                    name: "rds_user".into(),
+                    database: "vault_db".into(),
+                    server_auth: ServerAuth::RdsIam,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let databases = from_config(&config);
+
+        let addr = |user: &str| Address {
+            host: host.into(),
+            port,
+            user: user.into(),
+            ..Default::default()
+        };
+        let (static_addr, rds_addr) = (addr("static_user"), addr("rds_user"));
+        let refresh_at = Instant::now() + Duration::from_secs(3600);
+        for addr in [&static_addr, &rds_addr] {
+            TokenCache::global().set_with_refresh_at(addr, "secret".into(), refresh_at);
+        }
+
+        evict_static_backend_credentials(&databases);
+
+        // Evicted entries are refreshed immediately.
+        assert_eq!(
+            TokenCache::global().refresh_in(&static_addr),
+            Duration::ZERO
+        );
+        assert!(TokenCache::global().refresh_in(&rds_addr) > Duration::ZERO);
+
+        TokenCache::global().evict(&rds_addr);
     }
 }
