@@ -5,16 +5,11 @@ use rust_decimal::prelude::*;
 
 /// Merges the shards' `avg(x)` the way Postgres combines partial `avg()`
 /// states in a parallel query: it adds up the sums and counts and divides
-/// once ([`numeric_avg_combine()`], [`numeric_avg()`]). A shard's own average
-/// is already rounded, so weighting the averages by their counts can be off
-/// in the last digits.
+/// once.
 ///
 /// `avg(real)` and `avg(double precision)` are the exception. Postgres adds
 /// those up in `double precision`, but a shard's `sum(real)` is `real`, so
 /// the shards' averages are weighted by their counts instead.
-///
-/// [`numeric_avg_combine()`]: https://github.com/postgres/postgres/blob/REL_18_3/src/backend/utils/adt/numeric.c#L5250-L5315
-/// [`numeric_avg()`]: https://github.com/postgres/postgres/blob/REL_18_3/src/backend/utils/adt/numeric.c#L6246-L6279
 #[derive(Debug)]
 pub(super) struct Avg {
     pub(super) column: usize,

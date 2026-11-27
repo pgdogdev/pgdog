@@ -304,8 +304,6 @@ async fn avg_prepared_statement_should_merge() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-/// Postgres divides the total sum by the total count. Merging the shards'
-/// averages, which each shard has already rounded, was off in the last digits.
 #[tokio::test]
 async fn avg_matches_postgres_digits() -> Result<(), Box<dyn std::error::Error>> {
     let connections = connections_tokio().await;
