@@ -2,18 +2,30 @@ use crate::backend::Server;
 
 use super::{Error, Guard, Pool, Request};
 use tokio::{sync::oneshot::*, time::Instant};
+use tracing::error;
 
 pub(super) struct Waiting {
     pool: Pool,
-    rx: Option<Receiver<Result<Box<Server>, Error>>>,
+    rx: Receiver<Result<Box<Server>, Error>>,
     request: Request,
     waiting: bool,
 }
 
 impl Drop for Waiting {
     fn drop(&mut self) {
-        if self.waiting {
-            self.pool.lock().remove_waiter(self.request.id);
+        if !self.waiting {
+            return;
+        }
+
+        self.pool.lock().remove_waiter(self.request.id);
+
+        // Verify if the server was actually sent in by the pool,
+        // but we haven't read it yet. That should prevent issues
+        // with lost checkins due to race with tokio::timeout.
+        if let Ok(Ok(server)) = self.rx.try_recv()
+            && let Err(err) = self.pool.checkin(server)
+        {
+            error!("pool checkin error: {} [{}]", err, self.pool.addr());
         }
     }
 }
@@ -50,7 +62,7 @@ impl Waiting {
 
         Ok(Self {
             pool,
-            rx: Some(rx),
+            rx,
             request,
             waiting: true,
         })
@@ -58,10 +70,9 @@ impl Waiting {
 
     /// Wait for connection from the pool.
     pub(super) async fn wait(&mut self) -> Result<(Guard, Instant), Error> {
-        let rx = self.rx.take().expect("waiter rx taken");
-
-        // Can be cancelled. Drop will remove the waiter from the queue.
-        let server = rx.await;
+        // Can be cancelled. Drop will remove the waiter from the queue
+        // and check in a server that was sent but not received.
+        let server = (&mut self.rx).await;
 
         // Disarm the guard. We can't be cancelled beyond this point.
         self.waiting = false;
@@ -183,5 +194,56 @@ mod tests {
             pool_guard.waiting.is_empty(),
             "Waiter should be removed on timeout"
         );
+    }
+
+    #[tokio::test]
+    async fn test_dropped_waiter_after_hand_off_checks_in_server() {
+        let pool = Pool::new_test();
+        pool.lock().online = true;
+
+        let request = Request::unrouted(FrontendPid::new());
+        let mut waiting = Waiting::new(pool.clone(), &request).unwrap();
+
+        {
+            let mut wait = Box::pin(waiting.wait());
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+
+            pool.lock()
+                .put(Box::new(crate::backend::Server::default()), Instant::now());
+            assert_eq!(pool.lock().checked_out(), 1);
+        }
+        drop(waiting);
+
+        let guard = pool.lock();
+        assert!(guard.waiting.is_empty());
+        assert_eq!(
+            guard.checked_out(),
+            0,
+            "server handed to a dropped waiter must not stay checked out"
+        );
+        assert_eq!(guard.idle(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dropped_waiter_after_immediate_hand_off_checks_in_server() {
+        let pool = Pool::new_test();
+        pool.lock().online = true;
+        pool.lock()
+            .put(Box::new(crate::backend::Server::default()), Instant::now());
+        assert_eq!(pool.lock().idle(), 1);
+
+        let request = Request::unrouted(FrontendPid::new());
+        let waiting = Waiting::new(pool.clone(), &request).unwrap();
+        assert_eq!(pool.lock().checked_out(), 1);
+        drop(waiting);
+
+        let guard = pool.lock();
+        assert!(guard.waiting.is_empty());
+        assert_eq!(
+            guard.checked_out(),
+            0,
+            "server handed to a waiter that never polled must not stay checked out"
+        );
+        assert_eq!(guard.idle(), 1);
     }
 }
