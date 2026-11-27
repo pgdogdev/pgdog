@@ -33,7 +33,7 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             "unsupported aggregation string_agg: string_agg() is not yet supported",
         ),
         (
-            "SELECT value FROM sharded GROUP BY value ORDER BY count(*)",
+            "SELECT value FROM sharded GROUP BY value ORDER BY count(*) + 1",
             "ORDER BY an expression with an aggregate or DISTINCT is not supported across shards",
         ),
         (
