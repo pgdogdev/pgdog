@@ -1,4 +1,5 @@
-use crate::setup::{admin_sqlx, connections_sqlx};
+use super::numeric_infinity::text_rows;
+use crate::setup::{admin_sqlx, admin_tokio, connections_sqlx, connections_tokio};
 use sqlx::{Connection, Executor, PgConnection, Row};
 
 #[tokio::test]
@@ -300,5 +301,56 @@ async fn avg_prepared_statement_should_merge() -> Result<(), Box<dyn std::error:
         sharded.execute(comment).await.ok();
     }
 
+    Ok(())
+}
+
+/// Postgres divides the total sum by the total count. Merging the shards'
+/// averages, which each shard has already rounded, was off in the last digits.
+#[tokio::test]
+async fn avg_matches_postgres_digits() -> Result<(), Box<dyn std::error::Error>> {
+    let connections = connections_tokio().await;
+    let sharded = &connections[1];
+    sharded
+        .batch_execute("DROP TABLE IF EXISTS avg_digits_test")
+        .await?;
+    sharded
+        .batch_execute("CREATE TABLE avg_digits_test (customer_id BIGINT, kind TEXT, value INT)")
+        .await?;
+    admin_tokio().await.batch_execute("RELOAD").await?;
+
+    // Shard 0 averages 0.33333333333333333333 for both kinds, and shard 1
+    // 1.1428571428571429 for `a` and 1.2857142857142857 for `b`.
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 0 */ INSERT INTO avg_digits_test VALUES
+             (1, 'a', 0), (2, 'a', 0), (3, 'a', 1),
+             (4, 'b', 0), (5, 'b', 0), (6, 'b', 1)",
+        )
+        .await?;
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 1 */ INSERT INTO avg_digits_test VALUES
+             (101, 'a', 1), (102, 'a', 1), (103, 'a', 1), (104, 'a', 1),
+             (105, 'a', 1), (106, 'a', 1), (107, 'a', 2),
+             (111, 'b', 1), (112, 'b', 1), (113, 'b', 1), (114, 'b', 1),
+             (115, 'b', 1), (116, 'b', 1), (117, 'b', 3)",
+        )
+        .await?;
+
+    let rows = text_rows(
+        sharded,
+        "SELECT kind, avg(value), avg(value::numeric(10, 2)) FROM avg_digits_test \
+         GROUP BY kind ORDER BY kind",
+    )
+    .await?;
+    assert_eq!(
+        rows,
+        [
+            ["a", "0.90000000000000000000", "0.90000000000000000000"],
+            ["b", "1.00000000000000000000", "1.00000000000000000000"],
+        ]
+    );
+
+    sharded.batch_execute("DROP TABLE avg_digits_test").await?;
     Ok(())
 }

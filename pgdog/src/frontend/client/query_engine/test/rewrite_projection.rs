@@ -88,6 +88,7 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
         _ => panic!("expected Query"),
     };
     assert!(query.query().contains("__pgdog_count_col0"));
+    assert!(query.query().contains("__pgdog_sum_col0"));
     assert_eq!(
         client_request
             .route()
@@ -96,7 +97,7 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
             .expect("projection rewrite plan")
             .aggregate_helpers
             .len(),
-        1
+        2
     );
 }
 
