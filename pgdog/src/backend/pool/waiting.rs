@@ -2,18 +2,30 @@ use crate::backend::Server;
 
 use super::{Error, Guard, Pool, Request};
 use tokio::{sync::oneshot::*, time::Instant};
+use tracing::error;
 
 pub(super) struct Waiting {
     pool: Pool,
-    rx: Option<Receiver<Result<Box<Server>, Error>>>,
+    rx: Receiver<Result<Box<Server>, Error>>,
     request: Request,
     waiting: bool,
 }
 
 impl Drop for Waiting {
     fn drop(&mut self) {
-        if self.waiting {
-            self.pool.lock().remove_waiter(self.request.id);
+        if !self.waiting {
+            return;
+        }
+
+        self.pool.lock().remove_waiter(self.request.id);
+
+        // Verify if the server was actually sent in by the pool,
+        // but we haven't read it yet. That should prevent issues
+        // with lost checkins due to race with tokio::timeout.
+        if let Ok(Ok(server)) = self.rx.try_recv()
+            && let Err(err) = self.pool.checkin(server)
+        {
+            error!("pool checkin error: {} [{}]", err, self.pool.addr());
         }
     }
 }
@@ -50,7 +62,7 @@ impl Waiting {
 
         Ok(Self {
             pool,
-            rx: Some(rx),
+            rx,
             request,
             waiting: true,
         })
@@ -58,10 +70,9 @@ impl Waiting {
 
     /// Wait for connection from the pool.
     pub(super) async fn wait(&mut self) -> Result<(Guard, Instant), Error> {
-        let rx = self.rx.take().expect("waiter rx taken");
-
-        // Can be cancelled. Drop will remove the waiter from the queue.
-        let server = rx.await;
+        // Can be cancelled. Drop will remove the waiter from the queue
+        // and check in a server that was sent but not received.
+        let server = (&mut self.rx).await;
 
         // Disarm the guard. We can't be cancelled beyond this point.
         self.waiting = false;
