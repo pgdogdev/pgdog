@@ -10,6 +10,7 @@ use crate::backend::replication::logical::Error;
 use crate::backend::schema::sync::SchemaSyncError;
 use task::{TaskError, TaskStorage, TaskWaiter};
 
+pub(crate) mod abort_resharding;
 pub(crate) mod copy_data;
 pub(crate) mod ee;
 pub(crate) mod replication;
@@ -37,11 +38,11 @@ pub(crate) fn run_task<T: Task + 'static>(task: T) -> TaskWaiter<T::Output, T::E
     tasks_storage().run(task)
 }
 
-/// Error returned by the API migration tasks: either an error from the
+/// Error returned by the resharding task: either an error from the
 /// replication/orchestrator machinery, or a child task's [`TaskError`]
 /// (failure, cancellation, panic, or abandonment) surfaced to its parent.
 #[derive(Debug, Display, Error, From)]
-pub(crate) enum MigrationError {
+pub(crate) enum ReshardingError {
     Replication(Error),
     SchemaSync(SchemaSyncError),
     Task(TaskError<Error>),

@@ -4,7 +4,7 @@ use derive_more::Display;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Databases, ReplicationStatus};
+use crate::{Databases, ReplicationStatus, ReshardingId};
 
 /// The full migration one reshard task runs, and which phases it was asked
 /// to skip.
@@ -16,6 +16,14 @@ pub struct ReshardDefinition {
     pub replicate_only: bool,
     pub sync_only: bool,
     pub auto_cutover: bool,
+    #[serde(default = "default_cleanup_on_cancel")]
+    pub cleanup_on_cancel: bool,
+    #[serde(default)]
+    pub resumed: Option<ReshardingId>,
+}
+
+pub(crate) fn default_cleanup_on_cancel() -> bool {
+    true
 }
 
 /// Stages of the migration, reported as the task's status. The fine-grained

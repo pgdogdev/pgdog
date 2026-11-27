@@ -6,7 +6,7 @@ use sqlx::{Executor, Pool, Postgres, Row};
 use super::super::assert_layout;
 use super::replication::{prepare_replication, start_replication, wait_for_values};
 use super::table_copies::poll;
-use super::{cleanup, seed_rows, wait_for_task_status};
+use super::{cleanup, seed_rows, stop_task};
 
 const SLOT_PREFIX: &str = "__pgdog_repl_admin_slots";
 const SLOT_NAME: &str = "__pgdog_repl_admin_slots_0";
@@ -93,11 +93,7 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
     assert!(row.get::<Option<i64>, _>("last_transaction_ms").is_some());
     assert!(row.get::<Option<i64>, _>("task_id").is_some());
 
-    admin
-        .execute(unsafe_sql!("STOP_TASK {task_id}"))
-        .await
-        .expect("replication stop must succeed");
-    wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;
+    stop_task(&admin, task_id, TaskProgress::Cancelled).await;
     poll("the stopped slot to leave the report", || async {
         slot_row(&admin).await.is_none().then_some(())
     })

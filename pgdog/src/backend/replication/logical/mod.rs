@@ -3,6 +3,7 @@ pub(crate) mod data_sync;
 pub(crate) mod error;
 pub(crate) mod publisher;
 pub(crate) mod resharding_state;
+pub(crate) mod run;
 pub(crate) mod schema_sync;
 pub(crate) mod subscriber;
 pub(crate) mod tables_sync;

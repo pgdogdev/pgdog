@@ -159,16 +159,64 @@ pub(super) fn contains_aggregate(sort_key: Node, schema: &Schema) -> bool {
     found_aggregate
 }
 
+/// Whether the sort key is a whole call to an aggregate PgDog merges.
+pub(super) fn is_aggregate_call(sort_key: Node<'_>, schema: &Schema) -> bool {
+    matches!(sort_key, Node::FuncCall(call) if call
+        .funcname()
+        .iter()
+        .filter_map(Node::as_str)
+        .next_back()
+        .is_some_and(|name| AggregateFunction::from_name(name, schema).is_some()))
+}
+
+/// Append `ORDER BY` aggregates at `positions` as hidden SELECT-list entries,
+/// so they're merged across shards like visible ones.
+pub(super) fn append_hidden_aggregates<'a>(
+    select: &mut nodes::SelectStmtMut<'a, '_>,
+    mem: make::MemoryToken<'a>,
+    positions: &[usize],
+) {
+    let hidden = select
+        .sort_clause()
+        .into_iter()
+        .enumerate()
+        .filter(|(position, _)| positions.contains(position))
+        .map(|(position, sort)| {
+            mem.make_res_target(
+                Some(&OrderBy::helper_column_name(position)),
+                mem.empty(),
+                mem.make_unique(sort.node()).uncast(),
+            )
+        })
+        .collect::<Vec<_>>();
+    select.target_list_mut().extend(mem, mem.make_list(&hidden));
+}
+
 /// Project missing or ambiguous sort values so PgDog can merge shard results.
 /// Helpers use aliases rather than AST target positions because `*` expands
 /// only in Postgres.
+///
+/// `hidden_aggregates` are sort positions already projected by
+/// [`append_hidden_aggregates`].
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
     plan: &mut ProjectionRewritePlan,
+    hidden_aggregates: &[usize],
 ) {
     let mut helpers = Vec::new();
     for (current_sort_position, sort) in select.sort_clause().into_iter().enumerate() {
+        if hidden_aggregates.contains(&current_sort_position) {
+            let alias = OrderBy::helper_column_name(current_sort_position);
+            push_helper(
+                plan,
+                current_sort_position,
+                OrderBySource::Column(alias.clone()),
+                alias,
+                true,
+            );
+            continue;
+        }
         let node = sort.node();
         let source = match node {
             Node::ColumnRef(column) => {
@@ -259,7 +307,7 @@ mod tests {
                 panic!("expected SELECT");
             };
             let mut select = mem.make_unique(select);
-            rewrite_select(&mut select.as_mut(), mem, &mut plan);
+            rewrite_select(&mut select.as_mut(), mem, &mut plan, &[]);
             select
         });
         (

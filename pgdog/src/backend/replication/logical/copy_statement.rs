@@ -6,12 +6,11 @@ use super::data_sync::source_regclass;
 use super::publisher::Table;
 use pgdog_config::CopyFormat;
 
-use crate::backend::{
-    ConnectReason, Server, ServerOptions, pool::Address, replication::logical::Error,
-};
+use crate::backend::{pool::Address, replication::logical::Error};
 use crate::util::escape_identifier;
 
 use super::publisher::PublicationTable;
+use super::subscriber::connect_address;
 
 /// Sends a SELECT to Postgres to see the total amount of blocks, so that we can
 /// split them into equal ctid ranges to parallelize our table reads without worrying
@@ -78,13 +77,7 @@ impl TableColumnSplit {
             source_regclass(table)
         );
 
-        let mut server = Server::connect(
-            address,
-            ServerOptions::default(),
-            ConnectReason::Resharding,
-            Default::default(),
-        )
-        .await?;
+        let mut server = connect_address(address).await?;
 
         let blocks: i64 = server
             .fetch_all(sql)

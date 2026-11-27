@@ -1,12 +1,12 @@
 [package]
 name = "pgdog-plugin"
 version = "0.5.0"
-edition = "2024"
+edition.workspace = true
 license = "MIT"
-authors = ["Lev Kokotov <lev.kokotov@gmail.com>"]
+authors.workspace = true
 readme = "README.md"
-repository = "https://github.com/pgdogdev/pgdog"
-homepage = "https://pgdog.dev"
+repository.workspace = true
+homepage.workspace = true
 description = "PgDog plugin interface and helpers"
 include = ["src/", "include/", "build.rs", "LICENSE", "README.md"]
 

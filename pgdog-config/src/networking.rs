@@ -57,31 +57,31 @@ pub struct Tcp {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#keepalive>
     #[serde(default = "Tcp::default_keepalive")]
-    keepalive: bool,
+    pub keepalive: bool,
     /// How long a connection must be idle before keep-alive probes begin. Milliseconds.
     ///
     /// _Default:_ system default (2 hours)
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#time>
-    time: Option<u64>,
+    pub time: Option<u64>,
     /// Time between successive keep-alive probes. Milliseconds.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#interval>
-    interval: Option<u64>,
+    pub interval: Option<u64>,
     /// How many consecutive failed keep-alive probes before the connection is terminated.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#retries>
-    retries: Option<u32>,
+    pub retries: Option<u32>,
     /// Close connections with unacknowledged data after this duration (`TCP_USER_TIMEOUT`). Milliseconds.
     ///
     /// **Note:** Linux only.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout>
-    user_timeout: Option<u64>,
+    pub user_timeout: Option<u64>,
     /// TCP congestion control algorithm (e.g. `"reno"`, `"cubic"`).
     ///
     /// **Note:** Linux only.
-    congestion_control: Option<String>,
+    pub congestion_control: Option<String>,
 }
 
 impl std::fmt::Display for Tcp {
@@ -147,6 +147,17 @@ impl Tcp {
 
     pub fn congestion_control(&self) -> &Option<String> {
         &self.congestion_control
+    }
+
+    pub(crate) fn with_defaults(self, defaults: Self) -> Self {
+        Self {
+            keepalive: self.keepalive,
+            time: self.time.or(defaults.time),
+            interval: self.interval.or(defaults.interval),
+            retries: self.retries.or(defaults.retries),
+            user_timeout: self.user_timeout.or(defaults.user_timeout),
+            congestion_control: self.congestion_control.or(defaults.congestion_control),
+        }
     }
 }
 

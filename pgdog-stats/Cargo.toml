@@ -1,7 +1,12 @@
 [package]
 name = "pgdog-stats"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 serde = { workspace = true, features = ["rc"] }
@@ -13,6 +18,7 @@ indexmap.workspace = true
 schemars.workspace = true
 pgdog-util.workspace = true
 derive_more = { workspace = true, features = ["error", "from_str"] }
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

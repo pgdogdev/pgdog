@@ -1,4 +1,5 @@
-use crate::setup::connections_sqlx;
+use super::numeric_infinity::text_rows;
+use crate::setup::{admin_tokio, connections_sqlx, connections_tokio};
 use sqlx::{Executor, Row};
 
 #[tokio::test]
@@ -46,12 +47,12 @@ async fn sorts_by_case_expression_across_shards() {
 }
 
 #[tokio::test]
-async fn rejects_count_sort_key_and_keeps_connection_open() {
+async fn rejects_aggregate_expression_sort_key_and_keeps_connection_open() {
     let connections = connections_sqlx().await;
     let sharded_connection = &connections[1];
 
     let rejection_error = sharded_connection
-        .execute("SELECT value FROM sharded GROUP BY value ORDER BY count(*)")
+        .execute("SELECT value FROM sharded GROUP BY value ORDER BY count(*) + 1")
         .await
         .unwrap_err();
 
@@ -69,4 +70,58 @@ async fn rejects_count_sort_key_and_keeps_connection_open() {
         .unwrap();
 
     assert_eq!(still_connected, 1);
+}
+
+/// ORDER BY aggregates sort by their value merged across shards, not by one
+/// shard's partial value, whether or not they're in the SELECT list.
+#[tokio::test]
+async fn sorts_by_aggregate_across_shards() -> Result<(), Box<dyn std::error::Error>> {
+    let connections = connections_tokio().await;
+    let sharded = &connections[1];
+    sharded
+        .batch_execute("DROP TABLE IF EXISTS order_by_aggregate_test")
+        .await?;
+    sharded
+        .batch_execute(
+            "CREATE TABLE order_by_aggregate_test (customer_id BIGINT, kind TEXT, temp INT)",
+        )
+        .await?;
+    admin_tokio().await.batch_execute("RELOAD").await?;
+
+    // Each shard alone ranks the kinds differently from the merged totals:
+    // count a=3 b=4 c=1, avg(temp) a=10 b=25 c=20.
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 0 */ INSERT INTO order_by_aggregate_test VALUES
+             (1, 'a', 10), (2, 'a', 10), (3, 'a', 10), (4, 'b', 100)",
+        )
+        .await?;
+    sharded
+        .batch_execute(
+            "/* pgdog_shard: 1 */ INSERT INTO order_by_aggregate_test VALUES
+             (101, 'b', 0), (102, 'b', 0), (103, 'b', 0), (104, 'c', 20)",
+        )
+        .await?;
+
+    for (query, expected) in [
+        (
+            "SELECT kind, COUNT(*) FROM order_by_aggregate_test GROUP BY kind ORDER BY COUNT(*) DESC",
+            vec![vec!["b", "4"], vec!["a", "3"], vec!["c", "1"]],
+        ),
+        (
+            "SELECT kind FROM order_by_aggregate_test GROUP BY kind ORDER BY count(*) DESC",
+            vec![vec!["b"], vec!["a"], vec!["c"]],
+        ),
+        (
+            "SELECT kind FROM order_by_aggregate_test GROUP BY kind ORDER BY avg(temp) DESC",
+            vec![vec!["b"], vec!["c"], vec!["a"]],
+        ),
+    ] {
+        assert_eq!(text_rows(sharded, query).await?, expected, "{query}");
+    }
+
+    sharded
+        .batch_execute("DROP TABLE order_by_aggregate_test")
+        .await?;
+    Ok(())
 }

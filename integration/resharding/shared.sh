@@ -1,14 +1,18 @@
 #!/bin/bash
-set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 DEFAULT_BIN="${SCRIPT_DIR}/../../target/debug/pgdog"
 PGDOG_BIN=${PGDOG_BIN:-$DEFAULT_BIN}
 PGDOG_PID=""
 PGBENCH_PID=""
 MIGRATION_PID=""
+PGDOG_ARGS=(--config "${SCRIPT_DIR}/pgdog.toml" --users "${SCRIPT_DIR}/users.toml")
+SYNC_ARGS=(--from-database source --to-database destination --publication pgdog)
 
-# Run in our own process group so we can kill every child on exit.
-set -m
+export PGPASSWORD=pgdog
+export PGHOST=127.0.0.1
+export PGPORT=6432
+export PGUSER=pgdog
+
 cleanup() {
     local exit_code=$?
     trap - EXIT INT TERM
@@ -44,9 +48,200 @@ cleanup() {
     sleep 1
     pkill -KILL -P $$ 2> /dev/null || true
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+
+start_databases() {
+    (cd "${SCRIPT_DIR}" && docker compose down -v && docker compose up -d)
+
+    # Give it a second to boot up.
+    # It restarts the DB during initialization.
+    sleep 2
+
+    for port in 15432 15433 15434 15435; do
+        echo "Waiting for database on port ${port}..."
+        until PGPASSWORD=pgdog pg_isready -h 127.0.0.1 -p "${port}" -U pgdog -d postgres; do
+            sleep 1
+        done
+    done
+}
+
+initialize_resharding() {
+    # Run in our own process group so we can kill every child on exit.
+    set -m
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    pushd "${SCRIPT_DIR}"
+    start_databases
+
+    start_pgdog
+
+    until psql source -c 'SELECT 1' 2> /dev/null; do
+        sleep 1
+    done
+
+    start_pgbench
+
+    sleep 10
+}
+
+run_logged() {
+    local log="$1"
+    shift
+    if [ -n "${log}" ]; then
+        "$@" >> "${log}" 2>&1 &
+    else
+        "$@" &
+    fi
+}
+
+start_pgdog() {
+    run_logged "${PGDOG_LOG:-}" "${PGDOG_BIN}" "${PGDOG_ARGS[@]}"
+    PGDOG_PID="$!"
+}
+
+stop_pgdog() {
+    kill -TERM "${PGDOG_PID}" 2>/dev/null || true
+    wait "${PGDOG_PID}" 2>/dev/null || true
+    PGDOG_PID=""
+}
+
+start_pgbench() {
+    run_logged "${PGBENCH_LOG:-}" pgbench -f "${SCRIPT_DIR}/pgbench.sql" -P 1 source -c 5 -t 1000000
+    PGBENCH_PID="$!"
+}
+
+start_data_sync() {
+    run_logged "${DATA_SYNC_LOG:-}" "${PGDOG_BIN}" "${PGDOG_ARGS[@]}" data-sync "${SYNC_ARGS[@]}" "$@"
+    MIGRATION_PID="$!"
+}
+
+stop_data_sync() {
+    kill "-${1:-TERM}" "${MIGRATION_PID}" 2>/dev/null || true
+    wait "${MIGRATION_PID}" 2>/dev/null || true
+    MIGRATION_PID=""
+}
+
+stop_pgbench() {
+    kill -TERM "${PGBENCH_PID}" 2>/dev/null || true
+    wait "${PGBENCH_PID}" 2>/dev/null || true
+    PGBENCH_PID=""
+}
+
+kill_pgdog() {
+    kill -KILL "${PGDOG_PID}"
+    wait "${PGDOG_PID}" 2>/dev/null || true
+}
+
+restart_pgdog() {
+    kill -TERM "${PGDOG_PID}"
+    wait "${PGDOG_PID}" || true
+    start_pgdog
+    wait_for_pgdog_admin
+}
+
+wait_for_pgdog_admin() {
+    local deadline=$((SECONDS + 60))
+    until psql admin -c 'SHOW TASKS' > /dev/null 2>&1; do
+        if ! kill -0 "${PGDOG_PID}" 2>/dev/null; then
+            echo "ERROR: PgDog exited during restart"
+            return 1
+        fi
+        if [ "${SECONDS}" -ge "${deadline}" ]; then
+            echo "ERROR: PgDog did not accept admin connections within 60s after restart"
+            return 1
+        fi
+        sleep 1
+    done
+}
+
+pgdog_cli() {
+    local command="$1"
+    shift
+    "${PGDOG_BIN}" "${PGDOG_ARGS[@]}" "${command}" "${SYNC_ARGS[@]}" "$@"
+}
+
+pg_sql() { PGPASSWORD=pgdog psql -h 127.0.0.1 -p "$1" -U pgdog -d postgres -v ON_ERROR_STOP=1 -tAc "$2"; }
+
+source_slots() {
+    local first second
+    first=$(pg_sql 15432 "SELECT count(*) FROM pg_replication_slots WHERE slot_name = '$1_0'") || return 1
+    second=$(pg_sql 15433 "SELECT count(*) FROM pg_replication_slots WHERE slot_name = '$1_1'") || return 1
+    echo $((first + second))
+}
+
+# command|state|replication_slot of the source -> destination resharding.
+resharding() {
+    local rows
+    rows=$(psql admin -tAc 'SHOW RESHARDING') || return 1
+    grep '^source|destination|' <<< "${rows}" | cut -d'|' -f3,6,9 || true
+}
+
+admin_task_type() {
+    local target="$1"
+    psql admin -tAc 'SHOW TASKS' | while IFS='|' read -r id parent kind rest; do
+        if [ "${id}" = "${target}" ]; then
+            printf '%s' "${kind}"
+            break
+        fi
+    done
+}
+
+wait_admin_task_status() {
+    local task_id="$1"
+    local expected="$2"
+    local row status
+    for _ in $(seq 1 120); do
+        row=$(admin_task_row "${task_id}")
+        status=${row%%|*}
+        if [ "${status}" = "${expected}" ]; then
+            return 0
+        fi
+        case "${status}" in
+            finished|failed:*|panicked:*|cancelled)
+                echo "task ${task_id} reached ${status} while waiting for ${expected}"
+                psql admin -c 'SHOW TASKS'
+                return 1
+                ;;
+        esac
+        sleep 1
+    done
+    echo "task ${task_id} did not reach ${expected} within 120s"
+    psql admin -c 'SHOW TASKS'
+    return 1
+}
+
+wait_for_value() {
+    local expected="$1"
+    shift
+    local value=""
+    for _ in $(seq 1 30); do
+        value=$("$@") || value=""
+        if [ "${value}" = "${expected}" ]; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "$* returned ${value}, expected ${expected} within 30s"
+    psql admin -c 'SHOW TASKS'
+    return 1
+}
+
+admin() {
+    psql admin -c "$1"
+}
+
+slots() {
+    for port in 15432 15433; do
+        pg_sql "${port}" "SELECT slot_name, active, wal_status, confirmed_flush_lsn FROM pg_replication_slots"
+    done
+}
+
+state() {
+    admin 'SHOW RESHARDING'
+    admin 'SHOW TASKS'
+    slots
+}
 
 admin_task_row() {
     local target="$1"
@@ -115,39 +310,6 @@ run_finished_admin_task() {
     wait_admin_task_finished "${task_id}"
 }
 
-initialize_resharding() {
-    pushd "${SCRIPT_DIR}"
-    docker compose down -v && docker compose up -d
-
-    # Give it a second to boot up.
-    # It restarts the DB during initialization.
-    sleep 2
-
-    for port in 15432 15433 15434 15435; do
-        echo "Waiting for database on port ${port}..."
-        until PGPASSWORD=pgdog pg_isready -h 127.0.0.1 -p "${port}" -U pgdog -d postgres; do
-            sleep 1
-        done
-    done
-
-    "${PGDOG_BIN}" &
-    PGDOG_PID="$!"
-
-    export PGPASSWORD=pgdog
-    export PGHOST=127.0.0.1
-    export PGPORT=6432
-    export PGUSER=pgdog
-
-    until psql source -c 'SELECT 1' 2> /dev/null; do
-        sleep 1
-    done
-
-    pgbench -f pgbench.sql -P 1 source -c 5 -t 1000000 &
-    PGBENCH_PID="$!"
-
-    sleep 10
-}
-
 replace_copy_with_replicate() {
     local table="$1"
     local column="$2"
@@ -162,9 +324,7 @@ replace_copy_with_replicate() {
 prepare_resharding_verification() {
     sleep 10
 
-    kill -TERM "${PGBENCH_PID}" 2>/dev/null || true
-    wait "${PGBENCH_PID}" 2>/dev/null || true
-    PGBENCH_PID=""
+    stop_pgbench
 
     replace_copy_with_replicate tenants name
     replace_copy_with_replicate accounts full_name
@@ -179,25 +339,27 @@ prepare_resharding_verification() {
     # pgbench uses random(1, 1_000_000_000), so id=0 is reserved for this purpose.
     # WAL is ordered on each shard: all four physical shards must receive the sentinel
     # before count comparisons, whether replication runs forward or reverse.
-    # settings is an omni table: pgdog broadcasts the insert to all source shards.
+    # settings is an omni table: pgdog broadcasts the write to all source shards.
     write_replication_sentinel 0
 }
 
 write_replication_sentinel() {
     SENTINEL_ID="$1"
-    psql source -c "INSERT INTO settings (id, name, value) VALUES (${SENTINEL_ID}, 'sentinel_done', 'sentinel_done')"
+    SENTINEL_VALUE="sentinel-$(date +%s%N)"
+    psql source -c "INSERT INTO settings (id, name, value) VALUES (${SENTINEL_ID}, 'sentinel_done', '${SENTINEL_VALUE}')
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, value = EXCLUDED.value"
 }
 
 wait_for_replication_catchup() {
     local deadline port count
     local -a missing
-    echo "Waiting for the replication sentinel on all four shards (settings.id=${SENTINEL_ID}, timeout 120s)..."
+    echo "Waiting for the replication sentinel on all four shards (settings.id=${SENTINEL_ID}, value=${SENTINEL_VALUE}, timeout 120s)..."
     deadline=$((SECONDS + 120))
     while true; do
         missing=()
         for port in 15432 15433 15434 15435; do
             count=$(PGPASSWORD=pgdog psql -h 127.0.0.1 -p "${port}" -U pgdog -d postgres -tAc \
-                "SELECT COUNT(*) FROM settings WHERE id = ${SENTINEL_ID} AND name = 'sentinel_done'" \
+                "SELECT COUNT(*) FROM settings WHERE id = ${SENTINEL_ID} AND value = '${SENTINEL_VALUE}'" \
                 2>/dev/null) || count=0
             if [ "${count}" != 1 ]; then
                 missing+=(":${port}=${count}")
@@ -400,4 +562,11 @@ verify_resharding_data() {
     done
 
     return "${failed}"
+}
+
+verify() {
+    prepare_resharding_verification &&
+        wait_for_replication_catchup &&
+        pgdog_cli schema-sync --validation &&
+        verify_resharding_data
 }

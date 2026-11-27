@@ -1,8 +1,10 @@
 [package]
 name = "pgdog-macros"
 version = "0.1.1"
-edition = "2024"
-authors = ["Lev Kokotov <lev@pgdog.dev>"]
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 license = "MIT"
 description = "Macros used by the pgdog-plugin crate to generate safe FFI functions"
 

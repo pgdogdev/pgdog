@@ -167,6 +167,8 @@ impl ShardedTableConfig {
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+// deny_unknown_fields is required to make sure we parse the struct properly with fallback to default.
+// Any changes in this config will lead to sharding incompatibility that is better failed then bypassed.
 #[serde(rename_all = "snake_case", untagged, deny_unknown_fields)]
 pub enum ShardedMappingConfig {
     /// Catch-all fallback for any value not matched by a list or range rule.
