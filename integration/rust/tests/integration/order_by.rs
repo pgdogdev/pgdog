@@ -73,8 +73,7 @@ async fn rejects_aggregate_expression_sort_key_and_keeps_connection_open() {
 }
 
 /// ORDER BY aggregates sort by their value merged across shards, not by one
-/// shard's partial value, whether or not they're in the SELECT list
-/// (ClickBench Q08).
+/// shard's partial value, whether or not they're in the SELECT list.
 #[tokio::test]
 async fn sorts_by_aggregate_across_shards() -> Result<(), Box<dyn std::error::Error>> {
     let connections = connections_tokio().await;

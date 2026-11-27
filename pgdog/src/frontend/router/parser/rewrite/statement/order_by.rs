@@ -170,9 +170,7 @@ pub(super) fn is_aggregate_call(sort_key: Node<'_>, schema: &Schema) -> bool {
 }
 
 /// Append `ORDER BY` aggregates at `positions` as hidden SELECT-list entries,
-/// so they're merged across shards like visible ones. Postgres likewise adds
-/// a resjunk target for an `ORDER BY` expression missing from the SELECT list
-/// (`findTargetlistEntrySQL99()`).
+/// so they're merged across shards like visible ones.
 pub(super) fn append_hidden_aggregates<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
