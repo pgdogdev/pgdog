@@ -11,15 +11,6 @@ use crate::{
 };
 
 use super::run::snapshot::ConfigMismatch;
-use pgdog_stats::CommandKind;
-
-fn abort_hint(command: CommandKind) -> &'static str {
-    match command {
-        CommandKind::Reshard => "abort it with WITH (abort) or data-sync --abort",
-        CommandKind::Replicate => "abort it with REPLICATE ... WITH (abort)",
-        CommandKind::Unknown => "abort it with the command that started it, WITH (abort)",
-    }
-}
 
 #[derive(Debug, Display, Error)]
 pub(crate) enum RecordMismatch {
@@ -168,6 +159,9 @@ pub(crate) enum Error {
     #[error("replication slot \"{0}\" doesn't exist, but it should")]
     MissingReplicationSlot(String),
 
+    #[error("replication slot \"{0}\" lost its WAL and cannot be used")]
+    ReplicationSlotWalLost(String),
+
     #[error("replication origin {0} doesn't exist, but it should")]
     MissingReplicationOrigin(String),
 
@@ -307,12 +301,8 @@ pub(crate) enum Error {
     #[error("unsupported resharding state: {0}")]
     ReshardingFormat(String),
 
-    #[error("resharding {key} is unfinished at stage {stage}; {}", abort_hint(*command))]
-    ReshardingExists {
-        key: String,
-        stage: String,
-        command: CommandKind,
-    },
+    #[error("resharding {key} is unfinished at stage {stage}; resume or abort it")]
+    ReshardingExists { key: String, stage: String },
 
     #[error("only some replication slots \"{0}_<shard>\" exist; create all of them or none")]
     ReshardingSlotsPartial(String),
@@ -321,6 +311,11 @@ pub(crate) enum Error {
         "resharding {key} stopped at stage {stage} and cannot resume; abort it with WITH (abort) and start again"
     )]
     ReshardingNotResumable { key: String, stage: String },
+
+    #[error(
+        "resharding {0} copied tables, and a copy cannot resume yet; abort it with WITH (abort) and start again"
+    )]
+    ReshardingCopyNotResumable(String),
 
     #[error("no unfinished resharding {0}")]
     NoResharding(String),

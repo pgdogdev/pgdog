@@ -37,6 +37,37 @@ pub(crate) const RESHARDING_TABLE: &str = "resharding";
 /// Version of the data in [`RESHARDING_TABLE`]. Increase it on breaking changes.
 pub(crate) const FORMAT_VERSION: i32 = 1;
 
+/// What a resharding command does with its run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunMode {
+    /// Start a run. With `cleanup_on_cancel` false, a stop pauses it.
+    Run { cleanup_on_cancel: bool },
+    /// Abort the unfinished run with the same key.
+    Abort,
+    /// Resume the paused or crashed run with the same key.
+    Resume,
+}
+
+impl Default for RunMode {
+    fn default() -> Self {
+        Self::Run {
+            cleanup_on_cancel: true,
+        }
+    }
+}
+
+impl RunMode {
+    pub(crate) fn cleanup_on_cancel(self) -> bool {
+        matches!(
+            self,
+            Self::Abort
+                | Self::Run {
+                    cleanup_on_cancel: true
+                }
+        )
+    }
+}
+
 /// Identifier of the specific resharding.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Display)]
 #[display("{databases} ({publication})")]
@@ -138,7 +169,7 @@ pub(crate) async fn existing_slots(
         let slot =
             ReplicationSlot::new_permanent(publication, &addr, Some(slot_name.to_owned()), number);
         match slot.verify_exists().await {
-            Ok(()) => {
+            Ok(()) | Err(Error::ReplicationSlotWalLost(_)) => {
                 slots.insert(number, slot);
             }
             Err(Error::MissingReplicationSlot(_)) => (),

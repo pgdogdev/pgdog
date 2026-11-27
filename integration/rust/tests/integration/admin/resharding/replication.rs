@@ -10,8 +10,8 @@ use tokio::time::{sleep, timeout};
 use super::table_copies::poll;
 use super::{
     POLL, TEST_PUB, TEST_SCHEMA, TEST_TABLE, cleanup, create_publication, create_test_table,
-    fail_if_task_errored, run_task_command, seed_rows, task_status_line, test_slot_names,
-    wait_for_source_slot, wait_for_task, wait_for_task_status, with_cleanup,
+    fail_if_task_errored, run_task_command, seed_rows, stop_task, task_status_line,
+    test_slot_names, wait_for_source_slot, wait_for_task, with_cleanup,
 };
 
 pub(super) async fn prepare_replication(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
@@ -132,13 +132,7 @@ async fn test_stop_task() {
             "replication must create one slot on the source: {slots:?}"
         );
 
-        let row = admin
-            .fetch_one(unsafe_sql!("STOP_TASK {task_id}"))
-            .await
-            .unwrap();
-        assert_eq!(row.get::<String, _>("stop_task"), "OK");
-
-        wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;
+        stop_task(&admin, task_id, TaskProgress::Cancelled).await;
 
         poll(
             "the replication slot to be dropped on the source",
@@ -232,11 +226,7 @@ async fn test_cutover_starts_reverse_replication() {
         )
         .await;
 
-        admin
-            .execute(unsafe_sql!("STOP_TASK {task_id}"))
-            .await
-            .expect("the migration task must stop");
-        wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
+        stop_task(&admin, task_id, TaskProgress::Finished).await;
     })
     .await;
 }
@@ -307,11 +297,7 @@ async fn test_three_cutovers_alternate_the_traffic_target() {
 
         fail_if_task_errored(&admin, task_id).await;
 
-        admin
-            .execute(unsafe_sql!("STOP_TASK {task_id}"))
-            .await
-            .expect("the migration task must stop");
-        wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
+        stop_task(&admin, task_id, TaskProgress::Finished).await;
     })
     .await;
 }

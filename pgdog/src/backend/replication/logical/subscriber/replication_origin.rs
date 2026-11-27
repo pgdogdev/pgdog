@@ -101,7 +101,6 @@ impl ReplicationOrigin {
         self.ensure_exists().await
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn verify_exists(&self) -> Result<(), Error> {
         let mut server = connect_address(&self.address).await?;
         let name = &self.name;

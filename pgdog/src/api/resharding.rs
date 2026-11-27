@@ -18,7 +18,7 @@ use crate::api::{ReshardingError, Task, run_task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::backend::replication::logical::run::ReshardingCommand;
 use crate::config::config;
-use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
+use pgdog_stats::{ReshardDefinition, ReshardStatus, ReshardingId, TaskDefinition};
 
 /// Run the full migration from a source database to a target.
 /// Restore pre-data schema, copy data, restore post-data schema, then synchronize tables.
@@ -44,6 +44,7 @@ pub(crate) struct ReshardTask {
     /// on the destination, and replication never cuts over.
     #[builder(default)]
     pub(crate) tables_only: bool,
+    pub(crate) resumed: Option<ReshardingId>,
 }
 
 impl Task for ReshardTask {
@@ -63,6 +64,7 @@ impl Task for ReshardTask {
             sync_only: self.sync_only,
             auto_cutover: self.auto_cutover,
             cleanup_on_cancel: self.state.cleanup_on_cancel(),
+            resumed: self.resumed,
         }
     }
 
@@ -71,7 +73,7 @@ impl Task for ReshardTask {
         let cutover = self.cutover_mode();
         let command = self.command();
         let mut state = self.state;
-        state.start_run(command, ctx.root_id()).await?;
+        state.open_run(command, ctx.root_id()).await?;
         let schema_sync = SchemaSyncTask::builder()
             .publication_tables_only(self.tables_only)
             .databases(state.databases())

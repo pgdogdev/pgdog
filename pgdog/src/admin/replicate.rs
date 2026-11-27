@@ -5,10 +5,11 @@ use tracing::info;
 use crate::api::replication::ReplicationTask;
 use crate::api::run_task;
 use crate::api::schema_sync::SchemaSyncTask;
+use crate::backend::replication::logical::run::RunMode;
 use crate::backend::replication::resharding_state::ReshardingState;
 use pgdog_stats::CommandKind;
 
-use super::options::{Options, RunMode};
+use super::options::Options;
 use super::prelude::*;
 use super::reshard::check_abort;
 
@@ -60,14 +61,17 @@ impl Command for Replicate {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let state = ReshardingState::builder()
+        let mut state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
             .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
-            .cleanup_on_cancel(self.mode.cleanup_on_cancel())
+            .mode(self.mode)
             .build()?;
         check_abort!(self, state, CommandKind::Replicate);
+        let resumed = state
+            .check_resume(CommandKind::Replicate, self.replication_slot.as_deref())
+            .await?;
         info!(
             r#"replicate "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
@@ -83,6 +87,7 @@ impl Command for Replicate {
                 .state(state)
                 .schema_sync(schema_sync)
                 .validate(false)
+                .maybe_resumed(resumed)
                 .build(),
         )
         .id();
@@ -119,6 +124,7 @@ mod test {
                 },
             ),
             ("replicate a b pub (abort)", None, RunMode::Abort),
+            ("replicate a b pub (resume)", None, RunMode::Resume),
         ] {
             let cmd = Replicate::parse(sql).unwrap();
             assert_eq!(cmd.publication, "pub", "{sql}");

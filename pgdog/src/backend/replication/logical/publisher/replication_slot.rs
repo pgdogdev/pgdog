@@ -160,7 +160,11 @@ impl ReplicationSlot<Permanent> {
     }
 
     pub(crate) async fn verify_exists(&self) -> Result<(), Error> {
-        self.reload().await?;
+        let mut server = self.connect().await?;
+        if self.inner.fetch_wal_status(&mut server).await? == "lost" {
+            return Err(Error::ReplicationSlotWalLost(self.name.clone()));
+        }
+        self.inner.update_lsn(&mut server).await?;
         self.mark_existing();
 
         info!(
@@ -494,6 +498,21 @@ impl ReplicationSlotInner {
             current_lsn: Lsn::from_str(&current)?,
             confirmed_lsn: Lsn::from_str(&confirmed)?,
         })
+    }
+
+    async fn fetch_wal_status(&self, server: &mut Server) -> Result<String, Error> {
+        let query = format!(
+            "SELECT coalesce(wal_status, '') \
+             FROM pg_replication_slots \
+             WHERE slot_name = '{}'",
+            self.name
+        );
+        server
+            .fetch_all::<DataRow>(query)
+            .await?
+            .pop()
+            .and_then(|row| row.get::<String>(0, Format::Text))
+            .ok_or_else(|| Error::MissingReplicationSlot(self.name.clone()))
     }
 
     async fn update_lsn(&self, server: &mut Server) -> Result<Lsn, Error> {
