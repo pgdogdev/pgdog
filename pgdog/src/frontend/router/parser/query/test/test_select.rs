@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 
 use crate::config::{self, config};
-use crate::frontend::router::parser::{DistinctBy, DistinctColumn, Nulls, OrderBy, Shard};
+use crate::frontend::router::parser::{DistinctBy, Nulls, OrderBy, Shard};
 use crate::net::messages::bind::Parameter;
 
 use super::setup::*;
@@ -148,52 +148,18 @@ fn test_distinct_row() {
 }
 
 #[test]
-fn test_distinct_on_columns() {
+fn test_distinct_on() {
     let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![
-        Query::new("SELECT DISTINCT ON(1, email) * FROM users").into(),
-    ]);
+    // The key columns are resolved by the cross-shard projection rewrite.
+    for query in [
+        "SELECT DISTINCT ON(1, email) * FROM users",
+        "SELECT DISTINCT ON (t.id, t.email) t.id, t.email FROM users t",
+    ] {
+        let command = test.execute(vec![Query::new(query).into()]);
 
-    let route = command.route();
-    let distinct = route.distinct().as_ref().unwrap();
-    assert_eq!(
-        distinct,
-        &DistinctBy::Columns(vec![
-            DistinctColumn::Index(0),
-            DistinctColumn::Name(String::from("email"))
-        ])
-    );
-}
-
-#[test]
-fn test_distinct_on_qualified_columns() {
-    let mut test = QueryParserTest::new();
-
-    let command = test.execute(vec![
-        Query::new("SELECT DISTINCT ON (t.id, t.email) t.id, t.email FROM users t").into(),
-    ]);
-
-    let route = command.route();
-    let distinct = route.distinct().as_ref().unwrap();
-    assert_eq!(
-        distinct,
-        &DistinctBy::Columns(vec![
-            DistinctColumn::Name(String::from("id")),
-            DistinctColumn::Name(String::from("email"))
-        ])
-    );
-
-    let command = test.execute(vec![
-        Query::new("SELECT DISTINCT ON (users.id) users.id FROM users").into(),
-    ]);
-
-    let route = command.route();
-    let distinct = route.distinct().as_ref().unwrap();
-    assert_eq!(
-        distinct,
-        &DistinctBy::Columns(vec![DistinctColumn::Name(String::from("id"))])
-    );
+        assert_eq!(command.route().distinct(), &Some(DistinctBy::On), "{query}");
+    }
 }
 
 #[test]

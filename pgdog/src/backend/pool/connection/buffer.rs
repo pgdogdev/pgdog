@@ -8,8 +8,8 @@ use std::{
 
 use crate::{
     frontend::router::parser::{
-        Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
-        rewrite::statement::projection::ProjectionRewritePlan,
+        Aggregate, Limit, OrderBy,
+        rewrite::statement::{distinct_on::DistinctColumn, projection::ProjectionRewritePlan},
     },
     net::{
         Decoder,
@@ -193,39 +193,40 @@ impl Buffer {
         }
     }
 
-    pub(super) fn distinct(&mut self, distinct: &Option<DistinctBy>, decoder: &Decoder) {
-        if let Some(distinct) = distinct {
-            match distinct {
-                DistinctBy::Row => {
-                    self.buffer.retain(|row| self.distinct.insert(row.clone()));
+    /// Remove duplicate rows of a plain `DISTINCT`. Runs on the rows the
+    /// client gets, after the helper columns are dropped.
+    pub(super) fn distinct(&mut self) {
+        self.buffer.retain(|row| self.distinct.insert(row.clone()));
+    }
+
+    /// Keep the first row of every `DISTINCT ON` key. Runs on sorted rows
+    /// that still have their helper columns, which can hold the key.
+    pub(super) fn distinct_on(&mut self, columns: &[DistinctColumn], decoder: &Decoder) {
+        // Resolved once: looking a name up is O(number of columns).
+        let Some(indices) = columns
+            .iter()
+            .map(|column| match column {
+                DistinctColumn::Index(index) => Some(*index),
+                DistinctColumn::Name(name) | DistinctColumn::Hidden(name) => {
+                    decoder.row_description().field_index(name)
                 }
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            // Without the whole key every row would look like a duplicate.
+            return;
+        };
 
-                DistinctBy::Columns(columns) => {
-                    self.buffer.retain(|row| {
-                        let mut dr = DataRow::new();
-                        for col in columns {
-                            match col {
-                                DistinctColumn::Index(index) => {
-                                    if let Some(data) = row.column(*index) {
-                                        dr.add(data);
-                                    }
-                                }
-
-                                DistinctColumn::Name(name) => {
-                                    if let Some(index) = decoder.row_description().field_index(name)
-                                        && let Some(data) = row.column(index)
-                                    {
-                                        dr.add(data);
-                                    }
-                                }
-                            }
-                        }
-
-                        self.distinct.insert(dr)
-                    });
+        self.buffer.retain(|row| {
+            let mut key = DataRow::new();
+            for index in &indices {
+                if let Some(data) = row.column(*index) {
+                    key.add(data);
                 }
             }
-        }
+
+            self.distinct.insert(key)
+        });
     }
 
     /// Take messages from buffer.
@@ -690,7 +691,7 @@ mod test {
         }
 
         let mut distinct_row = buf.clone();
-        distinct_row.distinct(&Some(DistinctBy::Row), &decoder);
+        distinct_row.distinct();
 
         assert_eq!(distinct_row.buffer.len(), 15);
 
@@ -699,7 +700,7 @@ mod test {
             DistinctColumn::Name("id".to_string()),
         ] {
             let mut distinct_id = buf.clone();
-            distinct_id.distinct(&Some(DistinctBy::Columns(vec![distinct])), &decoder);
+            distinct_id.distinct_on(&[distinct], &decoder);
             assert_eq!(distinct_id.buffer.len(), 5);
         }
 
@@ -708,9 +709,14 @@ mod test {
             DistinctColumn::Name("email".to_string()),
         ] {
             let mut distinct_id = buf.clone();
-            distinct_id.distinct(&Some(DistinctBy::Columns(vec![distinct])), &decoder);
+            distinct_id.distinct_on(&[distinct], &decoder);
             assert_eq!(distinct_id.buffer.len(), 3);
         }
+
+        // A key that isn't in the rows can't tell them apart: all are kept.
+        let mut missing = buf.clone();
+        missing.distinct_on(&[DistinctColumn::Name("missing".into())], &decoder);
+        assert_eq!(missing.buffer.len(), 15);
 
         let mut buf = Buffer::default();
 
@@ -724,7 +730,7 @@ mod test {
         }
 
         assert_eq!(buf.buffer.len(), 15);
-        buf.distinct(&Some(DistinctBy::Row), &decoder);
+        buf.distinct();
 
         assert_eq!(buf.buffer.len(), 3);
     }
