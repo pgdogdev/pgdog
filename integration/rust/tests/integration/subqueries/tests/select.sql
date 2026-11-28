@@ -145,7 +145,7 @@ SELECT * FROM suborders WHERE id = (
 -- case
 -- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = avg
 -- route select: 0,1
--- sql: SELECT avg(id), count(id) AS __pgdog_count_col0 FROM subusers WHERE id < 4
+-- sql: SELECT avg(id), count(id) AS __pgdog_count_col0, sum(id) AS __pgdog_sum_col0 FROM subusers WHERE id < 4
 -- route select: 0,1
 -- sql: SELECT * FROM suborders WHERE id = (SELECT u.c1 FROM unnest($1::pg_catalog._numeric) u(c1)) ORDER BY id
 SELECT * FROM suborders WHERE id = (

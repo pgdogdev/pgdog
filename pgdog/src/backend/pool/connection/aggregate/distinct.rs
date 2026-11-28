@@ -26,8 +26,6 @@ pub(super) struct DistinctValues {
     values: HashSet<Datum>,
     /// Type the shards return the aggregate in, which the result keeps.
     data_type: DataType,
-    /// Smallest scale of the shards' `numeric` results.
-    scale: Option<u32>,
 }
 
 impl DistinctValues {
@@ -50,7 +48,6 @@ impl DistinctValues {
             function,
             values: HashSet::new(),
             data_type: DataType::Bigint,
-            scale: None,
         }
     }
 
@@ -58,9 +55,6 @@ impl DistinctValues {
     pub(super) fn accumulate(&mut self, result: Datum, values: Datum) -> Result<(), Error> {
         if !result.is_null() {
             self.data_type = result.data_type();
-            if let Some(scale) = avg::numeric_scale(&result) {
-                self.scale = Some(self.scale.map_or(scale, |min| min.min(scale)));
-            }
         }
 
         let values = match values {
@@ -86,15 +80,12 @@ impl DistinctValues {
     }
 
     pub(super) fn finalize(self) -> Result<Datum, Error> {
-        let count = self.values.len();
+        let count = i64::try_from(self.values.len())
+            .map_err(|_| TypeError::NumericOutOfRange(DataType::Bigint))?;
         match self.function {
-            Function::Count => {
-                let count = i64::try_from(count)
-                    .map_err(|_| TypeError::NumericOutOfRange(DataType::Bigint))?;
-                Ok(cast_count(count, self.data_type)?)
-            }
+            Function::Count => Ok(cast_count(count, self.data_type)?),
             Function::Sum => Ok(sum(self.values, self.data_type)?),
-            Function::Avg => avg::divide(sum(self.values, self.data_type)?, count, self.scale),
+            Function::Avg => avg::divide(sum(self.values, self.data_type)?, count),
         }
     }
 

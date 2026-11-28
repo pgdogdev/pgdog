@@ -130,15 +130,17 @@ impl State {
             target.function(),
             target.is_distinct() && !disjoint_distinct,
         ) {
-            (AggregateFunction::Avg, false) => Ok(Self::Avg(avg::Avg::new(
-                target.column(),
-                helper.count.ok_or_else(|| Error::UnsupportedAggregation {
-                    function: String::from("avg"),
-                    reason: String::from(
-                        "internal count helper was missing (this is a bug in pgdog)",
-                    ),
-                })?,
-            ))),
+            (AggregateFunction::Avg, false) => {
+                let (Some(count), Some(sum)) = (helper.count, helper.sum) else {
+                    return Err(Error::UnsupportedAggregation {
+                        function: String::from("avg"),
+                        reason: String::from(
+                            "internal count or sum helper was missing (this is a bug in pgdog)",
+                        ),
+                    });
+                };
+                Ok(Self::Avg(avg::Avg::new(target.column(), count, sum)))
+            }
             (AggregateFunction::Count, false) => Ok(Self::Count(von::Count::new(target.column()))),
             (
                 function @ (AggregateFunction::Count
@@ -229,13 +231,14 @@ impl State {
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<(), Error> {
         match self {
             State::Avg(state) => {
-                let value = row.get_column_checked(state.column, decoder)?.value;
-                let weight = row
+                let count = row
                     .get_column_checked(state.count_helper, decoder)?
                     .value
                     .as_i64()?;
-                state.accumulate(value, weight);
-                Ok(())
+                let value = row
+                    .get_column_checked(state.value_column(decoder), decoder)?
+                    .value;
+                state.accumulate(value, count)
             }
             State::Bit(state) => {
                 state.accumulate(row.get_column_checked(state.column, decoder)?.value)
@@ -345,11 +348,13 @@ impl<'a> Aggregates<'a> {
         let helpers_present = aggregate.targets().iter().all(|target| {
             let key = target.column();
             match target.function() {
-                // The count weighs shard averages. `avg(DISTINCT x)` is
-                // computed from the distinct values and may have only those.
-                AggregateFunction::Avg => helper_columns
-                    .get(&key)
-                    .is_some_and(|columns| columns.count.or(columns.distinct_values).is_some()),
+                // The average is the shards' sums over their counts.
+                // `avg(DISTINCT x)` is computed from the distinct values and
+                // may have only those.
+                AggregateFunction::Avg => helper_columns.get(&key).is_some_and(|columns| {
+                    columns.count.is_some() && columns.sum.is_some()
+                        || columns.distinct_values.is_some()
+                }),
                 AggregateFunction::StddevPop
                 | AggregateFunction::StddevSamp
                 | AggregateFunction::VarPop
@@ -533,11 +538,6 @@ fn checked_add_assign(lhs: &mut Datum, rhs: Datum) -> Result<(), TypeError> {
     Ok(())
 }
 
-fn checked_add(mut lhs: Datum, rhs: Datum) -> Result<Datum, TypeError> {
-    checked_add_assign(&mut lhs, rhs)?;
-    Ok(lhs)
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -683,25 +683,32 @@ mod test {
             Field::numeric("sum"),
             Field::numeric("avg"),
             Field::bigint("__pgdog_count_col1"),
+            Field::numeric("__pgdog_sum_col1"),
         ]));
 
         // (sum, avg, count) of the ids on each shard: {1, 2, 3} and {10, 20}.
+        // The hidden sum helper of the average equals the selected sum.
         let rows = [("6", "2", "3"), ("30", "15", "2")]
             .into_iter()
             .map(|(sum, avg, count)| {
                 let mut row = DataRow::new();
-                row.add(sum).add(avg).add(count);
+                row.add(sum).add(avg).add(count).add(sum);
                 row
             })
             .collect::<VecDeque<_>>();
 
         let mut plan = ProjectionRewritePlan {
-            aggregate_helpers: vec![AggregateHelper {
+            aggregate_helpers: [
+                (HelperKind::Count, "__pgdog_count_col1"),
+                (HelperKind::Sum, "__pgdog_sum_col1"),
+            ]
+            .map(|(kind, alias)| AggregateHelper {
                 target_column: 1,
                 distinct: true,
-                kind: HelperKind::Count,
-                alias: "__pgdog_count_col1".into(),
-            }],
+                kind,
+                alias: alias.into(),
+            })
+            .into(),
             ..Default::default()
         };
 

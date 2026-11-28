@@ -123,11 +123,18 @@ impl AggregatesRewrite {
                     kind: HelperKind::DistinctValues,
                 }]
             }
+            // PgDog adds up the shards' sums and counts, and divides once.
             AggregateFunction::Avg => {
-                vec![HelperSpec {
-                    func: Self::copy_and_rename_function(func_call, "count", mem),
-                    kind: HelperKind::Count,
-                }]
+                vec![
+                    HelperSpec {
+                        func: Self::copy_and_rename_function(func_call, "count", mem),
+                        kind: HelperKind::Count,
+                    },
+                    HelperSpec {
+                        func: Self::copy_and_rename_function(func_call, "sum", mem),
+                        kind: HelperKind::Sum,
+                    },
+                ]
             }
             AggregateFunction::StddevSamp
             | AggregateFunction::StddevPop
@@ -261,27 +268,46 @@ mod tests {
     fn rewrite_engine_adds_helper() {
         let (ast, plan) = rewrite("SELECT AVG(price) FROM menu");
         assert!(!plan.is_noop());
-        assert_eq!(plan.aggregate_helpers.len(), 1);
-        let helper = &plan.aggregate_helpers[0];
-        assert_eq!(helper.target_column, 0);
-        assert_eq!(helper.alias, "__pgdog_count_col0");
-        assert!(!helper.distinct);
-        assert!(matches!(helper.kind, HelperKind::Count));
+        let helpers = plan
+            .aggregate_helpers
+            .iter()
+            .map(|helper| {
+                (
+                    helper.target_column,
+                    helper.alias.as_str(),
+                    helper.kind,
+                    helper.distinct,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            helpers,
+            [
+                (0, "__pgdog_count_col0", HelperKind::Count, false),
+                (0, "__pgdog_sum_col0", HelperKind::Sum, false),
+            ]
+        );
 
         let aggregate = Aggregate::parse(&ast, &Default::default());
-        assert_eq!(aggregate.targets().len(), 2);
-        assert!(
-            aggregate
-                .targets()
-                .iter()
-                .any(|target| matches!(target.function(), AggregateFunction::Count))
+        let functions = aggregate
+            .targets()
+            .iter()
+            .map(|target| target.function().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            functions,
+            [
+                AggregateFunction::Avg,
+                AggregateFunction::Count,
+                AggregateFunction::Sum
+            ]
         );
     }
 
     #[test]
     fn rewrite_engine_handles_mismatched_pair() {
         let (ast, plan) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
-        assert_eq!(plan.aggregate_helpers.len(), 1);
+        assert_eq!(plan.aggregate_helpers.len(), 2);
         let helper = &plan.aggregate_helpers[0];
         assert_eq!(helper.target_column, 1);
         assert_eq!(helper.alias, "__pgdog_count_col1");
@@ -289,7 +315,7 @@ mod tests {
         assert!(matches!(helper.kind, HelperKind::Count));
 
         let aggregate = Aggregate::parse(&ast, &Default::default());
-        assert_eq!(aggregate.targets().len(), 3);
+        assert_eq!(aggregate.targets().len(), 4);
         assert!(
             aggregate
                 .targets()
@@ -303,20 +329,23 @@ mod tests {
     #[test]
     fn rewrite_engine_multiple_avg_helpers() {
         let (ast, plan) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
-        assert_eq!(plan.aggregate_helpers.len(), 2);
-
-        let helper_price = &plan.aggregate_helpers[0];
-        assert_eq!(helper_price.target_column, 0);
-        assert_eq!(helper_price.alias, "__pgdog_count_col0");
-        assert!(matches!(helper_price.kind, HelperKind::Count));
-
-        let helper_discount = &plan.aggregate_helpers[1];
-        assert_eq!(helper_discount.target_column, 1);
-        assert_eq!(helper_discount.alias, "__pgdog_count_col1");
-        assert!(matches!(helper_discount.kind, HelperKind::Count));
+        let aliases = plan
+            .aggregate_helpers
+            .iter()
+            .map(|helper| (helper.target_column, helper.alias.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            aliases,
+            [
+                (0, "__pgdog_count_col0"),
+                (0, "__pgdog_sum_col0"),
+                (1, "__pgdog_count_col1"),
+                (1, "__pgdog_sum_col1"),
+            ]
+        );
 
         let aggregate = Aggregate::parse(&ast, &Default::default());
-        assert_eq!(aggregate.targets().len(), 4);
+        assert_eq!(aggregate.targets().len(), 6);
         assert_eq!(
             aggregate
                 .targets()

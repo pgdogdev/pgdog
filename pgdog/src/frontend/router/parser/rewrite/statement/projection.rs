@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn avg_distinct_on_sharding_key_is_weighted_by_distinct_count() {
+    fn avg_distinct_on_sharding_key_merges_distinct_sums_and_counts() {
         let tables = ShardedTables::from(
             [ShardedTable {
                 name: Some("items".into()),
@@ -719,10 +719,11 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Each shard's average is weighted by how many distinct keys it has.
+        // Shards never share a key, so their distinct sums and counts add up.
         assert_eq!(
             rewrite.sql.as_ref(),
-            "SELECT avg(DISTINCT id), count(DISTINCT id) AS __pgdog_count_col0 FROM items"
+            "SELECT avg(DISTINCT id), count(DISTINCT id) AS __pgdog_count_col0, \
+             sum(DISTINCT id) AS __pgdog_sum_col0 FROM items"
         );
     }
 
@@ -744,7 +745,8 @@ mod tests {
             (
                 "SELECT region, temp FROM items GROUP BY region, temp ORDER BY avg(temp)",
                 "SELECT region, temp, avg(temp) AS __pgdog_order_col0, \
-                 count(temp) AS __pgdog_count_col2 FROM items GROUP BY region, temp ORDER BY avg(temp)",
+                 count(temp) AS __pgdog_count_col2, sum(temp) AS __pgdog_sum_col2 \
+                 FROM items GROUP BY region, temp ORDER BY avg(temp)",
                 2,
             ),
         ] {
@@ -823,7 +825,8 @@ mod tests {
             (
                 "SELECT category, avg(price) FROM items GROUP BY region, category",
                 "SELECT category, avg(price), region AS __pgdog_group_0, \
-                 count(price) AS __pgdog_count_col1 FROM items GROUP BY region, category",
+                 count(price) AS __pgdog_count_col1, sum(price) AS __pgdog_sum_col1 \
+                 FROM items GROUP BY region, category",
                 vec![2, 0],
                 1,
             ),
@@ -921,7 +924,8 @@ mod tests {
             (
                 "SELECT category, AVG(price) FROM items GROUP BY category LIMIT $1 OFFSET $2",
                 true,
-                "SELECT category, avg(price), count(price) AS __pgdog_count_col1 \
+                "SELECT category, avg(price), count(price) AS __pgdog_count_col1, \
+                 sum(price) AS __pgdog_sum_col1 \
                  FROM items GROUP BY category \
                  LIMIT CASE WHEN $1::bigint < 0 THEN $1::bigint END \
                  OFFSET CASE WHEN $2::bigint < 0 THEN $2::bigint END",
@@ -1068,7 +1072,7 @@ mod tests {
 
     #[test]
     fn having_operands_are_merged_with_the_select_list() {
-        // (query, merged aggregates, GROUP BY columns, AVG count helpers)
+        // (query, merged aggregates, GROUP BY columns, AVG count and sum helpers)
         for (sql, targets, group_by, helpers) in [
             // The grouping column is projected so shards' groups can be matched.
             (
@@ -1077,13 +1081,13 @@ mod tests {
                 1,
                 0,
             ),
-            // The selected and hidden AVG each need their own COUNT.
+            // The selected and hidden AVG each need their own COUNT and SUM.
             (
                 "SELECT customer_id, AVG(price) FROM purchases \
                  GROUP BY customer_id HAVING AVG(price) > 10",
                 2,
                 1,
-                2,
+                4,
             ),
             // An aggregate used only by HAVING is still merged.
             (
