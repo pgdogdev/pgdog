@@ -260,7 +260,7 @@ BEGIN
     PERFORM format('SET LOCAL lock_timeout TO ''%s''', lock_timeout);
 
     EXECUTE format(
-        'CREATE TABLE IF NOT EXISTS pgdog_shadow."%s" (LIKE "%s"."%s") PARTITION BY HASH("%s")',
+        'CREATE TABLE IF NOT EXISTS pgdog_shadow.%I (LIKE %I.%I) PARTITION BY HASH(%I)',
         shadow_table_name,
         schema_name,
         table_name,
@@ -268,10 +268,10 @@ BEGIN
     );
 
     -- Create sequence.
-    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS pgdog_shadow."%s" CACHE 100', shadow_seq_name);
+    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS pgdog_shadow.%I CACHE 100', shadow_seq_name);
 
     -- Make the sequence owned by the shadow table.
-    EXECUTE format('ALTER SEQUENCE pgdog_shadow."%s" OWNED BY pgdog_shadow.%s.%s', shadow_seq_name, shadow_table_name, column_name);
+    EXECUTE format('ALTER SEQUENCE pgdog_shadow.%I OWNED BY pgdog_shadow.%I.%I', shadow_seq_name, shadow_table_name, column_name);
 
     -- Drop identity constraint if one exists, since we're replacing it with a custom default.
     IF EXISTS (
@@ -282,19 +282,19 @@ BEGIN
         AND c.column_name = install_sharded_sequence.column_name
         AND c.is_identity = 'YES'
     ) THEN
-        EXECUTE format('ALTER TABLE "%s"."%s" ALTER COLUMN "%s" DROP IDENTITY', schema_name, table_name, column_name);
+        EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I DROP IDENTITY', schema_name, table_name, column_name);
     END IF;
 
     -- Set it as the default for the target table, allowing automatic ID generation.
-    EXECUTE format('ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DEFAULT pgdog.next_id_seq(''pgdog_shadow.%s''::regclass, ''pgdog_shadow.%s'')',
+    EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I SET DEFAULT pgdog.next_id_seq(%L::regclass, %L::regclass)',
         schema_name,
         table_name,
         column_name,
-        shadow_seq_name,
-        shadow_table_name
+        format('pgdog_shadow.%I', shadow_seq_name),
+        format('pgdog_shadow.%I', shadow_table_name)
     );
 
-    RETURN format('"pgdog_shadow"."%s"', shadow_table_name);
+    RETURN format('pgdog_shadow.%I', shadow_table_name);
 END;
 $body$ LANGUAGE plpgsql;
 
