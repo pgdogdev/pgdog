@@ -231,13 +231,14 @@ impl State {
     fn accumulate(&mut self, row: &DataRow, decoder: &Decoder) -> Result<(), Error> {
         match self {
             State::Avg(state) => {
-                let avg = row.get_column_checked(state.column, decoder)?.value;
                 let count = row
                     .get_column_checked(state.count_helper, decoder)?
                     .value
                     .as_i64()?;
-                let sum = row.get_column_checked(state.sum_helper, decoder)?.value;
-                state.accumulate(avg, count, sum)
+                let value = row
+                    .get_column_checked(state.value_column(decoder), decoder)?
+                    .value;
+                state.accumulate(value, count)
             }
             State::Bit(state) => {
                 state.accumulate(row.get_column_checked(state.column, decoder)?.value)

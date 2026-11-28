@@ -1,5 +1,5 @@
 use super::{Error, checked_add_assign};
-use crate::net::messages::Datum;
+use crate::net::{Decoder, messages::Datum};
 use pgdog_postgres_types::{DataType, Error as TypeError, Numeric};
 use rust_decimal::prelude::*;
 
@@ -7,9 +7,10 @@ use rust_decimal::prelude::*;
 /// states in a parallel query: it adds up the sums and counts and divides
 /// once.
 ///
-/// `avg(real)` and `avg(double precision)` are the exception. Postgres adds
-/// those up in `double precision`, but a shard's `sum(real)` is `real`, so
-/// the shards' averages are weighted by their counts instead.
+/// Postgres adds up `avg(real)` and `avg(double precision)` in `double
+/// precision` ([`float8_combine()`], [`float8_avg()`]), but a shard's
+/// `sum(real)` is `real`. For those, a shard's sum is its average times its
+/// count.
 #[derive(Debug)]
 pub(super) struct Avg {
     pub(super) column: usize,
@@ -17,8 +18,6 @@ pub(super) struct Avg {
     pub(super) sum_helper: usize,
     count: i64,
     sum: Datum,
-    /// The shards' `double precision` averages and their counts.
-    float_averages: Vec<(f64, i64)>,
 }
 
 impl Avg {
@@ -29,26 +28,37 @@ impl Avg {
             sum_helper,
             count: 0,
             sum: Datum::Null,
-            float_averages: Vec::new(),
         }
     }
 
-    /// Add one shard's `avg(x)`, `count(x)` and `sum(x)`.
-    pub(super) fn accumulate(&mut self, avg: Datum, count: i64, sum: Datum) -> Result<(), Error> {
+    /// Column to read from each shard: the average if it's `double
+    /// precision`, the sum otherwise.
+    pub(super) fn value_column(&self, decoder: &Decoder) -> usize {
+        let field = decoder.row_description().field(self.column);
+        match field.map(|field| field.data_type()) {
+            Some(DataType::DoublePrecision) => self.column,
+            _ => self.sum_helper,
+        }
+    }
+
+    /// Add one shard's count and the value from [`Self::value_column`].
+    pub(super) fn accumulate(&mut self, value: Datum, count: i64) -> Result<(), Error> {
         self.count += count;
-        match avg {
-            Datum::Double(avg) => self.float_averages.push((avg.0, count)),
+        match value {
+            Datum::Double(avg) => {
+                let total = match self.sum {
+                    Datum::Double(total) => total.0,
+                    _ => 0.0,
+                };
+                self.sum = float8_pl(total, avg.0 * count as f64)?.into();
+            }
             // `sum(smallint)` and `sum(integer)` are `bigint`, but their
             // average is `numeric`.
-            _ => {
-                let sum = match sum {
-                    Datum::SmallInt(_) | Datum::Integer(_) | Datum::Bigint(_) => {
-                        Datum::Numeric(Numeric::from(sum.as_i64()?))
-                    }
-                    sum => sum,
-                };
-                checked_add_assign(&mut self.sum, sum)?;
+            Datum::SmallInt(_) | Datum::Integer(_) | Datum::Bigint(_) => {
+                let sum = Numeric::from(value.as_i64()?);
+                checked_add_assign(&mut self.sum, Datum::Numeric(sum))?;
             }
+            sum => checked_add_assign(&mut self.sum, sum)?,
         }
         Ok(())
     }
@@ -57,19 +67,16 @@ impl Avg {
         if self.count == 0 {
             return Ok(Datum::Null);
         }
-        if self.float_averages.is_empty() {
-            return divide(self.sum, self.count);
-        }
-
-        let total = Decimal::from(self.count);
-        let avg = self
-            .float_averages
-            .into_iter()
-            .fold(0.0, |acc, (avg, count)| {
-                avg.mul_add((Decimal::from(count) / total).as_f64(), acc)
-            });
-        Ok(Datum::from(avg))
+        divide(self.sum, self.count)
     }
+}
+
+fn float8_pl(a: f64, b: f64) -> Result<f64, TypeError> {
+    let sum = a + b;
+    if sum.is_infinite() && a.is_finite() && b.is_finite() {
+        return Err(TypeError::NumericOutOfRange(DataType::DoublePrecision));
+    }
+    Ok(sum)
 }
 
 /// Average of `count` values from their sum, like Postgres's `avg()` final
@@ -106,8 +113,6 @@ pub(super) fn divide(mut sum: Datum, count: i64) -> Result<Datum, Error> {
 /// Scale Postgres gives `dividend / divisor`: enough for at least 16
 /// significant digits, and no less than either input's scale
 /// ([`select_div_scale()`]).
-///
-/// [`select_div_scale()`]: https://github.com/postgres/postgres/blob/REL_18_3/src/backend/utils/adt/numeric.c#L10134-L10195
 fn div_scale(dividend: &Decimal, divisor: &Decimal) -> u32 {
     /// [`NUMERIC_MIN_SIG_DIGITS`](https://github.com/postgres/postgres/blob/REL_18_3/src/include/utils/numeric.h#L50)
     const NUMERIC_MIN_SIG_DIGITS: i32 = 16;
@@ -178,13 +183,10 @@ mod tests {
         (42_577.351_057_747_284, 6996),
     ];
 
-    /// `avg(x)` over `(avg, count, sum)` from each shard, as Postgres prints it.
-    /// A `numeric` average is computed from the sums, so the shard averages
-    /// only matter for floats.
-    fn merged(shards: &[(Datum, i64, Datum)]) -> String {
+    fn merged(shards: &[(Datum, i64)]) -> String {
         let mut state = Avg::new(0, 1, 2);
-        for (avg, count, sum) in shards {
-            state.accumulate(avg.clone(), *count, sum.clone()).unwrap();
+        for (sum, count) in shards {
+            state.accumulate(sum.clone(), *count).unwrap();
         }
         let result = state.finalize().unwrap();
         String::from_utf8(result.encode(Format::Text).unwrap().to_vec()).unwrap()
@@ -195,13 +197,9 @@ mod tests {
         // Shard 0 has 0, 0, 1 and shard 1 has 1, 1, 1, 1, 1, 1 and 2 or 3.
         // Weighting the rounded shard averages gave 0.90000000000000003000
         // and 0.99999999999999999000.
-        let shard0 = (dec!(0.33333333333333333333).into(), 3, Datum::Bigint(1));
-        for (avg, sum, expected) in [
-            (dec!(1.1428571428571429), 8, "0.90000000000000000000"),
-            (dec!(1.2857142857142857), 9, "1.00000000000000000000"),
-        ] {
-            let shard1 = (avg.into(), 7, Datum::Bigint(sum));
-            assert_eq!(merged(&[shard0.clone(), shard1]), expected);
+        for (sum, expected) in [(8, "0.90000000000000000000"), (9, "1.00000000000000000000")] {
+            let shards = [(Datum::Bigint(1), 3), (Datum::Bigint(sum), 7)];
+            assert_eq!(merged(&shards), expected);
         }
     }
 
@@ -209,9 +207,7 @@ mod tests {
     fn avg_with_double_data() {
         let mut state = Avg::new(0, 1, 2);
         for &(avg, count) in TEST_DATA {
-            state
-                .accumulate(avg.into(), count, (avg * count as f64).into())
-                .unwrap();
+            state.accumulate(avg.into(), count).unwrap();
         }
         assert_eq!(
             state.finalize().unwrap(),
@@ -222,47 +218,42 @@ mod tests {
     #[test]
     fn numeric_sum_out_of_range_errors() {
         let mut state = Avg::new(0, 1, 2);
-        state
-            .accumulate(Decimal::MAX.into(), 2, Decimal::MAX.into())
-            .unwrap();
-        assert!(
-            state
-                .accumulate(Decimal::MAX.into(), 3, Decimal::MAX.into())
-                .is_err()
-        );
+        state.accumulate(Decimal::MAX.into(), 2).unwrap();
+        assert!(state.accumulate(Decimal::MAX.into(), 3).is_err());
     }
 
     #[test]
-    fn avg_with_very_large_double() {
+    fn double_sum_overflow_errors() {
         let mut state = Avg::new(0, 1, 2);
-        state
-            .accumulate(f64::MAX.into(), 2, f64::INFINITY.into())
-            .unwrap();
-        state
-            .accumulate(f64::MAX.into(), 3, f64::INFINITY.into())
-            .unwrap();
-        assert_eq!(state.finalize().unwrap(), Datum::from(f64::MAX));
+        state.accumulate(f64::MAX.into(), 1).unwrap();
+        assert!(state.accumulate(f64::MAX.into(), 1).is_err());
+
+        // Infinity isn't an overflow.
+        let mut state = Avg::new(0, 1, 2);
+        state.accumulate(f64::INFINITY.into(), 1).unwrap();
+        state.accumulate(1.0.into(), 1).unwrap();
+        assert_eq!(state.finalize().unwrap(), Datum::from(f64::INFINITY));
     }
 
     #[test]
     fn avg_with_nulls() {
         let mut state = Avg::new(0, 1, 2);
-        state.accumulate(1.0.into(), 1, 1.0.into()).unwrap();
-        state.accumulate(Datum::Null, 0, Datum::Null).unwrap();
+        state.accumulate(1.0.into(), 1).unwrap();
+        state.accumulate(Datum::Null, 0).unwrap();
         assert_eq!(state.finalize().unwrap(), Datum::from(1.0));
     }
 
     #[test]
     fn avg_of_integers_keeps_fractional_scale() {
-        let shards = [297, 301, 305, 295].map(|sum| (Datum::Null, 100, Datum::Bigint(sum)));
+        let shards = [297, 301, 305, 295].map(|sum| (Datum::Bigint(sum), 100));
         assert_eq!(merged(&shards), "2.9950000000000000");
     }
 
     #[test]
     fn large_integer_avg_uses_zero_scale() {
         let shards = [
-            (Datum::Null, 6, dec!(5100).into()),
-            (Datum::Null, 9, dec!(435_090_932_899_645_851).into()),
+            (dec!(5100).into(), 6),
+            (dec!(435_090_932_899_645_851).into(), 9),
         ];
         assert_eq!(merged(&shards), "29006062193310063");
     }
@@ -270,26 +261,20 @@ mod tests {
     #[test]
     fn scale_follows_postgres_division() {
         // SELECT avg(0) FROM generate_series(1, 10000)
-        let zeros = [
-            (Datum::Null, 4000, Datum::Bigint(0)),
-            (Datum::Null, 6000, Datum::Bigint(0)),
-        ];
+        let zeros = [(Datum::Bigint(0), 4000), (Datum::Bigint(0), 6000)];
         assert_eq!(merged(&zeros), "0.000000000000000000000000");
 
         // The input's scale wins when it's larger.
         let value = dec!(1.123456789012345678901);
-        let shards = [
-            (Datum::Null, 1, value.into()),
-            (Datum::Null, 1, value.into()),
-        ];
+        let shards = [(value.into(), 1), (value.into(), 1)];
         assert_eq!(merged(&shards), "1.123456789012345678901");
     }
 
     #[test]
     fn avg_numeric_nan_returns_nan() {
         let shards = [
-            (Datum::Null, 1, Datum::Numeric(Numeric::nan())),
-            (Datum::Null, 1_000_000, dec!(1_000_000).into()),
+            (Datum::Numeric(Numeric::nan()), 1),
+            (dec!(1_000_000).into(), 1_000_000),
         ];
         assert_eq!(merged(&shards), "NaN");
     }
@@ -297,8 +282,8 @@ mod tests {
     #[test]
     fn opposite_infinities_average_to_nan() {
         let shards = [
-            (Datum::Null, 1, Datum::Numeric(Numeric::infinity())),
-            (Datum::Null, 1, Datum::Numeric(Numeric::negative_infinity())),
+            (Datum::Numeric(Numeric::infinity()), 1),
+            (Datum::Numeric(Numeric::negative_infinity()), 1),
         ];
         assert_eq!(merged(&shards), "NaN");
     }
@@ -306,19 +291,15 @@ mod tests {
     #[test]
     fn avg_double_nan_returns_nan() {
         let mut state = Avg::new(0, 1, 2);
-        state
-            .accumulate(f64::NAN.into(), 1, f64::NAN.into())
-            .unwrap();
-        state
-            .accumulate(1.0.into(), 1_000_000, 1_000_000.0.into())
-            .unwrap();
+        state.accumulate(f64::NAN.into(), 1).unwrap();
+        state.accumulate(1.0.into(), 1_000_000).unwrap();
         assert_eq!(state.finalize().unwrap(), Datum::from(f64::NAN));
     }
 
     #[test]
     fn avg_with_only_nulls_returns_null() {
         let mut state = Avg::new(0, 1, 2);
-        state.accumulate(Datum::Null, 0, Datum::Null).unwrap();
+        state.accumulate(Datum::Null, 0).unwrap();
         assert_eq!(state.finalize().unwrap(), Datum::Null);
     }
 }
