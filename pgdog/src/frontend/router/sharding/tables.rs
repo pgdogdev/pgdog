@@ -48,6 +48,39 @@ impl ShardedTable {
     }
 }
 
+/// The settings in the sharding config that decide which shards the rows of sharded tables are on
+/// - the data type of the sharding key
+/// - the hash function (`hasher`)
+/// - the mapping from values to shards (e.g., lists or ranges)
+///
+/// E.g., if users and orders have equal `ShardingFunction`s, the users with id 5 and the orders with user_id 5 are on the same shard
+/// So for JOINs ON users.id = orders.user_id, the rows that the JOINs join fundamentally align to the same shard
+#[derive(Debug, PartialEq)]
+pub(crate) struct ShardingFunction<'a> {
+    data_type: &'a DataType,
+    hasher: &'a Hasher,
+    mapping: Option<&'a Mapping>,
+}
+
+impl<'a> ShardingFunction<'a> {
+    /// Returns the sharding function of `table`
+    /// E.g., for orders sharded by the hash of the bigint column user_id, we return bigint and the hasher and mapping that the sharding config sets for orders
+    ///
+    /// Returns None for tables sharded by centroids (vectors) or by lookup queries (queries that we run to find the shards corresponding to values)
+    /// For those tables, the data type, hasher and mapping don't decide the shards
+    pub(crate) fn of(table: &'a ShardedTable) -> Option<Self> {
+        if !table.centroids.is_empty() || table.lookup_query.is_some() {
+            return None;
+        }
+
+        Some(Self {
+            data_type: &table.data_type,
+            hasher: &table.hasher,
+            mapping: table.mapping.as_ref(),
+        })
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Key<'a> {
     pub(crate) table: &'a ShardedTable,

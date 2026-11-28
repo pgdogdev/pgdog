@@ -131,6 +131,17 @@ INSERT INTO subpackages (id, user_id) SELECT id, id FROM subusers ORDER BY id DE
 INSERT INTO subpackages (id, user_id, order_id) SELECT suborders.id, suborders.user_id, suborders.id FROM suborders JOIN subusers ON suborders.user_id = subusers.id
 
 -- case
+-- what: INSERT INTO .. SELECT .. JOIN on suborders.id = subusers.id (the sharding key of suborders is user_id, not id)
+-- route select: 0,1
+-- sql: SELECT * FROM subusers u
+-- route select: 0,1
+-- sql: SELECT o.id, u.id FROM suborders o JOIN (SELECT u.c1, u.c2, u.c3, u.c4, u.c5, u.c6, ($7::pg_catalog._varchar)[u.c7 + 1:u.c7 + u.c8], ($10::pg_catalog._int8)[u.c9 + 1:u.c9 + u.c10] FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text, $3::pg_catalog._text, $4::pg_catalog._jsonb, $5::pg_catalog._date, $6::pg_catalog._inet, $8::pg_catalog._int4, $9::pg_catalog._int4, $11::pg_catalog._int4, $12::pg_catalog._int4) u(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10)) u(id, username, status, profile, signed_up, last_ip, tags, media_ids) ON o.id = u.id
+-- route insert: 0,1
+-- sql: INSERT INTO subpackages (id, user_id) SELECT u.c1, u.c2 FROM unnest($1::pg_catalog._int8, $2::pg_catalog._int8) u(c1, c2)
+-- verify: SELECT * FROM subpackages ORDER BY id
+INSERT INTO subpackages (id, user_id) SELECT o.id, u.id FROM suborders o JOIN subusers u ON o.id = u.id
+
+-- case
 -- what: WITH a AS (..), b AS (SELECT .. FROM a) INSERT .. FROM a JOIN b .., one CTE over another
 -- route select: 0,1
 -- route select: any

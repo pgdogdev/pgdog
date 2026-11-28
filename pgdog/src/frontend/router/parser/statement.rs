@@ -48,7 +48,7 @@ use crate::{
         round_robin,
         sharding::{
             ContextBuilder, LookupTable, PendingLookup, ResolvedLookups, SchemaSharder,
-            ShardedTable, Tables, lookup,
+            ShardedTable, ShardingFunction, Tables, lookup,
         },
     },
     net::{messages::Format, parameter::ParameterValue},
@@ -658,6 +658,107 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                 }
                 Some(Shard::Multi(multi))
             }
+        }
+    }
+
+    /// Returns true if the ON clause of `join` compares the sharding keys of both tables with `=` and both tables have the same `ShardingFunction`
+    /// E.g., we return true for .. FROM users x JOIN orders y ON x.id = y.user_id (users sharded by id, orders sharded by user_id)
+    /// The rows of x and y that the JOIN joins fundamentally align to the same shard, so we send the statement as-is
+    ///
+    /// If we return false, we fetch y from all shards first and rewrite the statement
+    /// E.g., we return false for ON x.status = y.status, since users and orders with the same status can be on different shards
+    pub(crate) fn is_joined_on_sharding_keys(
+        &self,
+        join: &'a nodes::JoinExpr,
+        right_side_name: &str,
+    ) -> bool {
+        let Node::SelectStmt(select) = self.stmt else {
+            return false;
+        };
+
+        // Aliases with column names rename the columns in order
+        // E.g., if users has the columns (id, status), then in .. FROM users x(status, id) JOIN orders y ON x.id = y.user_id, x.id is the column status of users
+        // `SearchContext::resolve_column` doesn't read those names, so we'd treat x.id as the sharding key id
+        // Therefore, we return false
+        if let Node::RangeVar(first_table) = join.larg()
+            && first_table
+                .alias()
+                .is_some_and(|alias| !alias.colnames().is_empty())
+        {
+            return false;
+        }
+
+        // `parse_join` only accepts SELECTs without WITH, so we pass no CTE names
+        let ctx = SearchContext::from_from_clause(select.from_clause(), &HashSet::new());
+
+        for (a, b) in Self::columns_equal_in_on_clause(join.quals()) {
+            // The column belonging to y (the table after JOIN) can be on either side of `=` (e.g., x.id = y.user_id or y.user_id = x.id)
+            for (right_side_column, other_column) in [(a, b), (b, a)] {
+                // We skip y.user_id = y.user_id (both columns belong to y) and y.user_id = id (we don't look up which table id belongs to)
+                if right_side_column.table != Some(right_side_name)
+                    || other_column
+                        .table
+                        .is_none_or(|table| table == right_side_name)
+                {
+                    continue;
+                }
+
+                let right_side_key = ctx
+                    .resolve_column(right_side_column)
+                    .and_then(|column| self.get_sharded_table(column));
+                let other_key = ctx
+                    .resolve_column(other_column)
+                    .and_then(|column| self.get_sharded_table(column));
+
+                if let (Some(right_side_key), Some(other_key)) = (right_side_key, other_key)
+                    && ShardingFunction::of(right_side_key)
+                        .is_some_and(|function| Some(function) == ShardingFunction::of(other_key))
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Returns the pairs of columns that `on_clause` compares with `=`
+    /// E.g., for ON x.id = y.user_id AND x.status = y.status, we return (x.id, y.user_id) and (x.status, y.status)
+    ///
+    /// `is_joined_on_sharding_keys` uses these pairs to decide whether the rows that the JOIN joins fundamentally align to the same shard
+    /// If we have AND, all rows that the JOIN joins have x.id = y.user_id
+    /// However, ON x.id = y.user_id OR x.status = y.status also joins a row of x with id 1 to a row of y with user_id 2 if both rows have the same status
+    /// Those two rows can be on different shards, so we only return pairs from AND (not from OR)
+    fn columns_equal_in_on_clause(on_clause: Node<'a>) -> Vec<(Column<'a>, Column<'a>)> {
+        use nodes::{A_Expr_Kind, BoolExprType};
+
+        match on_clause {
+            Node::BoolExpr(expr) if expr.boolop == BoolExprType::AND_EXPR => expr
+                .args()
+                .into_iter()
+                .flat_map(Self::columns_equal_in_on_clause)
+                .collect(),
+
+            Node::A_Expr(expr) if expr.kind == A_Expr_Kind::AEXPR_OP => {
+                let operator = expr
+                    .name()
+                    .into_iter()
+                    .exactly_one()
+                    .ok()
+                    .and_then(Node::as_str);
+
+                match (
+                    operator,
+                    Column::try_from(expr.lexpr()),
+                    Column::try_from(expr.rexpr()),
+                ) {
+                    (Some("="), Ok(left), Ok(right)) => vec![(left, right)],
+                    // We return no pairs for other operators (e.g., x.id > y.user_id) and for comparisons with something other than columns (e.g., x.id = 5 or x.id = y.user_id + 1)
+                    _ => vec![],
+                }
+            }
+
+            _ => vec![],
         }
     }
 
@@ -1456,6 +1557,80 @@ mod test {
             ),
             ..Default::default()
         }
+    }
+
+    /// Returns what `is_joined_on_sharding_keys` returns for the first JOIN in `stmt`, where y is the table after JOIN
+    /// E.g., we return true for SELECT * FROM sharded x JOIN sharded y ON x.id = y.id, since x.id and y.id are both sharding keys
+    fn joined_on_sharding_keys(stmt: &str) -> bool {
+        let schema = test_schema();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
+        let stmt = raw.stmts().next().unwrap();
+        let Node::SelectStmt(select) = stmt else {
+            panic!("not a SELECT: {stmt:?}");
+        };
+        let Some(Node::JoinExpr(join)) = select.from_clause().into_iter().next() else {
+            panic!("no JOIN");
+        };
+        StatementParser::new(stmt, None, &schema).is_joined_on_sharding_keys(join, "y")
+    }
+
+    // This tests that we send JOINs on x.id = y.id to the shards as-is (without fetching y)
+    // x and y are both the table `sharded` (sharded by id), so the rows that the JOIN joins on x.id = y.id fundamentally align to the same shard
+    #[test]
+    fn test_join_on_the_sharding_keys() {
+        assert!(joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON x.id = y.id"
+        ));
+
+        // y.id = x.id has the column belonging to the table after JOIN first, as Rails writes ON clauses (e.g., .. JOIN users ON users.account_id = accounts.id)
+        assert!(joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON y.id = x.id"
+        ));
+
+        // Other conditions in AND (x.value = y.value) only remove rows from the JOIN, so x.id = y.id is still true for all rows that the JOIN joins
+        assert!(joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON x.id = y.id AND x.value = y.value"
+        ));
+    }
+
+    // This tests that we fetch y if the JOIN can also join rows of x and y that are on different shards, or if we can't tell which columns the ON clause compares
+    #[test]
+    fn test_join_not_only_on_the_sharding_keys() {
+        // If we have OR in the ON clause, the JOIN also joins rows with the same x.value and y.value but different ids (e.g., x.id = 1 and y.id = 2), which can be on different shards
+        assert!(!joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON x.id = y.id OR x.value = y.value"
+        ));
+
+        // ON (x.id = y.id) IS NOT TRUE joins the rows where x.id and y.id differ (e.g., x.id = 1 and y.id = 2)
+        assert!(!joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON (x.id = y.id) IS NOT TRUE"
+        ));
+
+        // x.id = y.id + 1 and x.id > y.id join rows with different ids (e.g., x.id = 2 and y.id = 1)
+        assert!(!joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON x.id = y.id + 1"
+        ));
+        assert!(!joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON x.id > y.id"
+        ));
+
+        // y.id = y.id compares y with itself, so the JOIN joins all rows of x with all rows of y where y.id isn't NULL (e.g., a row of x on Shard A with a row of y on Shard B)
+        assert!(!joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON y.id = y.id"
+        ));
+
+        // We don't look up whether id (without a table name) belongs to x or y
+        // If id belongs to x, x.id = id joins all rows of x with all rows of y (as for y.id = y.id above)
+        assert!(!joined_on_sharding_keys(
+            "SELECT * FROM sharded x JOIN sharded y ON x.id = id"
+        ));
+
+        // x(value, id) renames the first two columns of the table `sharded` to value and id
+        // So x.id is the second column of `sharded`, which doesn't have to be the sharding key id
+        // If x.id isn't the sharding key, x.id = y.id can join rows of x and y on different shards
+        assert!(!joined_on_sharding_keys(
+            "SELECT * FROM sharded x(value, id) JOIN sharded y ON x.id = y.id"
+        ));
     }
 
     fn run_test(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {

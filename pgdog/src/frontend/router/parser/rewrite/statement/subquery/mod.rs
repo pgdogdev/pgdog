@@ -11,6 +11,7 @@ use crate::frontend::router::parser::{
 
 pub(crate) mod from_clause;
 pub(crate) mod insert_select;
+pub(crate) mod join_from;
 pub(crate) mod where_clause;
 pub(crate) mod with_clause;
 
@@ -78,6 +79,12 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
         // Determine if there's a SELECT FROM in an INSERT.
         // E.g., INSERT INTO .. SELECT FROM generate_series(..)
         if let Some(subquery) = self.handle_subquery_in_insert_select() {
+            return Ok(vec![subquery]);
+        }
+
+        // Determine if there are JOINs in the FROM clause of a SELECT where we have to fetch the tables after JOIN from all shards first
+        // E.g., .. FROM users x JOIN orders y ON x.status = y.status
+        if let Some(subquery) = self.handle_subquery_in_join_from() {
             return Ok(vec![subquery]);
         }
 

@@ -1,6 +1,6 @@
 //! Sending and receiving logic for subqueries
 
-use pg_raw_parse::{Node, deparse};
+use pg_raw_parse::deparse;
 
 use crate::{
     frontend::{
@@ -23,7 +23,6 @@ impl<'a> SubqueryMulti<'a> {
     pub(crate) async fn send_query_string(
         &mut self,
         engine: &mut QueryEngine,
-        query_ast: Node<'_>,
         query_string: String,
         context: &mut QueryEngineContext<'_>,
         is_subquery: bool,
@@ -66,7 +65,7 @@ impl<'a> SubqueryMulti<'a> {
 
                     let (new_ast, new_bind) = {
                         let mut subquery_multi =
-                            SubqueryMulti::new_sub_engine(self, query_ast, subqueries);
+                            SubqueryMulti::new_sub_engine(self, subqueries, &client_request);
 
                         Box::pin(
                             subquery_multi.evaluate_and_rewrite_outer_statement(engine, context),
@@ -78,14 +77,8 @@ impl<'a> SubqueryMulti<'a> {
 
                     let rewritten_subquery_sql = deparse(new_ast.stmt())?.as_str().to_string();
 
-                    Box::pin(self.send_query_string(
-                        engine,
-                        new_ast.stmt(),
-                        rewritten_subquery_sql,
-                        context,
-                        true,
-                    ))
-                    .await
+                    Box::pin(self.send_query_string(engine, rewritten_subquery_sql, context, true))
+                        .await
                 }
 
                 // Seems unlikely we'll need to support INSERT split / Sharding Key Updates
@@ -116,7 +109,10 @@ impl<'a> SubqueryMulti<'a> {
             // hand-rolling it into the SQL.
             //
             // So, this just drops all Parse/Binds that we come across, as we know we're handling subqueries.
-            context.drop_extended_parse_and_bind = !self.is_extended_protocol;
+            //
+            // Why `|=` instead of `=`?
+            // Because for JOINs next to subqueries in WHERE, we'll rewrite the statement twice
+            context.drop_extended_parse_and_bind |= !self.is_extended_protocol;
 
             // TODO(jkaczman): We rely on INSERT split for insert statements.
             // If a user has that rewrite disabled, but subqueries

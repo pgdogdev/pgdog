@@ -133,16 +133,13 @@ impl<'ast> SubqueryMulti<'ast> {
 
     pub fn new_sub_engine<'b>(
         parent_engine: &'b SubqueryMulti<'ast>,
-        new_parent_ast: Node<'ast>,
         subqueries: Vec<Subquery>,
+        client_request: &'ast ClientRequest,
     ) -> Self {
         Self {
-            subqueries,
             top_level_bind: parent_engine.top_level_bind,
-            current_level_bind: parent_engine.current_level_bind.clone(),
-            subquery_results: Vec::new(),
             is_extended_protocol: parent_engine.is_extended_protocol,
-            top_level_statement: new_parent_ast,
+            ..Self::new(subqueries, client_request)
         }
     }
 
@@ -167,7 +164,6 @@ impl<'ast> SubqueryMulti<'ast> {
         // Send the re-written statement
         self.send_query_string(
             engine,
-            self.top_level_statement,
             rewritten_outer_statement.to_string(),
             context,
             // `is_subquery` = false will send the response right back to the client
@@ -204,7 +200,6 @@ impl<'ast> SubqueryMulti<'ast> {
             let results = self
                 .send_query_string(
                     engine,
-                    Node::SelectStmt(&rewritten_subquery_ast),
                     subquery_sql.to_string(),
                     context,
                     // 'is_subquery' will allow us to get the response back
